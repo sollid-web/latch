@@ -28,6 +28,17 @@ export type Proposal = {
   title: string;
 };
 
+export type Receipt = {
+  at: number;
+  allow: boolean;
+  source: string;
+  amount: number;
+  fee: number;
+  bits: string;
+  call: string;
+  reasons: string[];
+};
+
 export type LatchState = {
   connected: boolean;
   armed: boolean;
@@ -37,6 +48,7 @@ export type LatchState = {
   cpu: string;
   circuitId: string;
   usdt: number;
+  swept: number;
   spentToday: number;
   dayKey: string;
   perTx: number;
@@ -52,6 +64,7 @@ export type LatchState = {
   lastBits: boolean[] | null;
   lastAllow: boolean | null;
   lastSignals: boolean[] | null;
+  lastReceipt: Receipt | null;
 };
 
 export function defaultState(): LatchState {
@@ -64,6 +77,7 @@ export function defaultState(): LatchState {
     cpu: "0",
     circuitId: "7",
     usdt: 1000,
+    swept: 0,
     spentToday: 0,
     dayKey: "",
     perTx: 50,
@@ -87,6 +101,7 @@ export function defaultState(): LatchState {
     lastBits: null,
     lastAllow: null,
     lastSignals: null,
+    lastReceipt: null,
   };
 }
 
@@ -160,13 +175,33 @@ function applyProposal(state: LatchState, proposal: Proposal, now: number): Latc
   const rolled = state.dayKey === dayKey(now) ? state : { ...state, dayKey: dayKey(now), spentToday: 0 };
   const { bits, reasons } = policyBits(rolled, proposal);
   const { signals, allow } = evalPolicy(bits);
+  const bitText = bits.map((bit) => (bit ? "1" : "0")).join("");
+  const fee = round2((proposal.amount * FEE_BPS) / 10_000);
+
+  // Human-readable ABI call description for the receipt card.
+  const callStr = proposal.kind === "sweep"
+    ? `LatchRelay.tick(${proposal.amount.toFixed(2)})`
+    : `transfer(${proposal.target}, ${proposal.amount.toFixed(2)})`;
+
+  const receipt: Receipt = {
+    at: now,
+    allow,
+    source: proposal.title,
+    amount: proposal.amount,
+    fee,
+    bits: bitText,
+    call: callStr,
+    reasons,
+  };
+
   const withEval: LatchState = {
     ...rolled,
     lastBits: bits,
     lastAllow: allow,
     lastSignals: signals,
+    lastReceipt: receipt,
   };
-  const bitText = bits.map((bit) => (bit ? "1" : "0")).join("");
+
   if (!allow) {
     return log(withEval, {
       at: now,
@@ -177,10 +212,11 @@ function applyProposal(state: LatchState, proposal: Proposal, now: number): Latc
       allow: false,
     });
   }
-  const fee = round2((proposal.amount * FEE_BPS) / 10_000);
-  const next = {
+
+  const next: LatchState = {
     ...withEval,
     usdt: round2(withEval.usdt - proposal.amount - fee),
+    swept: round2(withEval.swept + proposal.amount),
     spentToday: round2(withEval.spentToday + proposal.amount),
     protocolEarned: round2(withEval.protocolEarned + fee),
   };
@@ -369,6 +405,8 @@ export function reduce(state: LatchState, action: Action): LatchState {
           processor: state.processor,
           cpu: state.cpu,
           circuitId: state.circuitId,
+          swept: 0,
+          lastReceipt: null,
         },
         {
           at: action.now,
