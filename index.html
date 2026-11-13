@@ -1,0 +1,1685 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Latch — permissioned OKB dip sweep</title>
+<style>
+:root{
+  --bg:#0a0b09; --bg-deep:#060706; --surface:#111310; --raised:#191c17;
+  --fg:#f4f2ec; --muted:#a09d92; --line:#242821; --line-strong:#33382d;
+  --amber:#f2a94e; --amber-hi:#ffc477; --amber-rgb:242,169,78;
+  --glow-amber:0 0 0 1px rgba(242,169,78,.34),0 10px 30px -12px rgba(242,169,78,.62);
+  --ink:#140f06; --bad:#e06a4e;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+}
+*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:#2b3029 transparent}
+html,body{margin:0;padding:0}
+html{background:var(--bg-deep)}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#2b3029;border-radius:10px}
+::-webkit-scrollbar-thumb:hover{background:#3a4036}
+body{background:
+    radial-gradient(90rem 40rem at 50% -22rem,rgba(242,169,78,.10),transparent 68%),
+    radial-gradient(60rem 30rem at 100% 0,rgba(242,169,78,.04),transparent 62%),
+    var(--bg);
+  background-repeat:no-repeat;
+  color:var(--fg);font-family:var(--sans);min-height:100vh;line-height:1.45;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+::selection{background:var(--amber);color:var(--ink)}
+h1,h2,h3,p,ul,dl,dt,dd,pre{margin:0}
+button{font:inherit;color:inherit;cursor:pointer;background:none;border:0}
+button:disabled{cursor:not-allowed}
+:focus-visible{outline:2px solid rgba(242,169,78,.7);outline-offset:2px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.ic{width:1.05rem;height:1.05rem;flex:0 0 auto}
+.tiny{font-size:.71rem;color:var(--muted);line-height:1.45}
+.ok{color:var(--amber)}
+.no{color:var(--bad)}
+.gap{display:grid;gap:.55rem}
+
+/* header */
+.hdr{position:sticky;top:0;z-index:30;background:rgba(10,11,9,.84);backdrop-filter:blur(16px) saturate(140%);-webkit-backdrop-filter:blur(16px) saturate(140%);border-bottom:1px solid var(--line)}
+.hdr::after{content:'';position:absolute;left:0;right:0;bottom:-1px;height:1px;background:linear-gradient(90deg,transparent,rgba(242,169,78,.42),transparent)}
+.hdr-in{max-width:64rem;margin:0 auto;display:flex;align-items:center;gap:1rem;padding:.8rem 1.15rem}
+.hdr-id{min-width:0;flex:1}
+.hdr-row{display:flex;align-items:center;gap:.65rem;flex-wrap:wrap}
+.wordmark{font-family:var(--mono);font-size:1rem;font-weight:700;letter-spacing:.3em;color:var(--amber);text-shadow:0 0 22px rgba(242,169,78,.45)}
+.wordmark::before{content:'';display:inline-block;width:.42rem;height:.42rem;margin-right:.6rem;vertical-align:.12em;border-radius:1px;background:var(--amber);box-shadow:0 0 12px 1px rgba(242,169,78,.8)}
+.tape{font-family:var(--mono);font-size:.69rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;padding:.1rem .4rem;border:1px solid var(--line);border-radius:.3rem}
+.hdr-sub{margin-top:.2rem;font-size:.68rem;letter-spacing:.02em;color:var(--muted)}
+.hdr-actions{display:flex;gap:.45rem;align-items:center;flex:0 0 auto}
+.hdr-actions .btn.amber{min-height:2.3rem;padding:0 .95rem}
+.tabs{max-width:64rem;margin:0 auto;display:flex;padding:0 1.15rem;gap:.25rem}
+.tab{flex:1;min-height:2.6rem;border-bottom:2px solid transparent;color:var(--muted);font-size:.68rem;font-weight:600;letter-spacing:.16em;text-transform:uppercase;transition:color .16s ease,border-color .16s ease}
+.tab:hover{color:var(--fg)}
+.tab.on{border-bottom-color:var(--amber);color:var(--fg);text-shadow:0 0 20px rgba(242,169,78,.45)}
+
+main{max-width:64rem;margin:0 auto;padding:1.15rem 1.15rem .85rem}
+footer{max-width:64rem;margin:0 auto;padding:0 1.15rem 2.5rem}
+.foot{border-top:1px solid var(--line);padding-top:1rem;font-size:.71rem;color:var(--muted);line-height:1.55}
+
+/* structure */
+.stack{display:grid;gap:.85rem}
+.grid3{display:grid;gap:.6rem;grid-template-columns:1fr}
+.grid-5{display:grid;gap:.85rem;grid-template-columns:1fr}
+.grid-2{display:grid;gap:.85rem;grid-template-columns:1fr}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:.45rem}
+@media(min-width:640px){.grid3{grid-template-columns:repeat(3,1fr)}}
+@media(min-width:860px){.grid-2{grid-template-columns:1fr 1fr}}
+@media(min-width:920px){.grid-5{grid-template-columns:1.5fr 1fr}}
+
+/* cards */
+.card{position:relative;background-color:var(--surface);background-image:linear-gradient(180deg,rgba(255,255,255,.024),rgba(255,255,255,0) 42%);border:1px solid var(--line);border-radius:.85rem;padding:1rem;box-shadow:inset 0 1px 0 rgba(255,255,255,.035),0 22px 45px -34px rgba(0,0,0,.95)}
+.card.pad0{padding:0;overflow:hidden}
+.card-bar{display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding:.8rem 1.05rem;border-bottom:1px solid var(--line)}
+.card.pad0>.card-bar{padding:.8rem 1.05rem}
+.card-foot{display:flex;flex-direction:column;gap:.3rem;padding:.7rem 1.05rem;border-top:1px solid var(--line);background:rgba(0,0,0,.26)}
+.h2{font-size:.85rem;font-weight:700;letter-spacing:-.005em}
+.label{font-size:.61rem;text-transform:uppercase;letter-spacing:.17em;color:var(--muted);font-weight:600}
+.note{font-size:.8rem;color:var(--muted);line-height:1.55}
+.stat-val{font-family:var(--mono);font-size:1.24rem;margin-top:.25rem;font-variant-numeric:tabular-nums;letter-spacing:-.015em;color:var(--fg)}
+.stat-note{font-size:.68rem;color:var(--muted);margin-top:.2rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.grid3>.card:first-child{border-color:rgba(242,169,78,.26);background-image:radial-gradient(120% 140% at 0% 0%,rgba(242,169,78,.12),transparent 62%),linear-gradient(180deg,rgba(255,255,255,.03),rgba(255,255,255,0) 46%)}
+.grid3>.card:first-child .stat-val{font-size:1.5rem;text-shadow:0 0 30px rgba(242,169,78,.28)}
+
+/* price */
+.price-top{display:flex;align-items:flex-start;justify-content:space-between;gap:.75rem}
+.bigprice{font-family:var(--mono);font-size:2.55rem;line-height:1.02;margin:.2rem 0 .4rem;letter-spacing:-.035em;font-variant-numeric:tabular-nums;text-shadow:0 0 44px rgba(242,169,78,.22)}
+.spark{display:flex;align-items:flex-end;gap:3px;height:4.25rem;margin:.9rem 0 .45rem}
+.bar{flex:1;display:block;min-height:6px;border-radius:1px;background:linear-gradient(180deg,var(--amber),rgba(242,169,78,.42));opacity:.92;box-shadow:0 0 12px -5px rgba(242,169,78,.75)}
+.bar.bad{background:linear-gradient(180deg,var(--bad),rgba(224,106,78,.32))}
+.dot{width:.55rem;height:.55rem;border-radius:50%;background:#4a4d43;display:block;margin-top:.4rem;flex:0 0 auto;transition:box-shadow .2s ease,background .2s ease}
+.dot.live{background:var(--amber);box-shadow:0 0 0 4px rgba(242,169,78,.14),0 0 18px 2px rgba(242,169,78,.6)}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:.4rem;min-height:2.6rem;padding:0 .85rem;border-radius:.55rem;border:1px solid var(--line-strong);background-color:var(--raised);font-size:.83rem;font-weight:600;letter-spacing:.005em;text-align:center;transition:box-shadow .18s ease,border-color .18s ease,background-color .18s ease,transform .1s ease}
+.btn:hover:not(:disabled){border-color:rgba(242,169,78,.34);box-shadow:0 0 0 1px rgba(242,169,78,.1),0 12px 26px -18px rgba(242,169,78,.65)}
+.btn:active:not(:disabled){transform:translateY(1px)}
+.btn.amber{background-image:linear-gradient(180deg,var(--amber-hi),var(--amber));border-color:rgba(255,196,119,.65);color:var(--ink);font-weight:700;box-shadow:0 0 0 1px rgba(242,169,78,.3),0 12px 30px -12px rgba(242,169,78,.62)}
+.btn.amber:hover:not(:disabled){box-shadow:0 0 0 1px rgba(255,196,119,.6),0 14px 34px -10px rgba(242,169,78,.8)}
+.btn.ghost{background-color:transparent;color:var(--muted);border-color:var(--line)}
+.btn.ghost:hover:not(:disabled){color:var(--fg)}
+.btn.sm{min-height:2.05rem;padding:0 .7rem;font-size:.73rem;letter-spacing:.03em;border-radius:.45rem}
+.btn:disabled{opacity:.38;box-shadow:none;background-image:none}
+
+/* body card */
+.kv{display:grid;gap:.2rem;font-size:.71rem;color:var(--muted);margin:.8rem 0;line-height:1.5}
+.kv a{color:var(--amber);text-decoration:none;border-bottom:1px solid rgba(242,169,78,.32)}
+.kv a:hover{border-bottom-color:var(--amber)}
+.facts a{color:var(--amber);text-decoration:none;border-bottom:1px solid rgba(242,169,78,.32)}
+.booked{font-size:.7rem;letter-spacing:.06em;text-transform:uppercase;color:var(--amber);margin-bottom:.85rem}
+.push{margin-top:auto}
+
+/* permission list */
+.list{list-style:none;padding:0}
+.list.tight li{padding:.58rem 1.05rem;border-top:1px solid var(--line)}
+.list.tight li:first-child{border-top:0}
+.row{display:flex;align-items:center;gap:.6rem}
+.row-main{flex:1;min-width:0;font-size:.83rem;overflow:hidden;text-overflow:ellipsis}
+.chip{font-family:var(--mono);font-size:.65rem;padding:.05rem .35rem;border-radius:.25rem;border:1px solid var(--line);color:var(--muted);min-width:1.35rem;text-align:center}
+.chip.one{color:var(--amber);border-color:rgba(242,169,78,.42);background:rgba(242,169,78,.08)}
+.verdict{font-family:var(--mono);font-size:.64rem;letter-spacing:.06em;text-transform:uppercase;min-width:3.1rem;text-align:right}
+.badge{font-family:var(--mono);font-size:.61rem;font-weight:700;letter-spacing:.13em;padding:.2rem .5rem;border-radius:.3rem;border:1px solid currentColor;background:rgba(242,169,78,.08)}
+.badge.no{background:rgba(224,106,78,.08)}
+
+/* feed */
+.feed li{padding:.72rem 1.05rem;border-top:1px solid var(--line)}
+.feed li:first-child{border-top:0}
+.feed-title{flex:1;min-width:0;font-size:.83rem;font-weight:600}
+.t-executed{color:var(--amber)}
+.t-rejected{color:var(--bad)}
+.feed-time{font-family:var(--mono);font-size:.67rem;color:var(--muted);flex:0 0 auto}
+.feed-detail{font-size:.78rem;color:var(--muted);margin-top:.25rem;line-height:1.5}
+.feed-bits{font-family:var(--mono);font-size:.66rem;color:var(--muted);margin-top:.25rem;letter-spacing:.04em}
+
+/* fields */
+.field{display:flex;flex-direction:column;gap:.35rem}
+.field>span{font-size:.6rem;font-weight:600;text-transform:uppercase;letter-spacing:.15em;color:var(--muted)}
+.field input{background:var(--bg-deep);border:1px solid var(--line-strong);color:var(--fg);border-radius:.45rem;padding:.6rem .65rem;font-family:var(--mono);font-size:.78rem;width:100%;min-width:0;transition:border-color .16s ease,box-shadow .16s ease}
+.field input:hover{border-color:#3d4437}
+.field input:focus{outline:none;border-color:rgba(242,169,78,.55);box-shadow:0 0 0 3px rgba(242,169,78,.12)}
+.grid-5f{display:grid;grid-template-columns:repeat(2,1fr);gap:.7rem}
+.field.wide{grid-column:1 / -1}
+@media(min-width:720px){.grid-5f{grid-template-columns:repeat(4,1fr)}.field.wide{grid-column:1 / -1}}
+
+/* circuit */
+.sig{font-family:var(--mono);font-size:.68rem;min-width:2.5rem;text-align:right;color:var(--fg)}
+.gate{border-top:1px solid var(--line);padding:.48rem 1.05rem;display:flex;align-items:center;gap:.6rem;font-size:.75rem}
+.gate:first-child{border-top:0}
+.gate-label{flex:1;font-family:var(--mono);color:var(--muted);overflow-wrap:anywhere}
+.allowbar{display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding:.9rem 1.05rem;border-top:1px solid rgba(242,169,78,.22);background:linear-gradient(180deg,rgba(242,169,78,.09),rgba(242,169,78,.03));box-shadow:inset 0 1px 0 rgba(242,169,78,.14)}
+.hexblock{font-family:var(--mono);font-size:.7rem;color:var(--muted);overflow-wrap:anywhere;word-break:break-all;line-height:1.7;padding:1rem 1.05rem;border-top:1px solid var(--line);background:var(--bg-deep);max-height:12rem;overflow:auto}
+
+/* brief */
+.brief{font-family:var(--mono);font-size:.74rem;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere;padding:1rem 1.05rem;border-top:1px solid var(--line);background:var(--bg-deep);color:var(--fg);max-height:26rem;overflow:auto}
+.script li{padding:.62rem 1.05rem;border-top:1px solid var(--line);display:flex;gap:.8rem;align-items:flex-start}
+.script li:first-child{border-top:0}
+.script-t{font-family:var(--mono);font-size:.69rem;color:var(--amber);min-width:3rem;flex:0 0 auto;padding-top:.12rem;letter-spacing:.04em}
+.script-say{font-size:.79rem;color:var(--muted);line-height:1.55}
+
+/* status drawer */
+.overlay{position:fixed;inset:0;z-index:60;background:rgba(3,4,3,.72);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);display:flex;justify-content:flex-end}
+.drawer{width:min(26rem,100%);height:100%;overflow:auto;background:#0d0f0c;border-left:1px solid var(--line-strong);box-shadow:-40px 0 80px -40px #000;padding:0 0 1.5rem}
+.drawer .body{padding:1.05rem}
+.drawer>.card-bar{position:sticky;top:0;z-index:2;background:#0d0f0c;border-bottom:1px solid var(--line)}
+.facts{display:grid;gap:.7rem;margin-top:.8rem}
+.fact{display:grid;gap:.15rem;padding-bottom:.65rem;border-bottom:1px solid var(--line)}
+.fact dt{font-size:.6rem;font-weight:600;text-transform:uppercase;letter-spacing:.15em;color:var(--muted)}
+.fact dd{font-size:.76rem;overflow-wrap:anywhere;line-height:1.55}
+</style>
+<!-- tapecode:contracts -->
+<script>window.APP_CONFIG={"api":"https://tc-2a904b75.tapeguard.workers.dev"};</script>
+<!-- /tapecode:contracts -->
+</head>
+<body>
+<div id="app"></div>
+<script>
+'use strict';
+
+/* ------------------------------------------------------------------ *
+ * TapeOut policy circuit — ported from lib/latch/circuit.ts
+ * 7 inputs, 13 NAND gates, 0 latches, 1 output (allow, signal 19).
+ * allow = !paused & keeper & whitelisted & actionOk & txCap & dailyOk & funded
+ * ------------------------------------------------------------------ */
+var INPUTS = [
+  {name:'paused',      hint:'1 means the agent is paused'},
+  {name:'keeper',      hint:'1 means the caller is the gas keeper'},
+  {name:'whitelisted', hint:'1 means the target is the savings address'},
+  {name:'actionOk',    hint:'1 means the call is the sweep function'},
+  {name:'txCap',       hint:'1 means the amount is within the per-tx cap'},
+  {name:'dailyOk',     hint:'1 means today still has room under the daily cap'},
+  {name:'funded',      hint:'1 means the container covers amount plus fee'}
+];
+
+var GATES = [
+  {a:0,b:0},{a:1,b:7},{a:8,b:8},{a:9,b:2},{a:10,b:10},{a:11,b:3},{a:12,b:12},
+  {a:13,b:4},{a:14,b:14},{a:15,b:5},{a:16,b:16},{a:17,b:6},{a:18,b:18}
+];
+
+var N_IN = 7;
+var N_OUT = 1;
+
+function evalPolicy(bits){
+  if (bits.length !== N_IN) throw new Error('Latch policy expects 7 input bits');
+  var signals = bits.slice();
+  for (var i = 0; i < GATES.length; i++){
+    var left = signals[GATES[i].a];
+    var right = signals[GATES[i].b];
+    if (left === undefined || right === undefined) throw new Error('netlist wire out of range');
+    signals.push(!(left && right));
+  }
+  return {signals: signals, allow: signals[signals.length - 1] === true};
+}
+
+function hex3(value){ return value.toString(16).padStart(6, '0'); }
+
+function netlistHex(){
+  var out = [];
+  for (var i = 0; i < GATES.length; i++){
+    out.push('00', hex3(GATES[i].a), hex3(GATES[i].b));
+  }
+  return out.join('');
+}
+
+function bitsToByte(bits){
+  return bits.reduce(function(byte, bit, index){ return byte | ((bit ? 1 : 0) << index); }, 0);
+}
+
+function pad2(n){ return String(n).padStart(2, '0'); }
+
+function gateLabel(index){
+  var g = GATES[index];
+  var out = N_IN + index;
+  if (index === 0) return 's' + pad2(out) + ' = NAND(s' + pad2(g.a) + ', s' + pad2(g.a) + ') · NOT paused';
+  if (index % 2 === 1) return 's' + pad2(out) + ' = NAND(s' + pad2(g.a) + ', s' + pad2(g.b) + ')';
+  return 's' + pad2(out) + ' = NAND(s' + pad2(g.a) + ', s' + pad2(g.a) + ') · AND fold';
+}
+
+/* ------------------------------------------------------------------ *
+ * Engine — ported from lib/latch/engine.ts (pure reduce() state machine)
+ * ------------------------------------------------------------------ */
+var PREVIEW_WALLET = '0x4E2a91c0b184A77e0c1d4e0a9C0b184A77e091c0';
+var SAVINGS = '0x5a6E19c0b184A77e0c1d4e0a9C0b184A77e0A11c';
+var ROGUE_TARGET = '0xBaD0000000000000000000000000000000000Bad';
+var ACTIVATION_USDT = 5;
+var FEE_BPS = 100;
+var CHAIN_ID = 196;
+var AREA_CODE = 2;
+
+function round2(value){ return Math.round(value * 100) / 100; }
+
+function dayKey(now){ return new Date(now).toISOString().slice(0, 10); }
+
+function sameAddress(left, right){
+  return String(left).trim().toLowerCase() === String(right).trim().toLowerCase();
+}
+
+function defaultState(){
+  return {
+    connected: false,
+    armed: false,
+    running: false,
+    paused: false,
+    processor: '',
+    cpu: '0',
+    circuitId: '7',
+    usdt: 1000,
+    swept: 0,
+    spentToday: 0,
+    dayKey: '',
+    perTx: 50,
+    daily: 150,
+    sweepAmount: 50,
+    threshold: 48,
+    price: 56.4,
+    history: [58, 57.2, 56.8, 57.5, 56.1, 56.4],
+    savings: SAVINGS,
+    protocolEarned: 0,
+    ticks: 0,
+    logs: [{
+      id: 'boot',
+      at: 0,
+      kind: 'system',
+      title: 'Policy netlist loaded',
+      detail: '13 NAND gates, 7 inputs, allow bit on signal 19. No key in the daemon.',
+      bits: '',
+      allow: null
+    }],
+    lastBits: null,
+    lastAllow: null,
+    lastSignals: null,
+    lastReceipt: null
+  };
+}
+
+function addLog(state, entry){
+  var next = {
+    id: String(entry.at) + '-' + state.logs.length + '-' + state.ticks,
+    at: entry.at,
+    kind: entry.kind,
+    title: entry.title,
+    detail: entry.detail,
+    bits: entry.bits || '',
+    allow: entry.allow === undefined ? null : entry.allow
+  };
+  var logs = [next].concat(state.logs).slice(0, 40);
+  return Object.assign({}, state, {logs: logs});
+}
+
+function tapeName(state){
+  var id = String(state.circuitId || '').trim() || '?';
+  var cpu = String(state.cpu || '').trim() || '0';
+  return '#' + id + '@' + AREA_CODE + '.' + cpu;
+}
+
+function policyBits(state, proposal){
+  var fee = round2((proposal.amount * feeBpsFor(state.swept)) / 10000);
+  var whitelisted = sameAddress(proposal.target, state.savings);
+  var actionOk = proposal.kind === 'sweep';
+  var txCap = proposal.amount > 0 && proposal.amount <= state.perTx;
+  var dailyOk = round2(state.spentToday + proposal.amount) <= state.daily;
+  var funded = state.usdt >= round2(proposal.amount + fee);
+  var bits = [state.paused, proposal.keeper, whitelisted, actionOk, txCap, dailyOk, funded];
+  var reasons = [];
+  if (state.paused) reasons.push('agent is paused');
+  if (!proposal.keeper) reasons.push('caller is not the keeper');
+  if (!whitelisted) reasons.push('target is not the savings whitelist');
+  if (!actionOk) reasons.push('function is not the sweep');
+  if (!txCap) reasons.push('amount is over the ' + money(state.perTx) + ' USDT per-tx cap');
+  if (!dailyOk) reasons.push('daily cap of ' + money(state.daily) + ' USDT would break');
+  if (!funded) reasons.push('container cannot cover the sweep plus the ' + (feeBpsFor(state.swept) / 100).toFixed(2) + '% fee');
+  return {bits: bits, reasons: reasons};
+}
+
+function applyProposal(state, proposal, now){
+  var key = dayKey(now);
+  var rolled = state.dayKey === key ? state : Object.assign({}, state, {dayKey: key, spentToday: 0});
+  var checked = policyBits(rolled, proposal);
+  var bits = checked.bits;
+  var reasons = checked.reasons;
+  var evaluated = evalPolicy(bits);
+  var bitText = bits.map(function(bit){ return bit ? '1' : '0'; }).join('');
+  var fee = round2((proposal.amount * feeBpsFor(rolled.swept)) / 10000);
+  var call = proposal.kind === 'sweep'
+    ? 'LatchRelay.tick(' + proposal.amount.toFixed(2) + ')'
+    : 'transfer(' + proposal.target + ', ' + proposal.amount.toFixed(2) + ')';
+
+  var receipt = {
+    at: now,
+    allow: evaluated.allow,
+    source: proposal.title,
+    amount: proposal.amount,
+    fee: fee,
+    bits: bitText,
+    call: call,
+    reasons: reasons
+  };
+
+  var withEval = Object.assign({}, rolled, {
+    lastBits: bits,
+    lastAllow: evaluated.allow,
+    lastSignals: evaluated.signals,
+    lastReceipt: receipt
+  });
+
+  if (!evaluated.allow){
+    return addLog(withEval, {
+      at: now,
+      kind: 'rejected',
+      title: proposal.title + ' rejected',
+      detail: reasons.join(' · ') || 'circuit returned 0',
+      bits: bitText,
+      allow: false
+    });
+  }
+
+  var next = Object.assign({}, withEval, {
+    usdt: round2(withEval.usdt - proposal.amount - fee),
+    swept: round2(withEval.swept + proposal.amount),
+    spentToday: round2(withEval.spentToday + proposal.amount),
+    protocolEarned: round2(withEval.protocolEarned + fee)
+  });
+
+  return addLog(next, {
+    at: now,
+    kind: 'executed',
+    title: proposal.title + ' executed',
+    detail: 'Container sent ' + proposal.amount.toFixed(2) + ' USDT to savings. Fee ' + fee.toFixed(2) + ' USDT.',
+    bits: bitText,
+    allow: true
+  });
+}
+
+function driftPrice(price, rand){
+  var pulled = price + (56 - price) * 0.08 + (rand - 0.5) * 1.6;
+  var shocked = rand < 0.14 ? Math.min(pulled, 39 + rand * 10) : pulled;
+  return round2(Math.min(78, Math.max(32, shocked)));
+}
+
+/* A dip always prints at or below the configured threshold, never above it. */
+function dipPrice(threshold){
+  return Math.max(0.5, round2(Math.min(threshold - 0.5, 41)));
+}
+
+function reduce(state, action){
+  switch (action.type){
+    case 'hydrate':
+      return action.state;
+
+    case 'connect':
+      if (state.connected) return state;
+      return addLog(Object.assign({}, state, {connected: true}), {
+        at: Date.now(),
+        kind: 'system',
+        title: 'Preview session',
+        detail: 'This wallet signs nothing. On X Layer the keeper pays gas and nothing else.'
+      });
+
+    case 'disconnect':
+      return Object.assign({}, state, {connected: false, running: false});
+
+    case 'configure': {
+      var patch = action.patch;
+      var next = Object.assign({}, state);
+      if (patch.threshold !== undefined && Number.isFinite(patch.threshold)) next.threshold = Math.max(1, round2(patch.threshold));
+      if (patch.daily !== undefined && Number.isFinite(patch.daily)) next.daily = Math.max(1, round2(patch.daily));
+      if (patch.perTx !== undefined && Number.isFinite(patch.perTx)) next.perTx = Math.max(1, round2(patch.perTx));
+      if (next.perTx > next.daily) next.perTx = next.daily;
+      if (patch.sweepAmount !== undefined && Number.isFinite(patch.sweepAmount)) next.sweepAmount = round2(patch.sweepAmount);
+      next.sweepAmount = Math.min(next.perTx, Math.max(1, next.sweepAmount));
+      if (typeof patch.savings === 'string') next.savings = patch.savings.trim();
+      if (typeof patch.processor === 'string') next.processor = patch.processor.trim();
+      if (typeof patch.circuitId === 'string') next.circuitId = patch.circuitId.trim();
+      return next;
+    }
+
+    case 'fund':
+      return addLog(Object.assign({}, state, {usdt: round2(state.usdt + action.amount)}), {
+        at: action.now,
+        kind: 'system',
+        title: 'Container funded',
+        detail: '+' + action.amount.toFixed(2) + ' USDT in the preview container.'
+      });
+
+    case 'arm': {
+      if (state.armed) return state;
+      if (!state.connected){
+        return addLog(state, {
+          at: action.now,
+          kind: 'system',
+          title: 'Connect first',
+          detail: 'Arming charges the container 5 USDT. Open a preview session so the charge has an owner.'
+        });
+      }
+      if (state.usdt < ACTIVATION_USDT){
+        return addLog(state, {
+          at: action.now,
+          kind: 'rejected',
+          title: 'Cannot arm',
+          detail: 'Activation is 5 USDT. Fund the container first.'
+        });
+      }
+      return addLog(Object.assign({}, state, {
+        armed: true,
+        usdt: round2(state.usdt - ACTIVATION_USDT),
+        protocolEarned: round2(state.protocolEarned + ACTIVATION_USDT)
+      }), {
+        at: action.now,
+        kind: 'system',
+        title: 'Agent armed',
+        detail: '5 USDT activation booked. You can start the daemon.'
+      });
+    }
+
+    case 'start': {
+      if (state.running) return state;
+      if (!state.connected){
+        return addLog(state, {
+          at: action.now,
+          kind: 'system',
+          title: 'Connect first',
+          detail: 'The daemon will not run without a session.'
+        });
+      }
+      if (!state.armed){
+        return addLog(state, {
+          at: action.now,
+          kind: 'system',
+          title: 'Arm the agent',
+          detail: 'Activation is 5 USDT before the daemon may tick.'
+        });
+      }
+      return addLog(Object.assign({}, state, {running: true}), {
+        at: action.now,
+        kind: 'system',
+        title: 'Daemon started',
+        detail: 'Watching OKB. A dip at or under the threshold proposes a sweep. Restart-safe.'
+      });
+    }
+
+    case 'stop':
+      if (!state.running) return state;
+      return addLog(Object.assign({}, state, {running: false}), {
+        at: action.now,
+        kind: 'system',
+        title: 'Daemon stopped',
+        detail: 'No new sweeps until you start it again.'
+      });
+
+    case 'pause':
+      if (state.paused) return state;
+      return addLog(Object.assign({}, state, {paused: true}), {
+        at: action.now,
+        kind: 'system',
+        title: 'Circuit input paused = 1',
+        detail: 'The next proposal fails eval even if the price is through the floor.'
+      });
+
+    case 'resume':
+      if (!state.paused) return state;
+      return addLog(Object.assign({}, state, {paused: false}), {
+        at: action.now,
+        kind: 'system',
+        title: 'Pause cleared',
+        detail: 'paused input is 0 again.'
+      });
+
+    case 'dip': {
+      var price = dipPrice(state.threshold);
+      var marked = Object.assign({}, state, {
+        price: price,
+        history: state.history.concat([price]).slice(-28)
+      });
+      if (!state.running || !state.armed){
+        return addLog(marked, {
+          at: action.now,
+          kind: 'trigger',
+          title: 'OKB marked at ' + price.toFixed(2),
+          detail: state.armed ? 'Daemon is stopped, so nothing executed.' : 'Agent is not armed.'
+        });
+      }
+      return applyProposal(marked, {
+        kind: 'sweep',
+        amount: state.sweepAmount,
+        target: state.savings,
+        keeper: true,
+        title: 'Dip sweep'
+      }, action.now);
+    }
+
+    case 'rogue': {
+      if (!state.connected || !state.armed){
+        return addLog(state, {
+          at: action.now,
+          kind: 'system',
+          title: 'Arm the agent first',
+          detail: 'The rogue transfer is run through the same circuit. Connect and arm so the comparison is honest.'
+        });
+      }
+      return applyProposal(state, {
+        kind: 'transfer',
+        amount: 500,
+        target: ROGUE_TARGET,
+        keeper: false,
+        title: 'Rogue 500 USDT'
+      }, action.now);
+    }
+
+    case 'reset': {
+      var fresh = defaultState();
+      fresh.connected = state.connected;
+      fresh.processor = state.processor;
+      fresh.cpu = state.cpu;
+      fresh.circuitId = state.circuitId;
+      fresh.savings = state.savings;
+      return addLog(fresh, {
+        at: action.now,
+        kind: 'system',
+        title: 'Demo reset',
+        detail: 'Balances, pause, and the feed were cleared. Circuit link kept.'
+      });
+    }
+
+    case 'tick': {
+      if (!state.running) return state;
+      var key = dayKey(action.now);
+      var ticked = state.dayKey === key ? state : Object.assign({}, state, {dayKey: key, spentToday: 0});
+      var drift = driftPrice(ticked.price, action.rand);
+      ticked = Object.assign({}, ticked, {
+        price: drift,
+        history: ticked.history.concat([drift]).slice(-28),
+        ticks: ticked.ticks + 1
+      });
+      if (drift > ticked.threshold){
+        if (ticked.ticks % 3 !== 0) return ticked;
+        return addLog(ticked, {
+          at: action.now,
+          kind: 'trigger',
+          title: 'Holding',
+          detail: 'OKB ' + drift.toFixed(2) + ' is above ' + ticked.threshold.toFixed(2) + '. No proposal.'
+        });
+      }
+      var proposal = {
+        kind: 'sweep',
+        amount: ticked.sweepAmount,
+        target: ticked.savings,
+        keeper: true,
+        title: 'Dip sweep'
+      };
+      /* A denied proposal repeats the same verdict every tick; keep the feed readable. */
+      if (!evalPolicy(policyBits(ticked, proposal).bits).allow && ticked.ticks % 3 !== 0) return ticked;
+      return applyProposal(ticked, proposal, action.now);
+    }
+
+    default:
+      return state;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Store
+ * ------------------------------------------------------------------ */
+var KEY = 'latch.v1';
+var state = defaultState();
+var timer = null;
+
+function persist(){
+  try {
+    var stored = Object.assign({}, state);
+    delete stored.lastSignals;
+    localStorage.setItem(KEY, JSON.stringify(stored));
+  } catch (err) { /* storage may be blocked */ }
+}
+
+function syncTicker(){
+  if (state.running && !timer){
+    timer = setInterval(function(){
+      dispatch({type: 'tick', now: Date.now(), rand: Math.random()});
+    }, 4000);
+  } else if (!state.running && timer){
+    clearInterval(timer);
+    timer = null;
+  }
+}
+
+function dispatch(action){
+  state = reduce(state, action);
+  persist();
+  syncTicker();
+  render();
+}
+
+function hydrate(){
+  try {
+    var raw = localStorage.getItem(KEY);
+    if (!raw) return;
+    var parsed = JSON.parse(raw);
+    var next = Object.assign(defaultState(), parsed);
+    next.lastSignals = null;
+    if (!Array.isArray(next.logs) || next.logs.length === 0) next.logs = defaultState().logs;
+    state = next;
+    if (state.running){
+      state = addLog(state, {
+        at: Date.now(),
+        kind: 'system',
+        title: 'Daemon resumed',
+        detail: 'The listener came back after a reload and kept the last balances.'
+      });
+    }
+  } catch (err){
+    state = defaultState();
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * DOM helpers
+ * ------------------------------------------------------------------ */
+function h(tag, props){
+  var el = document.createElement(tag);
+  if (props){
+    Object.keys(props).forEach(function(key){
+      var value = props[key];
+      if (value === null || value === undefined) return;
+      if (key === 'class') el.className = value;
+      else if (key === 'text') el.textContent = value;
+      else if (key === 'role') el.setAttribute('role', value);
+      else if (key.slice(0, 2) === 'on') el.addEventListener(key.slice(2).toLowerCase(), value);
+      else el.setAttribute(key, value);
+    });
+  }
+  for (var i = 2; i < arguments.length; i++){
+    var kid = arguments[i];
+    if (kid === null || kid === undefined || kid === false) continue;
+    if (Array.isArray(kid)){
+      kid.forEach(function(child){ if (child) el.append(child); });
+    } else if (kid.nodeType){
+      el.append(kid);
+    } else {
+      el.append(document.createTextNode(String(kid)));
+    }
+  }
+  return el;
+}
+
+var NS = 'http://www.w3.org/2000/svg';
+function icon(paths, cls){
+  var svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.8');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('class', 'ic' + (cls ? ' ' + cls : ''));
+  paths.forEach(function(d){
+    var p = document.createElementNS(NS, 'path');
+    p.setAttribute('d', d);
+    svg.append(p);
+  });
+  return svg;
+}
+
+var P_SHIELD = ['M12 21s7-3.6 7-9V5.5L12 2.5 5 5.5V12c0 5.4 7 9 7 9z'];
+var P_PLAY = ['M8 5.5l10 6.5-10 6.5z'];
+var P_PAUSE = ['M9.5 5.5v13', 'M14.5 5.5v13'];
+
+function money(value){
+  return Number(value).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
+function clock(at){
+  if (!at) return '—';
+  return new Date(at).toLocaleTimeString('en-GB', {hour12: false});
+}
+
+function shortAddr(value){
+  var trimmed = String(value || '').trim();
+  if (trimmed.length < 12) return trimmed || '—';
+  return trimmed.slice(0, 6) + '…' + trimmed.slice(-4);
+}
+
+function appConfig(){
+  try {
+    if (typeof window !== 'undefined' && window.APP_CONFIG) return window.APP_CONFIG;
+  } catch (err) { /* ignore */ }
+  return null;
+}
+
+// The relay that was actually deployed from this project, if any. Its address
+// only exists after a deploy, so it is read from the injected config.
+function deployedRelay(){
+  var cfg = appConfig();
+  var entry = cfg && cfg.contracts ? cfg.contracts.LatchRelay : null;
+  if (!entry || !entry.address) return null;
+  return {address: String(entry.address), chainId: cfg.chainId};
+}
+
+function explorerFor(address, chainId){
+  var base = null;
+  if (chainId === 56) base = 'https://bscscan.com';
+  else if (chainId === 97) base = 'https://testnet.bscscan.com';
+  else if (chainId === 196) base = 'https://www.oklink.com/xlayer';
+  if (!base || !/^0x[0-9a-fA-F]{40}$/.test(address)) return null;
+  return base + '/address/' + address;
+}
+
+function chainLabel(id){
+  if (id === 56) return 'BNB Chain';
+  if (id === 97) return 'BNB testnet';
+  if (id === 196) return 'X Layer';
+  return 'chain ' + id;
+}
+
+// One row in the body card: the relay's real address once it has been
+// deployed, and a plain "not deployed yet" line until then.
+function vaultRow(){
+  var relay = deployedRelay();
+  if (!relay) return h('p', {text: 'Vault not deployed yet'});
+  var url = explorerFor(relay.address, relay.chainId);
+  if (!url) return h('p', {text: 'Vault ' + shortAddr(relay.address)});
+  return h('p', null,
+    h('span', {text: 'Vault '}),
+    h('a', {href: url, target: '_blank', rel: 'noopener noreferrer', text: shortAddr(relay.address)})
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Backend — waitlist, keeper heartbeat, ops list
+ * ------------------------------------------------------------------ */
+function apiBase(){
+  var cfg = appConfig();
+  if (!cfg || !cfg.api) return null;
+  return String(cfg.api).replace(/\/+$/, '');
+}
+
+var publicCache = {waiting: null, ticks: null, last: 0, heartbeat: null, error: null, at: 0, busy: false};
+
+function since(at){
+  var secs = Math.max(0, Math.round((Date.now() - at) / 1000));
+  if (secs < 60) return secs + 's ago';
+  if (secs < 3600) return Math.round(secs / 60) + 'm ago';
+  if (secs < 86400) return Math.round(secs / 3600) + 'h ago';
+  return Math.round(secs / 86400) + 'd ago';
+}
+
+// Repaints the two live lines straight from the cache. Never calls render(),
+// so a slow network can never start a loop.
+function paintPublic(){
+  var base = apiBase();
+  var waiting = document.getElementById('latch-waiting');
+  if (waiting){
+    if (!base) waiting.textContent = 'backend not deployed yet';
+    else if (publicCache.waiting === null) waiting.textContent = 'reading…';
+    else waiting.textContent = publicCache.waiting +
+      (publicCache.waiting === 1 ? ' builder waiting' : ' builders waiting');
+  }
+  var daemon = document.getElementById('latch-daemon');
+  if (daemon){
+    if (!base) daemon.textContent = 'Keeper heartbeat: no backend yet.';
+    else if (publicCache.error) daemon.textContent = 'Keeper heartbeat: ' + publicCache.error;
+    else if (publicCache.last) daemon.textContent = 'Keeper last seen ' + since(publicCache.last) +
+      ' · ' + publicCache.ticks + ' beats on record';
+    else daemon.textContent = 'Keeper has not checked in yet.';
+  }
+  var beat = document.getElementById('latch-beat');
+  if (beat) beat.textContent = beatText();
+}
+
+function beatText(){
+  var base = apiBase();
+  if (!base) return 'no backend yet';
+  if (publicCache.error) return publicCache.error;
+  if (!publicCache.last) return 'no check-in yet';
+  return 'seen ' + since(publicCache.last) + ' · ' + publicCache.ticks + ' beats';
+}
+
+function loadPublic(force){
+  var base = apiBase();
+  if (!base || publicCache.busy) return;
+  if (!force && Date.now() - publicCache.at < 20000) return;
+  publicCache.busy = true;
+  fetch(base + '/api/status', {headers: {Accept: 'application/json'}})
+    .then(function(res){
+      if (!res.ok) throw new Error('status ' + res.status);
+      return res.json();
+    })
+    .then(function(data){
+      var stats = data && data.stats ? data.stats : {};
+      publicCache.waiting = Number(stats.waiting) || 0;
+      publicCache.ticks = Number(stats.ticks) || 0;
+      publicCache.last = Number(stats.last) || 0;
+      publicCache.heartbeat = data ? data.heartbeat : null;
+      publicCache.error = null;
+      publicCache.at = Date.now();
+      paintPublic();
+    })
+    .catch(function(){
+      publicCache.error = 'server unreachable';
+      paintPublic();
+    })
+    .then(function(){ publicCache.busy = false; });
+}
+
+var signupBusy = false;
+
+function submitSignup(){
+  var line = document.getElementById('latch-signup-msg');
+  var say = function(text, cls){
+    if (!line) return;
+    line.textContent = text;
+    line.className = 'tiny' + (cls ? ' ' + cls : '');
+  };
+  var base = apiBase();
+  if (!base){
+    say('The backend is not deployed yet, so this would go nowhere.', 'no');
+    return;
+  }
+  var input = document.querySelector('[data-k="signupEmail"]');
+  var email = input ? String(input.value || '').trim() : '';
+  if (!email){ say('Add an email first.', 'no'); return; }
+  if (signupBusy) return;
+  signupBusy = true;
+  say('Saving…', '');
+  fetch(base + '/api/signups', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({email: email, note: ''})
+  })
+    .then(function(res){ return res.json().then(function(data){ return {ok: res.ok, data: data}; }); })
+    .then(function(res){
+      if (!res.ok){
+        say(String(res.data && res.data.error ? res.data.error : 'Could not save that.'), 'no');
+        return;
+      }
+      say(res.data && res.data.duplicate
+        ? 'You are already on the list.'
+        : 'On the list. We will write once the relay opens.', 'ok');
+      if (input) input.value = '';
+      loadPublic(true);
+    })
+    .catch(function(){ say('Network error, try again in a moment.', 'no'); })
+    .then(function(){ signupBusy = false; });
+}
+
+var opsOpen = false;
+var ops = {token: null, signups: null, error: null, busy: false};
+
+function loadOpsToken(){
+  try {
+    var raw = localStorage.getItem('latch.ops');
+    if (raw) ops.token = raw;
+  } catch (err) { /* storage blocked: stay signed out */ }
+}
+
+function saveOpsToken(token){
+  ops.token = token || null;
+  try {
+    if (token) localStorage.setItem('latch.ops', token);
+    else localStorage.removeItem('latch.ops');
+  } catch (err) { /* storage blocked: token lives in memory only */ }
+}
+
+function opsSay(text, cls){
+  var line = document.getElementById('latch-ops-msg');
+  if (!line) return;
+  line.textContent = text;
+  line.className = 'tiny' + (cls ? ' ' + cls : '');
+}
+
+function opsLogin(){
+  var base = apiBase();
+  if (!base){ opsSay('No backend yet.', 'no'); return; }
+  var input = document.querySelector('[data-k="opsPassword"]');
+  var password = input ? String(input.value || '') : '';
+  if (!password){ opsSay('Password first.', 'no'); return; }
+  if (ops.busy) return;
+  ops.busy = true;
+  opsSay('Checking…', '');
+  fetch(base + '/api/admin/login', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({password: password})
+  })
+    .then(function(res){ return res.json().then(function(data){ return {ok: res.ok, data: data}; }); })
+    .then(function(res){
+      ops.busy = false;
+      if (!res.ok){
+        opsSay(String(res.data && res.data.error ? res.data.error : 'Sign-in failed.'), 'no');
+        return;
+      }
+      saveOpsToken(res.data.token);
+      if (input) input.value = '';
+      opsSay('Signed in.', 'ok');
+      loadSignups();
+    })
+    .catch(function(){ ops.busy = false; opsSay('Network error.', 'no'); });
+}
+
+function loadSignups(){
+  var base = apiBase();
+  if (!base || !ops.token) return;
+  ops.busy = true;
+  fetch(base + '/api/admin/signups', {headers: {Authorization: 'Bearer ' + ops.token}})
+    .then(function(res){
+      if (res.status === 401){ saveOpsToken(null); throw new Error('session expired'); }
+      if (!res.ok) throw new Error('status ' + res.status);
+      return res.json();
+    })
+    .then(function(data){
+      ops.signups = Array.isArray(data.signups) ? data.signups : [];
+      ops.error = null;
+    })
+    .catch(function(err){ ops.error = String(err && err.message ? err.message : 'failed'); })
+    .then(function(){ ops.busy = false; render(); });
+}
+
+function deleteSignup(id){
+  var base = apiBase();
+  if (!base || !ops.token) return;
+  fetch(base + '/api/admin/signups/' + encodeURIComponent(id), {
+    method: 'DELETE',
+    headers: {Authorization: 'Bearer ' + ops.token}
+  })
+    .then(function(res){
+      if (res.status === 401){ saveOpsToken(null); render(); return; }
+      loadSignups();
+    })
+    .catch(function(){ opsSay('Delete failed.', 'no'); });
+}
+
+function accessCard(){
+  var base = apiBase();
+  var rows;
+  if (!ops.token){
+    rows = h('div', {class: 'gap'},
+      h('label', {class: 'field'},
+        h('span', {text: 'Ops password'}),
+        h('input', {
+          type: 'password',
+          value: '',
+          placeholder: 'ADMIN_PASSWORD',
+          'data-k': 'opsPassword',
+          onkeydown: function(event){ if (event.key === 'Enter') opsLogin(); }
+        })
+      ),
+      h('div', {class: 'row', style: 'gap:.45rem'},
+        btn('Sign in', opsLogin, {small: true}),
+        h('p', {class: 'tiny', id: 'latch-ops-msg', text: ''})
+      )
+    );
+  } else if (!ops.signups){
+    rows = h('p', {class: 'tiny', id: 'latch-ops-msg', text: ops.busy ? 'Loading…' : (ops.error || 'No list yet.')});
+  } else {
+    rows = h('div', {class: 'gap'},
+      h('p', {class: 'tiny', id: 'latch-ops-msg',
+        text: ops.signups.length
+          ? String(ops.signups.length) + (ops.signups.length === 1 ? ' email' : ' emails')
+          : 'No emails yet.'}),
+      h('ul', {class: 'list tight'}, ops.signups.slice(0, 50).map(function(row){
+        var id = String(row && row.id ? row.id : '');
+        return h('li', {class: 'row'},
+          h('span', {class: 'row-main mono', text: String(row.email || '')}),
+          h('span', {class: 'tiny mono', text: row.createdAt ? clock(row.createdAt) : ''}),
+          /^[A-Za-z0-9-]{8,64}$/.test(id)
+            ? h('button', {class: 'btn ghost sm', type: 'button', onclick: function(){ deleteSignup(id); }}, '×')
+            : null
+        );
+      })),
+      btn('Sign out', function(){
+        var url = apiBase();
+        if (url && ops.token){
+          fetch(url + '/api/admin/logout', {method: 'POST', headers: {Authorization: 'Bearer ' + ops.token}}).catch(function(){});
+        }
+        saveOpsToken(null);
+        ops.signups = null;
+        render();
+      }, {small: true, ghost: true})
+    );
+  }
+
+  return h('div', {class: 'card pad0'},
+    h('div', {class: 'card-bar'},
+      h('h2', {class: 'h2', text: 'Early access'}),
+      h('span', {class: 'tiny mono', id: 'latch-waiting', text: base ? 'reading…' : 'backend not deployed yet'})
+    ),
+    h('div', {class: 'body', style: 'padding:1rem'},
+      h('p', {class: 'note', text: 'One email when Latch opens on X Layer. Stored on this project\'s own backend; the keeper never sends a key here, only a heartbeat.'}),
+      h('div', {class: 'row', style: 'gap:.45rem;margin-top:.7rem;flex-wrap:wrap'},
+        h('label', {class: 'field', style: 'flex:1 1 14rem;min-width:0'},
+          h('span', {text: 'Email'}),
+          h('input', {
+            type: 'email',
+            value: '',
+            placeholder: 'you@example.com',
+            'data-k': 'signupEmail',
+            onkeydown: function(event){ if (event.key === 'Enter') submitSignup(); }
+          })
+        ),
+        btn('Notify me', submitSignup, {amber: true})
+      ),
+      h('p', {class: 'tiny', id: 'latch-signup-msg', text: ''}),
+      h('p', {class: 'tiny mono', id: 'latch-daemon', style: 'margin-top:.6rem', text: ''}),
+      h('div', {class: 'row', style: 'gap:.45rem;margin-top:.8rem'},
+        h('span', {class: 'tiny', text: 'Staff'}),
+        btn(opsOpen ? 'Hide ops' : 'Ops', function(){
+          opsOpen = !opsOpen;
+          if (opsOpen && ops.token && !ops.signups) loadSignups();
+          render();
+        })
+      ),
+      opsOpen ? h('div', {style: 'margin-top:.8rem', class: 'gap'}, rows) : null
+    )
+  );
+}
+
+function copyText(text, labelNode){
+  var done = function(){
+    if (!labelNode) return;
+    labelNode.textContent = 'Copied';
+    setTimeout(function(){ if (labelNode) labelNode.textContent = 'Copy'; }, 1200);
+  };
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(done).catch(function(){ fallbackCopy(text, done); });
+      return;
+    }
+  } catch (err) { /* fall through */ }
+  fallbackCopy(text, done);
+}
+
+function fallbackCopy(text, done){
+  try {
+    var area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.append(area);
+    area.select();
+    document.execCommand('copy');
+    area.remove();
+    done();
+  } catch (err) { /* clipboard unavailable */ }
+}
+
+/* ------------------------------------------------------------------ *
+ * Views
+ * ------------------------------------------------------------------ */
+var tab = 'Operate';
+var statusOpen = false;
+
+function btn(label, onclick, opts){
+  opts = opts || {};
+  var kids = [];
+  if (opts.icon) kids.push(icon(opts.icon));
+  kids.push(h('span', {text: label}));
+  var node = h('button', {
+    class: 'btn' + (opts.amber ? ' amber' : '') + (opts.ghost ? ' ghost' : '') + (opts.small ? ' sm' : ''),
+    type: 'button',
+    onclick: onclick
+  }, kids);
+  if (opts.disabled) node.disabled = true;
+  return node;
+}
+
+function header(){
+  var s = state;
+  var tabs = ['Operate', 'Circuit', 'Brief'];
+  return h('header', {class: 'hdr'},
+    h('div', {class: 'hdr-in'},
+      h('div', {class: 'hdr-id'},
+        h('div', {class: 'hdr-row'},
+          h('span', {class: 'wordmark', text: 'LATCH'}),
+          h('span', {class: 'tape', text: tapeName(s)})
+        ),
+        h('p', {class: 'hdr-sub', text: 'Permissioned dip trade · X Layer 196 · preview'})
+      ),
+      h('div', {class: 'hdr-actions'},
+        btn('Status', function(){ statusOpen = true; render(); }, {small: true, ghost: true}),
+        btn(s.connected ? shortAddr(PREVIEW_WALLET) : 'Connect', function(){
+          dispatch({type: s.connected ? 'disconnect' : 'connect'});
+        }, {small: true, amber: !s.connected})
+      )
+    ),
+    h('nav', {class: 'tabs', 'aria-label': 'Sections'}, tabs.map(function(name){
+      return h('button', {
+        class: 'tab' + (tab === name ? ' on' : ''),
+        type: 'button',
+        onclick: function(){ tab = name; render(); }
+      }, name);
+    }))
+  );
+}
+
+function stat(label, value, note){
+  return h('div', {class: 'card'},
+    h('p', {class: 'label', text: label}),
+    h('p', {class: 'stat-val', text: value}),
+    h('p', {class: 'stat-note', text: note})
+  );
+}
+
+function priceCard(s, listening){
+  var max = Math.max.apply(null, s.history.concat([1]));
+  var bars = s.history.map(function(point){
+    return h('i', {
+      class: 'bar' + (point <= s.threshold ? ' bad' : ''),
+      style: 'height:' + Math.max(10, Math.round((point / max) * 100)) + '%'
+    });
+  });
+  return h('div', {class: 'card'},
+    h('div', {class: 'price-top'},
+      h('div', {},
+        h('p', {class: 'label', text: 'OKB / USDT'}),
+        h('p', {class: 'bigprice', text: s.price.toFixed(2)}),
+        h('p', {class: 'note', text: listening
+          ? 'Listening. A print at ' + s.threshold.toFixed(2) + ' or lower fills itself.'
+          : 'Trade when price is ' + s.threshold.toFixed(2) + ' or lower. Start the listener to let it run.'})
+      ),
+      h('span', {class: listening ? 'dot live' : 'dot', 'aria-hidden': 'true'})
+    ),
+    h('div', {class: 'spark', 'aria-hidden': 'true'}, bars),
+    h('p', {class: 'tiny mono', text: 'gate ' + s.threshold.toFixed(2) + ' · last ' + s.history.length + ' prints'}),
+    h('div', {class: 'grid2', style: 'margin-top:.75rem'},
+      btn('Inject dip', function(){ dispatch({type: 'dip', now: Date.now()}); }, {amber: true}),
+      btn('Rogue 500 USDT', function(){ dispatch({type: 'rogue', now: Date.now()}); })
+    )
+  );
+}
+
+function bodyCard(s){
+  return h('div', {class: 'card', style: 'display:flex;flex-direction:column'},
+    h('div', {class: 'row', style: 'gap:.45rem'},
+      icon(P_SHIELD, 'ok'),
+      h('h2', {class: 'h2', text: 'Permissioned body'})
+    ),
+    h('p', {class: 'note', style: 'margin-top:.5rem',
+      text: 'LatchRelay is the only contract that can trade. It moves funds only when its seven-bit policy returns allow — the same byte the Circuit tab computes. The keeper pays gas and nothing else.'}),
+    h('div', {class: 'kv mono'},
+      h('p', {text: 'Processor ' + (s.processor.trim() ? shortAddr(s.processor) : 'not linked yet')}),
+      h('p', {text: 'Circuit #' + (s.circuitId || '?') + ' · savings ' + shortAddr(s.savings)}),
+      vaultRow()
+    ),
+    h('p', {class: 'booked mono', text: 'Protocol booked ' + money(s.protocolEarned) + ' USDT'}),
+    h('div', {class: 'grid2 push'},
+      btn('Fund 250', function(){ dispatch({type: 'fund', amount: 250, now: Date.now()}); }),
+      btn(s.armed ? 'Armed' : 'Arm · ' + ACTIVATION_USDT + ' USDT', function(){
+        dispatch({type: 'arm', now: Date.now()});
+      }, {disabled: s.armed}),
+      btn(s.running ? 'Stop' : 'Start', function(){
+        dispatch({type: s.running ? 'stop' : 'start', now: Date.now()});
+      }, {amber: true, icon: s.running ? P_PAUSE : P_PLAY}),
+      btn(s.paused ? 'Unpause' : 'Pause rule', function(){
+        dispatch({type: s.paused ? 'resume' : 'pause', now: Date.now()});
+      })
+    )
+  );
+}
+
+function permissionCard(bits, reasons, allow){
+  var byte = bitsToByte(bits);
+  var rows = INPUTS.map(function(input, index){
+    var pass = index === 0 ? bits[index] === false : bits[index] === true;
+    return h('li', {class: 'row'},
+      h('span', {class: 'row-main', text: input.name}),
+      h('span', {class: 'chip' + (bits[index] ? ' one' : ''), text: bits[index] ? '1' : '0'}),
+      h('span', {class: 'verdict mono ' + (pass ? 'ok' : 'no'), text: pass ? 'pass' : 'block'})
+    );
+  });
+  return h('div', {class: 'card pad0'},
+    h('div', {class: 'card-bar'},
+      h('h2', {class: 'h2', text: 'Live permission'}),
+      h('span', {class: 'badge mono ' + (allow ? 'ok' : 'no'), text: allow ? 'ALLOW' : 'DENY'})
+    ),
+    h('ul', {class: 'list tight'}, rows),
+    h('div', {class: 'card-foot mono'},
+      h('span', {class: 'tiny', text: 'bits ' + bits.map(function(bit){ return bit ? '1' : '0'; }).join('') +
+        ' · byte 0x' + byte.toString(16).padStart(2, '0')}),
+      reasons.length && !allow ? h('span', {class: 'tiny no', text: reasons.join(' · ')}) : null
+    )
+  );
+}
+
+function receiptCard(s){
+  var receipt = s.lastReceipt;
+  var body;
+  if (receipt){
+    body = h('div', {class: 'gap', style: 'margin-top:.75rem'},
+      h('p', {class: 'mono ' + (receipt.allow ? 'ok' : 'no'), style: 'font-size:.85rem',
+        text: (receipt.allow ? 'Filled' : 'Reverted') + ' · ' + receipt.source}),
+      h('p', {class: 'note', text: receipt.allow
+        ? money(receipt.amount) + ' USDT left the container. Fee ' + money(receipt.fee) + '.'
+        : (receipt.reasons.join(' · ') || 'Circuit returned 0.')}),
+      h('p', {class: 'tiny mono', style: 'overflow-wrap:anywhere', text: receipt.call}),
+      h('p', {class: 'tiny mono', text: 'bits ' + receipt.bits + ' · ' + clock(receipt.at)})
+    );
+  } else {
+    body = h('p', {class: 'note', style: 'margin-top:.75rem',
+      text: 'Nothing has been proposed. Arm, start, and wait. If OKB trades through the floor, the listener calls tick on its own. Inject dip is only for the camera.'});
+  }
+  return h('div', {class: 'card'},
+    h('h2', {class: 'h2', text: 'Last execution'}),
+    body,
+    h('p', {class: 'tiny', style: 'margin-top:.75rem', text: 'Preview receipt. The relay sends this on chain only once it is deployed and armed.'})
+  );
+}
+
+function policyCard(s){
+  function field(label, key, value, step){
+    return h('label', {class: 'field'},
+      h('span', {text: label}),
+      h('input', {
+        type: 'number',
+        step: step,
+        value: value,
+        'data-k': key,
+        onchange: function(event){
+          var parsed = parseFloat(event.target.value);
+          var patch = {};
+          if (Number.isFinite(parsed)) patch[key] = parsed;
+          dispatch({type: 'configure', patch: patch});
+        }
+      })
+    );
+  }
+  return h('div', {class: 'card'},
+    h('div', {class: 'card-bar', style: 'padding:0 0 .8rem;border-bottom:0'},
+      h('h2', {class: 'h2', text: 'Policy inputs'}),
+      h('span', {class: 'tiny mono', text: '7 bits · 13 gates'})
+    ),
+    h('div', {class: 'grid-5f'},
+      field('Threshold · OKB ≤', 'threshold', s.threshold, '0.1'),
+      field('Sweep · USDT', 'sweepAmount', s.sweepAmount, '1'),
+      field('Per-tx cap', 'perTx', s.perTx, '1'),
+      field('Daily cap', 'daily', s.daily, '1'),
+      h('label', {class: 'field wide'},
+        h('span', {text: 'Savings whitelist'}),
+        h('input', {
+          type: 'text',
+          value: s.savings,
+          'data-k': 'savings',
+          onchange: function(event){ dispatch({type: 'configure', patch: {savings: event.target.value}}); }
+        })
+      )
+    ),
+    h('p', {class: 'tiny', style: 'margin-top:.8rem',
+      text: 'Per-tx is held at or below the daily cap, exactly as setCaps requires on chain. The sweep can never exceed the per-tx cap.'})
+  );
+}
+
+function feedCard(s){
+  var rows = s.logs.map(function(entry){
+    return h('li', {},
+      h('div', {class: 'row'},
+        h('p', {class: 'feed-title t-' + entry.kind, text: entry.title}),
+        h('time', {class: 'feed-time', text: clock(entry.at)})
+      ),
+      h('p', {class: 'feed-detail', text: entry.detail}),
+      entry.bits ? h('p', {class: 'feed-bits',
+        text: 'bits ' + entry.bits + ' → ' + (entry.allow ? 'allow' : 'deny')}) : null
+    );
+  });
+  return h('div', {class: 'card pad0'},
+    h('div', {class: 'card-bar'},
+      h('h2', {class: 'h2', text: 'Activity'}),
+      h('div', {class: 'row', style: 'gap:.6rem'},
+        h('span', {class: 'tiny mono', text: s.logs.length + ' events'}),
+        btn('Reset demo', function(){ dispatch({type: 'reset', now: Date.now()}); }, {small: true, ghost: true})
+      )
+    ),
+    h('ul', {class: 'list feed'}, rows)
+  );
+}
+
+function operateView(){
+  var s = state;
+  var listening = s.running && !s.paused;
+  var next = {kind: 'sweep', amount: s.sweepAmount, target: s.savings, keeper: true, title: 'Next trade'};
+  var checked = policyBits(s, next);
+  var evaluated = evalPolicy(checked.bits);
+
+  return h('div', {class: 'stack'},
+    h('section', {class: 'grid3'},
+      stat('Container USDT', money(s.usdt), tapeName(s)),
+      stat('Sent to savings', money(s.swept), 'Cap ' + money(s.spentToday) + ' / ' + money(s.daily) + ' today'),
+      stat('Daemon', s.running ? (s.paused ? 'Paused' : 'Live') : (s.armed ? 'Armed' : 'Off'),
+        listening ? 'Trades without a click' : 'Arming fee ' + ACTIVATION_USDT + ' USDT')
+    ),
+    h('section', {class: 'grid-5'}, priceCard(s, listening), bodyCard(s)),
+    h('section', {class: 'grid-2'},
+      permissionCard(checked.bits, checked.reasons, evaluated.allow),
+      receiptCard(s)
+    ),
+    policyCard(s),
+    feedCard(s)
+  );
+}
+
+function circuitView(){
+  var s = state;
+  var next = {kind: 'sweep', amount: s.sweepAmount, target: s.savings, keeper: true, title: 'Next trade'};
+  var checked = policyBits(s, next);
+  var bits = checked.bits;
+  var evaluated = evalPolicy(bits);
+  var signals = evaluated.signals;
+
+  var inputRows = INPUTS.map(function(input, index){
+    return h('li', {class: 'row'},
+      h('span', {class: 'row-main'},
+        h('span', {text: input.name + ' '}),
+        h('span', {class: 'tiny', text: '· ' + input.hint})
+      ),
+      h('span', {class: 'chip' + (bits[index] ? ' one' : ''), text: bits[index] ? '1' : '0'})
+    );
+  });
+
+  var gateRows = GATES.map(function(gate, index){
+    var out = N_IN + index;
+    return h('div', {class: 'gate'},
+      h('span', {class: 'gate-label', text: gateLabel(index)}),
+      h('span', {class: 'sig ' + (signals[out] ? 'ok' : 'no'), text: 's' + pad2(out) + ' = ' + (signals[out] ? '1' : '0')})
+    );
+  });
+
+  var hex = netlistHex();
+  var copyLabel = h('span', {text: 'Copy'});
+
+  return h('div', {class: 'stack'},
+    h('div', {class: 'card'},
+      h('h2', {class: 'h2', text: 'The rule is a netlist, not a server'}),
+      h('p', {class: 'note', style: 'margin-top:.5rem',
+        text: 'Seven inputs, thirteen NAND gates, no latches, one output. The evaluator below runs the same gate list the processor runs on chain, in the same order, on the bits LatchRelay derives from its own storage.'}),
+      h('p', {class: 'tiny mono', style: 'margin-top:.5rem',
+        text: '7 inputs · 13 gates · 0 latches · ' + N_OUT + ' output · allow on signal ' + (N_IN + GATES.length)})
+    ),
+    h('div', {class: 'card pad0'},
+      h('div', {class: 'card-bar'},
+        h('h2', {class: 'h2', text: 'Inputs'}),
+        h('span', {class: 'tiny mono', text: 'byte 0x' + bitsToByte(bits).toString(16).padStart(2, '0') + ' · little-endian'})
+      ),
+      h('ul', {class: 'list tight'}, inputRows)
+    ),
+    h('div', {class: 'card pad0'},
+      h('div', {class: 'card-bar'},
+        h('h2', {class: 'h2', text: 'Gates · live truth values'}),
+        h('span', {class: 'tiny mono', text: 'NAND'})
+      ),
+      gateRows,
+      h('div', {class: 'allowbar'},
+        h('span', {class: 'mono', style: 'font-size:.82rem',
+          text: 's' + pad2(N_IN + GATES.length) + ' = allow = ' + (evaluated.allow ? '1' : '0')}),
+        h('span', {class: 'badge mono ' + (evaluated.allow ? 'ok' : 'no'), text: evaluated.allow ? 'ALLOW' : 'DENY'})
+      )
+    ),
+    h('div', {class: 'card pad0'},
+      h('div', {class: 'card-bar'},
+        h('h2', {class: 'h2', text: 'Tape-out bytes'}),
+        h('button', {class: 'btn sm', type: 'button', onclick: function(){ copyText(hex, copyLabel); }}, copyLabel)
+      ),
+      h('div', {class: 'hexblock', text: hex}),
+      h('div', {class: 'card-foot'},
+        h('span', {class: 'tiny', text: 'TAP-02 records: opcode 0x00, then operands A and B as uint24 big-endian. 13 records, 91 bytes.'})
+      )
+    ),
+    h('div', {class: 'card'},
+      h('h2', {class: 'h2', text: 'Circuit link'}),
+      h('p', {class: 'note', style: 'margin:.4rem 0 .8rem',
+        text: 'Paste the processor contract and circuit ID after tape-out. The tape name follows the container, and the brief copies it for the submission form.'}),
+      h('div', {class: 'grid-5f', style: 'grid-template-columns:1fr'},
+        h('label', {class: 'field'},
+          h('span', {text: 'Processor contract'}),
+          h('input', {
+            type: 'text',
+            placeholder: '0x…',
+            value: s.processor,
+            'data-k': 'processor',
+            onchange: function(event){ dispatch({type: 'configure', patch: {processor: event.target.value}}); }
+          })
+        ),
+        h('label', {class: 'field'},
+          h('span', {text: 'Circuit ID'}),
+          h('input', {
+            type: 'text',
+            value: s.circuitId,
+            'data-k': 'circuitId',
+            onchange: function(event){ dispatch({type: 'configure', patch: {circuitId: event.target.value}}); }
+          })
+        )
+      ),
+      h('p', {class: 'tiny mono', style: 'margin-top:.7rem', text: 'Tape name ' + tapeName(s) + ' · chain ' + CHAIN_ID})
+    )
+  );
+}
+
+function submissionText(s){
+  var processor = String(s.processor || '').trim() || '(paste processor contract after tape-out)';
+  return [
+    'Latch — autonomous OKB dip sweep on X Layer.',
+    '',
+    'Product: a savings agent for circuit holders and small treasuries. When OKB/USDT trades at or below a threshold, Latch sweeps a capped amount of USDT from a TapeOut circuit container to one whitelisted savings address.',
+    '',
+    'Users: X Layer treasuries and TapeOut circuit holders who want automation without putting a seed phrase on a server.',
+    'How we reach them: X Layer and TapeOut builders, the hackathon Telegram, and a public DeWEB status page on the container.',
+    '',
+    'Revenue: 5 USDT to arm, then a sweep fee that starts at 1% and steps down to 0.75%, 0.50% and 0.25% once cumulative swept volume passes 1 000, 5 000 and 20 000 USDT. Denied calls are free, the rate can only fall, and nothing is billed while the agent idles, so there is no subscription to cancel.',
+    '',
+    'TapeOut: the policy is a NAND netlist (7 inputs, 1 allow bit, 13 gates, 0 latches). LatchRelay derives the bits itself — paused, keeper, whitelist, sweep selector, per-tx cap, daily cap, funded — then requires processor.eval to return allow before container.execute.',
+    'Processor contract: ' + processor,
+    'Circuit ID: ' + (s.circuitId || '(pending)'),
+    'Tape name: ' + tapeName(s),
+    'Chain: X Layer, chain id ' + CHAIN_ID + ', area code ' + AREA_CODE + '.',
+    'Netlist bytes (' + GATES.length + ' NAND records, nIn ' + N_IN + '): ' + netlistHex(),
+    '',
+    'Container: the vault is LatchRelay itself, owned by the TapeOut circuit container, so the circuit controls the funds with no ERC-6551 account in between. Opening a circuit on X Layer costs 0.08 OKB. The keeper key pays gas only and cannot name a destination.',
+    'Shipped contract: LatchRelay, self-contained Solidity, deployable from this project. Same seven bits, 50 per-tx and 150 daily caps, a sweep fee that falls from 1% to 0.25%, 5 to arm, keeper-only tick, owner-only caps that can only tighten, owner rescue.',
+    'Tests: a Foundry suite in audit/ pins the caps, the UTC day roll, pause, keeper-only tick, fee rounding, reentrancy and preview parity, next to a short note listing what we already know is a limitation.',
+    'Relay address: ' + (deployedRelay() ? deployedRelay().address + ' on ' + chainLabel(deployedRelay().chainId) : '(deploy it from this project after the demo run)'),
+    'DeWEB: the public status page is the wallet-free view to publish on the container.',
+    'Backend: a small Worker API holds the early-access list and the keeper heartbeat. The keeper posts a status line with KEEPER_TOKEN and never touches the server with a key.',
+    '',
+    'This console is a preview: it evaluates the same 13-gate netlist locally and broadcasts nothing.'
+  ].join('\n');
+}
+
+var DEMO_SCRIPT = [
+  {t: '0:00', say: 'Treasuries want a savings sweep when OKB dumps. They will not hand a bot a private key.'},
+  {t: '0:20', say: 'Users are circuit holders and small X Layer treasuries. We charge 5 USDT to arm, then 1% of each sweep, falling to a quarter of a percent as they save more. Denied calls are free.'},
+  {t: '0:40', say: 'Show the relay balance, the tape name, and the processor field. Funds sit in the relay, and the circuit decides who may move them.'},
+  {t: '1:00', say: 'Open Circuit. Seven bits. Walk one NAND. Allow is signal 19. The relay does not trust the daemon bits.'},
+  {t: '1:25', say: 'Connect, arm, start. Inject a dip. The feed shows bits, allow, and 50 USDT leaving for savings.'},
+  {t: '1:50', say: 'Fire the rogue 500 USDT transfer. The circuit denies it: wrong function, unknown target, over both caps.'},
+  {t: '2:15', say: 'Pause the rule and dip again. paused = 1, so eval returns 0. Unpause for a second clean sweep.'},
+  {t: '2:35', say: 'Close on the form text: processor contract, circuit ID, revenue, and the DeWEB status page.'}
+];
+
+var FEE_TIERS = [
+  {from: 0, bps: FEE_BPS, band: '0 – 1 000'},
+  {from: 1000, bps: 75, band: '1 000 – 5 000'},
+  {from: 5000, bps: 50, band: '5 000 – 20 000'},
+  {from: 20000, bps: 25, band: '20 000 and up'}
+];
+
+function feeBpsFor(volume){
+  var bps = FEE_TIERS[0].bps;
+  for (var i = 0; i < FEE_TIERS.length; i++){
+    if (volume >= FEE_TIERS[i].from) bps = FEE_TIERS[i].bps;
+  }
+  return bps;
+}
+
+function revenueCard(s){
+  var bps = feeBpsFor(s.swept);
+  var runs = s.logs.filter(function(entry){ return entry.allow; }).length;
+  var rows = FEE_TIERS.map(function(tier){
+    var on = tier.bps === bps;
+    return h('li', {class: 'row'},
+      h('span', {class: 'row-main mono', text: tier.band + ' swept'}),
+      h('span', {class: 'chip' + (on ? ' one' : ''), text: (tier.bps / 100).toFixed(2) + '%'}),
+      h('span', {class: 'verdict' + (on ? ' ok' : ''), text: on ? 'now' : ''})
+    );
+  });
+  return h('div', {class: 'card pad0'},
+    h('div', {class: 'card-bar'},
+      h('h2', {class: 'h2', text: 'Revenue'}),
+      h('span', {class: 'badge mono ok', text: (bps / 100).toFixed(2) + '% now'})
+    ),
+    h('div', {style: 'padding:1rem 1.05rem 0'},
+      h('div', {class: 'kv mono'},
+        h('p', {text: 'Booked ' + money(s.protocolEarned) + ' USDT on ' + runs + ' sweep' + (runs === 1 ? '' : 's')}),
+        h('p', {text: 'Moved ' + money(s.swept) + ' USDT into savings'}),
+        h('p', {text: 'Next sweep: ' + money(s.sweepAmount * bps / 10000) + ' USDT on ' + money(s.sweepAmount)})
+      )
+    ),
+    h('ul', {class: 'list tight'}, rows),
+    h('div', {class: 'card-foot'},
+      h('span', {class: 'tiny', text: 'LatchRelay.feeBpsFor holds this ladder, so the rate is public and can only fall. Arming costs ' + money(ACTIVATION_USDT) + ' USDT once. A denied call is free — there is no subscription and nothing to cancel.'})
+    )
+  );
+}
+
+function briefView(){
+  var text = submissionText(state);
+  var copyLabel = h('span', {text: 'Copy'});
+  return h('div', {class: 'stack'},
+    h('div', {class: 'card pad0'},
+      h('div', {class: 'card-bar'},
+        h('h2', {class: 'h2', text: 'Submission text'}),
+        h('button', {class: 'btn sm', type: 'button', onclick: function(){ copyText(text, copyLabel); }}, copyLabel)
+      ),
+      h('pre', {class: 'brief', text: text})
+    ),
+    revenueCard(state),
+    h('div', {class: 'card pad0'},
+      h('div', {class: 'card-bar'},
+        h('h2', {class: 'h2', text: 'Demo script'}),
+        h('span', {class: 'tiny mono', text: 'under 3 minutes'})
+      ),
+      h('ul', {class: 'list script'}, DEMO_SCRIPT.map(function(row){
+        return h('li', {},
+          h('span', {class: 'script-t', text: row.t}),
+          h('span', {class: 'script-say', text: row.say})
+        );
+      }))
+    ),
+    accessCard()
+  );
+}
+
+function fact(label, value){
+  return h('div', {class: 'fact'},
+    h('dt', {text: label}),
+    h('dd', {class: 'mono', text: value})
+  );
+}
+
+function statusView(){
+  var s = state;
+  var last = s.lastReceipt
+    ? (s.lastReceipt.allow ? 'allow' : 'deny') + ' · ' + s.lastReceipt.source
+    : 'none yet';
+  var relay = deployedRelay();
+  var relayHref = relay ? explorerFor(relay.address, relay.chainId) : null;
+  var relayValue = relay
+    ? h('span', {},
+        relayHref
+          ? h('a', {href: relayHref, target: '_blank', rel: 'noopener noreferrer', text: shortAddr(relay.address)})
+          : h('span', {text: shortAddr(relay.address)}),
+        h('span', {class: 'tiny', text: ' · ' + chainLabel(relay.chainId)})
+      )
+    : h('span', {class: 'tiny', text: 'not deployed yet'});
+  return h('div', {
+    class: 'overlay',
+    onclick: function(event){ if (event.target === event.currentTarget){ statusOpen = false; render(); } }
+  },
+    h('aside', {class: 'drawer', role: 'dialog', 'aria-label': 'Container status'},
+      h('div', {class: 'card-bar'},
+        h('h2', {class: 'h2', text: 'Container status'}),
+        h('button', {class: 'btn ghost sm', type: 'button', onclick: function(){ statusOpen = false; render(); }}, 'Close')
+      ),
+      h('div', {class: 'body'},
+        h('p', {class: 'tiny', text: 'Wallet-free view. Balances and decisions below are the page\'s own simulation; the only on-chain fact here is the relay address. Nothing on this page signs or moves funds.'}),
+        h('dl', {class: 'facts'},
+          fact('Tape', tapeName(s)),
+          fact('Chain', 'X Layer ' + CHAIN_ID + ' · area ' + AREA_CODE),
+          h('div', {class: 'fact'}, h('dt', {text: 'Relay'}), h('dd', {class: 'mono'}, relayValue)),
+          h('div', {class: 'fact'},
+            h('dt', {text: 'Keeper'}),
+            h('dd', {class: 'mono', id: 'latch-beat', text: beatText()})
+          ),
+          fact('Container USDT', money(s.usdt)),
+          fact('Savings', s.savings),
+          fact('Threshold', s.threshold.toFixed(2) + ' OKB/USDT'),
+          fact('Sweep', money(s.sweepAmount) + ' USDT + ' + (feeBpsFor(s.swept) / 100).toFixed(2) + '% fee'),
+          fact('Caps', money(s.perTx) + ' per tx · ' + money(s.daily) + ' daily'),
+          fact('Spent today', money(s.spentToday) + ' of ' + money(s.daily)),
+          fact('Sent to savings', money(s.swept)),
+          fact('Protocol booked', money(s.protocolEarned) + ' USDT'),
+          fact('Daemon', s.running ? (s.paused ? 'paused' : 'live') : (s.armed ? 'armed' : 'off')),
+          fact('Last decision', last)
+        )
+      )
+    )
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Render
+ * ------------------------------------------------------------------ */
+function render(){
+  var app = document.getElementById('app');
+  var active = document.activeElement;
+  var key = active && active.getAttribute ? active.getAttribute('data-k') : null;
+  var held = null;
+  var sel = null;
+  if (key && active.value !== undefined){
+    held = active.value;
+    if (typeof active.selectionStart === 'number') sel = [active.selectionStart, active.selectionEnd];
+  }
+
+  app.replaceChildren();
+  app.append(header());
+  var main = h('main');
+  if (tab === 'Circuit') main.append(circuitView());
+  else if (tab === 'Brief') main.append(briefView());
+  else main.append(operateView());
+  app.append(main);
+  app.append(h('footer', {},
+    h('p', {class: 'foot',
+      text: 'Preview build. The netlist evaluator and the policy state machine run in this page — the balances and receipts here are simulated, and nothing on this page signs or broadcasts. LatchRelay is real: deploy it from this project and the Caps, fee and arming numbers above are the ones the contract enforces.'})
+  ));
+  if (statusOpen){
+    app.append(statusView());
+    loadPublic(false);
+  }
+
+  if (tab === 'Brief'){
+    paintPublic();
+    loadPublic(false);
+  }
+
+  if (key){
+    var field = document.querySelector('[data-k="' + key + '"]');
+    if (field){
+      if (held !== null) field.value = held;
+      field.focus();
+      if (sel && field.setSelectionRange){
+        try { field.setSelectionRange(sel[0], sel[1]); } catch (err) { /* number inputs */ }
+      }
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Boot
+ * ------------------------------------------------------------------ */
+hydrate();
+loadOpsToken();
+render();
+syncTicker();
+</script>
+</body>
+</html>

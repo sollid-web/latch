@@ -1,0 +1,9 @@
+[profile.default]
+src = "contracts"
+test = "audit/test"
+out = "audit/out"
+cache_path = "audit/cache"
+libs = ["lib"]
+solc_version = "0.8.24"
+optimizer = true
+optimizer_runs = 200

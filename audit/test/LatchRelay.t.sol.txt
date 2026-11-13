@@ -1,0 +1,470 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {Test} from "forge-std/Test.sol";
+import {LatchRelay} from "../../contracts/Main.sol";
+
+/// @dev Plain 18-decimal token, no access control: the tests mint freely.
+contract Token {
+    string public symbol;
+    uint8 public immutable decimals;
+    mapping(address => uint256) public balanceOf;
+
+    constructor(string memory symbol_, uint8 decimals_) {
+        symbol = symbol_;
+        decimals = decimals_;
+    }
+
+    function mint(address to, uint256 amount) external {
+        balanceOf[to] += amount;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        require(balanceOf[msg.sender] >= amount, "balance");
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+}
+
+/// @dev Token that calls back into the relay while it is being paid out.
+contract HookToken {
+    mapping(address => uint256) public balanceOf;
+    address public relay;
+    bool public hookOn;
+
+    function decimals() external pure returns (uint8) {
+        return 18;
+    }
+
+    function mint(address to, uint256 amount) external {
+        balanceOf[to] += amount;
+    }
+
+    function setRelay(address relay_) external {
+        relay = relay_;
+    }
+
+    function setHook(bool on) external {
+        hookOn = on;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        if (hookOn) {
+            hookOn = false;
+            LatchRelay(relay).tick(1 ether);
+        }
+        require(balanceOf[msg.sender] >= amount, "balance");
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+}
+
+contract LatchRelayTest is Test {
+    LatchRelay internal relay;
+    Token internal token;
+
+    address internal constant OWNER = address(0xC0FFEE);
+    address internal constant KEEPER = address(0xCAFE);
+    address internal constant SAVINGS = address(0x5A7E);
+    address internal constant TREASURY = address(0x7BEA5);
+
+    function setUp() public {
+        relay = new LatchRelay(OWNER);
+        token = new Token("USD", 18);
+        vm.startPrank(OWNER);
+        relay.setToken(address(token));
+        relay.setKeeper(KEEPER);
+        relay.setSavings(SAVINGS);
+        relay.setTreasury(TREASURY);
+        token.mint(address(relay), 1000 ether);
+        relay.arm();
+        vm.stopPrank();
+    }
+
+    // ------------------------------------------------------------ construction
+
+    function testOwnerComesFromTheConstructorNotMsgSender() public {
+        LatchRelay fresh = new LatchRelay(OWNER);
+        assertEq(fresh.owner(), OWNER);
+        assertTrue(fresh.owner() != address(this));
+        assertEq(fresh.keeper(), OWNER);
+        assertEq(fresh.savings(), OWNER);
+        assertEq(fresh.treasury(), OWNER);
+    }
+
+    function testCapsAndFeeAreThePublishedNumbers() public {
+        LatchRelay fresh = new LatchRelay(OWNER);
+        assertEq(fresh.perTxCap(), 50 ether);
+        assertEq(fresh.dailyCap(), 150 ether);
+        assertEq(fresh.ACTIVATION_FEE(), 5 ether);
+        assertEq(fresh.FEE_BPS(), 100);
+        assertFalse(fresh.armed());
+        assertFalse(fresh.paused());
+    }
+
+    function testZeroOwnerIsRejected() public {
+        vm.expectRevert(LatchRelay.ZeroAddress.selector);
+        new LatchRelay(address(0));
+    }
+
+    // ------------------------------------------------------------------ token
+
+    function testTokenWithSixDecimalsIsRejected() public {
+        LatchRelay fresh = new LatchRelay(OWNER);
+        Token six = new Token("USDC", 6);
+        vm.prank(OWNER);
+        vm.expectRevert(LatchRelay.BadToken.selector);
+        fresh.setToken(address(six));
+    }
+
+    function testTokenWithoutCodeIsRejected() public {
+        LatchRelay fresh = new LatchRelay(OWNER);
+        vm.prank(OWNER);
+        vm.expectRevert(LatchRelay.BadToken.selector);
+        fresh.setToken(address(0xBEEF));
+    }
+
+    function testTokenIsLockedOnceArmed() public {
+        Token other = new Token("OTHER", 18);
+        vm.prank(OWNER);
+        vm.expectRevert(LatchRelay.TokenLocked.selector);
+        relay.setToken(address(other));
+    }
+
+    function testTokenIsLockedWhileHoldingABalance() public {
+        LatchRelay fresh = new LatchRelay(OWNER);
+        Token first = new Token("A", 18);
+        Token second = new Token("B", 18);
+        vm.startPrank(OWNER);
+        fresh.setToken(address(first));
+        first.mint(address(fresh), 1 ether);
+        vm.expectRevert(LatchRelay.TokenLocked.selector);
+        fresh.setToken(address(second));
+        vm.stopPrank();
+    }
+
+    // -------------------------------------------------------------------- arm
+
+    function testArmChargesTheFeeToTreasury() public {
+        assertTrue(relay.armed());
+        assertEq(token.balanceOf(TREASURY), 5 ether);
+        assertEq(token.balanceOf(address(relay)), 995 ether);
+    }
+
+    function testArmTwiceReverts() public {
+        vm.prank(OWNER);
+        vm.expectRevert(LatchRelay.AlreadyArmed.selector);
+        relay.arm();
+    }
+
+    function testArmWithoutFundingReverts() public {
+        LatchRelay fresh = new LatchRelay(OWNER);
+        vm.startPrank(OWNER);
+        fresh.setToken(address(token));
+        vm.expectRevert(LatchRelay.Underfunded.selector);
+        fresh.arm();
+        vm.stopPrank();
+    }
+
+    function testArmWithoutTokenReverts() public {
+        LatchRelay fresh = new LatchRelay(OWNER);
+        vm.prank(OWNER);
+        vm.expectRevert(LatchRelay.TokenNotSet.selector);
+        fresh.arm();
+    }
+
+    // ------------------------------------------------------------------- tick
+
+    function testTickPaysSavingsAndFee() public {
+        uint256 before = token.balanceOf(SAVINGS);
+        vm.prank(KEEPER);
+        relay.tick(50 ether);
+        assertEq(token.balanceOf(SAVINGS) - before, 50 ether);
+        assertEq(token.balanceOf(TREASURY), 5 ether + 0.5 ether);
+        assertEq(relay.spentToday(), 50 ether);
+    }
+
+    function testTickRejectsAnyoneButTheKeeper() public {
+        vm.prank(OWNER);
+        vm.expectRevert(LatchRelay.NotKeeper.selector);
+        relay.tick(1 ether);
+    }
+
+    function testTickRejectsAStranger() public {
+        vm.prank(address(0xBAD));
+        vm.expectRevert(LatchRelay.NotKeeper.selector);
+        relay.tick(1 ether);
+    }
+
+    function testPausedBlocksTick() public {
+        vm.prank(OWNER);
+        relay.setPaused(true);
+        vm.prank(KEEPER);
+        vm.expectRevert(LatchRelay.Paused.selector);
+        relay.tick(1 ether);
+    }
+
+    function testTickRequiresArming() public {
+        LatchRelay fresh = new LatchRelay(OWNER);
+        vm.startPrank(OWNER);
+        fresh.setToken(address(token));
+        fresh.setKeeper(KEEPER);
+        token.mint(address(fresh), 100 ether);
+        vm.stopPrank();
+        vm.prank(KEEPER);
+        vm.expectRevert(LatchRelay.NotArmed.selector);
+        fresh.tick(1 ether);
+    }
+
+    function testZeroAmountReverts() public {
+        vm.prank(KEEPER);
+        vm.expectRevert(LatchRelay.OverCap.selector);
+        relay.tick(0);
+    }
+
+    function testPerTxCapBoundary() public {
+        vm.prank(KEEPER);
+        relay.tick(50 ether);
+        vm.prank(KEEPER);
+        vm.expectRevert(LatchRelay.OverCap.selector);
+        relay.tick(50 ether + 1);
+    }
+
+    function testDailyCapBoundary() public {
+        vm.startPrank(KEEPER);
+        relay.tick(50 ether);
+        relay.tick(50 ether);
+        relay.tick(50 ether);
+        vm.expectRevert(LatchRelay.OverCap.selector);
+        relay.tick(1 ether);
+        vm.stopPrank();
+        assertEq(relay.spentToday(), 150 ether);
+    }
+
+    function testDailyCounterRollsOverAtTheNextUtcDay() public {
+        vm.startPrank(KEEPER);
+        relay.tick(50 ether);
+        relay.tick(50 ether);
+        relay.tick(50 ether);
+        vm.expectRevert(LatchRelay.OverCap.selector);
+        relay.tick(1 ether);
+        vm.warp(block.timestamp + 1 days);
+        relay.tick(50 ether);
+        vm.stopPrank();
+        assertEq(relay.spentToday(), 50 ether);
+    }
+
+    function testUnderfundedVaultReverts() public {
+        LatchRelay fresh = new LatchRelay(OWNER);
+        vm.startPrank(OWNER);
+        fresh.setToken(address(token));
+        fresh.setKeeper(KEEPER);
+        fresh.setSavings(SAVINGS);
+        fresh.setTreasury(TREASURY);
+        token.mint(address(fresh), 5 ether);
+        fresh.arm();
+        vm.stopPrank();
+        vm.prank(KEEPER);
+        vm.expectRevert(LatchRelay.Underfunded.selector);
+        fresh.tick(1 ether);
+    }
+
+    function testFeeRoundsToZeroBelowOneHundredUnits() public {
+        vm.prank(KEEPER);
+        relay.tick(99);
+        assertEq(relay.feeOn(99), 0);
+        assertEq(relay.feeOn(100), 1);
+        assertEq(relay.feeOn(50 ether), 0.5 ether);
+    }
+
+    // ------------------------------------------------------------------ tiers
+
+    function testFeeLadderIsThePublishedOne() public {
+        assertEq(relay.feeBpsFor(0), 100);
+        assertEq(relay.feeBpsFor(999 ether), 100);
+        assertEq(relay.feeBpsFor(1_000 ether), 75);
+        assertEq(relay.feeBpsFor(4_999 ether), 75);
+        assertEq(relay.feeBpsFor(5_000 ether), 50);
+        assertEq(relay.feeBpsFor(19_999 ether), 50);
+        assertEq(relay.feeBpsFor(20_000 ether), 25);
+        assertEq(relay.feeBpsFor(10_000_000 ether), 25);
+    }
+
+    function testFeeLadderNeverRises() public {
+        uint256 last = relay.feeBpsFor(0);
+        for (uint256 v = 250 ether; v <= 25_000 ether; v += 250 ether) {
+            uint256 bps = relay.feeBpsFor(v);
+            assertLe(bps, last);
+            last = bps;
+        }
+    }
+
+    function testFeeFallsOnceAThousandIsSwept() public {
+        token.mint(address(relay), 5_000 ether);
+        vm.startPrank(KEEPER);
+        for (uint256 d = 0; d < 7; d++) {
+            relay.tick(50 ether);
+            relay.tick(50 ether);
+            relay.tick(50 ether);
+            vm.warp(block.timestamp + 1 days);
+        }
+        vm.stopPrank();
+        assertEq(relay.volumeSwept(), 1_050 ether);
+        assertEq(relay.feeBpsNow(), 75);
+        assertEq(relay.feeOn(50 ether), 0.375 ether);
+    }
+
+    function testReentrantTokenCannotReenterTick() public {
+        HookToken hook = new HookToken();
+        LatchRelay fresh = new LatchRelay(OWNER);
+        vm.startPrank(OWNER);
+        fresh.setToken(address(hook));
+        fresh.setKeeper(KEEPER);
+        fresh.setSavings(SAVINGS);
+        fresh.setTreasury(TREASURY);
+        hook.mint(address(fresh), 100 ether);
+        fresh.arm();
+        vm.stopPrank();
+        hook.setRelay(address(fresh));
+        hook.setHook(true);
+        vm.prank(KEEPER);
+        vm.expectRevert(LatchRelay.Reentered.selector);
+        fresh.tick(10 ether);
+    }
+
+    // ----------------------------------------------------------------- caps
+
+    function testCapsCanOnlyTighten() public {
+        vm.startPrank(OWNER);
+        relay.setCaps(25 ether, 100 ether);
+        assertEq(relay.perTxCap(), 25 ether);
+        assertEq(relay.dailyCap(), 100 ether);
+        vm.expectRevert(LatchRelay.CapRaised.selector);
+        relay.setCaps(30 ether, 100 ether);
+        vm.expectRevert(LatchRelay.CapRaised.selector);
+        relay.setCaps(25 ether, 120 ether);
+        vm.stopPrank();
+    }
+
+    function testCapsRejectPerTxAboveDaily() public {
+        vm.prank(OWNER);
+        vm.expectRevert(LatchRelay.OverCap.selector);
+        relay.setCaps(75 ether, 60 ether);
+    }
+
+    function testCapsRejectZero() public {
+        vm.startPrank(OWNER);
+        vm.expectRevert(LatchRelay.OverCap.selector);
+        relay.setCaps(0, 100 ether);
+        vm.expectRevert(LatchRelay.OverCap.selector);
+        relay.setCaps(10 ether, 0);
+        vm.stopPrank();
+    }
+
+    function testOnlyOwnerSetsCaps() public {
+        vm.prank(KEEPER);
+        vm.expectRevert(LatchRelay.NotOwner.selector);
+        relay.setCaps(1 ether, 1 ether);
+    }
+
+    // --------------------------------------------------------------- previews
+
+    function bit(uint8 bits, uint8 mask) internal pure returns (bool) {
+        return (bits & mask) != 0;
+    }
+
+    function testPreviewAllowsWhatTickAllows() public {
+        vm.prank(KEEPER);
+        (uint8 bits, bool allow) = relay.preview(50 ether);
+        assertTrue(allow);
+        assertFalse(bit(bits, 1));
+        assertTrue(bit(bits, 2));
+        assertTrue(bit(bits, 4));
+        assertTrue(bit(bits, 8));
+        assertTrue(bit(bits, 16));
+        assertTrue(bit(bits, 32));
+        assertTrue(bit(bits, 64));
+    }
+
+    function testPreviewKeeperBitFollowsTheCaller() public {
+        vm.prank(KEEPER);
+        (uint8 keeperBits,) = relay.preview(1 ether);
+        assertTrue(bit(keeperBits, 2));
+        vm.prank(SAVINGS);
+        (uint8 strangerBits,) = relay.preview(1 ether);
+        assertFalse(bit(strangerBits, 2));
+    }
+
+    function testPreviewDropsTheCapBitOverTheLimit() public {
+        vm.prank(KEEPER);
+        (uint8 bits, bool allow) = relay.preview(50 ether + 1);
+        assertFalse(bit(bits, 16));
+        assertFalse(allow);
+    }
+
+    function testPreviewReportsPause() public {
+        vm.prank(OWNER);
+        relay.setPaused(true);
+        vm.prank(KEEPER);
+        (uint8 bits, bool allow) = relay.preview(1 ether);
+        assertTrue(bit(bits, 1));
+        assertFalse(allow);
+    }
+
+    function testPreviewReportsUnarmed() public {
+        LatchRelay fresh = new LatchRelay(OWNER);
+        vm.startPrank(OWNER);
+        fresh.setToken(address(token));
+        fresh.setKeeper(KEEPER);
+        fresh.setSavings(SAVINGS);
+        token.mint(address(fresh), 100 ether);
+        vm.stopPrank();
+        vm.prank(KEEPER);
+        (, bool allow) = fresh.preview(1 ether);
+        assertFalse(allow);
+    }
+
+    // --------------------------------------------------------------- withdraw
+
+    function testOwnerCanRescue() public {
+        vm.prank(OWNER);
+        relay.withdraw(SAVINGS, 100 ether);
+        assertEq(token.balanceOf(SAVINGS), 100 ether);
+    }
+
+    function testKeeperCannotRescue() public {
+        vm.prank(KEEPER);
+        vm.expectRevert(LatchRelay.NotOwner.selector);
+        relay.withdraw(KEEPER, 1 ether);
+    }
+
+    function testRescueRejectsZeroAddress() public {
+        vm.prank(OWNER);
+        vm.expectRevert(LatchRelay.ZeroAddress.selector);
+        relay.withdraw(address(0), 1 ether);
+    }
+
+    function testRescueRejectsMoreThanTheBalance() public {
+        vm.prank(OWNER);
+        vm.expectRevert(LatchRelay.Underfunded.selector);
+        relay.withdraw(SAVINGS, 1000 ether);
+    }
+
+    // ------------------------------------------------------------------ fuzz
+
+    function testFuzzCapsHoldForEveryAmount(uint96 raw) public {
+        uint256 value = bound(uint256(raw), 1, 200 ether);
+        bool overCap = value > relay.perTxCap();
+        vm.prank(KEEPER);
+        if (overCap) {
+            vm.expectRevert(LatchRelay.OverCap.selector);
+        }
+        relay.tick(value);
+        if (!overCap) {
+            assertLe(relay.spentToday(), relay.dailyCap());
+            assertLe(value, relay.perTxCap());
+        }
+    }
+}
