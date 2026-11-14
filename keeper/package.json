@@ -1,0 +1,16 @@
+{
+  "name": "latch-keeper",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Off-chain dip-sweep daemon for LatchRelay on X Layer. Holds the keeper gas key locally — never in the page and never in the worker.",
+  "scripts": {
+    "start": "node daemon.mjs"
+  },
+  "dependencies": {
+    "viem": "^2.17.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

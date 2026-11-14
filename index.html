@@ -94,6 +94,19 @@ footer{max-width:64rem;margin:0 auto;padding:0 1.15rem 2.5rem}
 .dot{width:.55rem;height:.55rem;border-radius:50%;background:#4a4d43;display:block;margin-top:.4rem;flex:0 0 auto;transition:box-shadow .2s ease,background .2s ease}
 .dot.live{background:var(--amber);box-shadow:0 0 0 4px rgba(242,169,78,.14),0 0 18px 2px rgba(242,169,78,.6)}
 
+/* keeper consensus + volatility breaker */
+.sources{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.7rem}
+.src{display:flex;flex-direction:column;gap:.1rem;flex:1;min-width:5rem;padding:.45rem .55rem;border:1px solid var(--line);border-radius:.5rem;background:rgba(0,0,0,.22)}
+.src-v{font-size:.58rem;text-transform:uppercase;letter-spacing:.12em;color:var(--muted)}
+.src-p{font-size:.82rem;color:var(--fg)}
+.src.dip{border-color:rgba(242,169,78,.4);background:rgba(242,169,78,.07)}
+.src.dip .src-p{color:var(--amber-hi);text-shadow:0 0 14px rgba(242,169,78,.5)}
+.confirm-badge{display:flex;align-items:center;gap:.5rem;margin-top:.7rem;padding:.55rem .7rem;border:1px solid rgba(242,169,78,.42);border-radius:.5rem;background:rgba(242,169,78,.08);font-size:.76rem;color:var(--amber-hi)}
+.pulse{width:.5rem;height:.5rem;border-radius:50%;background:var(--amber);box-shadow:0 0 0 0 rgba(242,169,78,.55);animation:pulse 1.2s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(242,169,78,.55)}70%{box-shadow:0 0 0 8px rgba(242,169,78,0)}100%{box-shadow:0 0 0 0 rgba(242,169,78,0)}}
+.breaker-badge{display:flex;flex-direction:column;gap:.15rem;margin-top:.7rem;padding:.55rem .7rem;border:1px solid rgba(224,106,78,.42);border-radius:.5rem;background:rgba(224,106,78,.08);font-size:.76rem;color:#f2907c}
+.btn.block{width:100%}
+
 /* buttons */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:.4rem;min-height:2.6rem;padding:0 .85rem;border-radius:.55rem;border:1px solid var(--line-strong);background-color:var(--raised);font-size:.83rem;font-weight:600;letter-spacing:.005em;text-align:center;transition:box-shadow .18s ease,border-color .18s ease,background-color .18s ease,transform .1s ease}
 .btn:hover:not(:disabled){border-color:rgba(242,169,78,.34);box-shadow:0 0 0 1px rgba(242,169,78,.1),0 12px 26px -18px rgba(242,169,78,.65)}
@@ -248,6 +261,9 @@ var ACTIVATION_USDT = 5;
 var FEE_BPS = 100;
 var CHAIN_ID = 196;
 var AREA_CODE = 2;
+var CONFIRM_MS = 5000;
+var BREAKER_PCT = 6;
+var BREAKER_COOLDOWN = 10000;
 
 function round2(value){ return Math.round(value * 100) / 100; }
 
@@ -288,6 +304,14 @@ function defaultState(){
       bits: '',
       allow: null
     }],
+    sources: [
+      {venue:'OKX', seed:0.11, price:56.4},
+      {venue:'Binance', seed:0.47, price:56.3},
+      {venue:'CoinGecko', seed:0.83, price:56.5}
+    ],
+    confirmation: null,
+    keeperPaused: false,
+    breaker: null,
     lastBits: null,
     lastAllow: null,
     lastSignals: null,
@@ -402,6 +426,31 @@ function driftPrice(price, rand){
 /* A dip always prints at or below the configured threshold, never above it. */
 function dipPrice(threshold){
   return Math.max(0.5, round2(Math.min(threshold - 0.5, 41)));
+}
+
+function medianPrice(sources){
+  var values = sources.map(function(src){ return src.price; }).sort(function(a, b){ return a - b; });
+  return round2(values[Math.floor(values.length / 2)]);
+}
+
+function consensusVotes(sources, threshold){
+  return sources.filter(function(src){ return src.price <= threshold; }).length;
+}
+
+function driftSource(prev, seed, rand){
+  var r = (rand + seed) % 1;
+  var pulled = prev + (56 - prev) * 0.08 + (r - 0.5) * 1.3;
+  var shocked = r < 0.12 ? Math.min(pulled, 40 + r * 10) : pulled;
+  return round2(Math.min(78, Math.max(32, shocked)));
+}
+
+function breakerSwing(sources, prevSources){
+  var maxMove = 0;
+  for (var i = 0; i < sources.length; i++){
+    var prev = prevSources && prevSources[i] && prevSources[i].price ? prevSources[i].price : sources[i].price;
+    if (prev > 0) maxMove = Math.max(maxMove, Math.abs(sources[i].price - prev) / prev * 100);
+  }
+  return round2(maxMove);
 }
 
 function reduce(state, action){
@@ -528,8 +577,14 @@ function reduce(state, action){
       });
 
     case 'dip': {
-      var price = dipPrice(state.threshold);
+      var sources = state.sources.map(function(src){
+        if (src.venue === 'CoinGecko') return {venue: src.venue, seed: src.seed, price: round2(state.threshold + 0.4)};
+        return {venue: src.venue, seed: src.seed, price: dipPrice(state.threshold)};
+      });
+      var price = medianPrice(sources);
+      var votes = consensusVotes(sources, state.threshold);
       var marked = Object.assign({}, state, {
+        sources: sources,
         price: price,
         history: state.history.concat([price]).slice(-28)
       });
@@ -541,13 +596,22 @@ function reduce(state, action){
           detail: state.armed ? 'Daemon is stopped, so nothing executed.' : 'Agent is not armed.'
         });
       }
-      return applyProposal(marked, {
-        kind: 'sweep',
-        amount: state.sweepAmount,
-        target: state.savings,
-        keeper: true,
-        title: 'Dip sweep'
-      }, action.now);
+      if (state.keeperPaused){
+        return addLog(marked, {
+          at: action.now,
+          kind: 'trigger',
+          title: 'Dip skipped (breaker)',
+          detail: 'OKB ' + price.toFixed(2) + ' is below ' + state.threshold.toFixed(2) + ' but the volatility breaker holds the keeper paused.'
+        });
+      }
+      return addLog(Object.assign({}, marked, {
+        confirmation: {at: action.now, until: action.now + CONFIRM_MS, votes: votes, price: price}
+      }), {
+        at: action.now,
+        kind: 'trigger',
+        title: 'Dip seen — confirming ' + votes + '/3 sources',
+        detail: 'CoinGecko lags at ' + sources[2].price.toFixed(2) + '. Window ' + (CONFIRM_MS / 1000) + 's before the sweep.'
+      });
     }
 
     case 'rogue': {
@@ -566,6 +630,60 @@ function reduce(state, action){
         keeper: false,
         title: 'Rogue 500 USDT'
       }, action.now);
+    }
+
+    case 'confirm-check': {
+      if (!state.confirmation) return state;
+      if (action.now < state.confirmation.until) return state;
+      var votes = consensusVotes(state.sources, state.threshold);
+      if (votes >= 2 && state.confirmation.votes >= 2){
+        return applyProposal(Object.assign({}, state, {confirmation: null}), {
+          kind: 'sweep',
+          amount: state.sweepAmount,
+          target: state.savings,
+          keeper: true,
+          title: 'Dip sweep · consensus ' + votes + '/3'
+        }, action.now);
+      }
+      return addLog(Object.assign({}, state, {confirmation: null}), {
+        at: action.now,
+        kind: 'trigger',
+        title: 'Confirmation failed',
+        detail: 'Sources drifted back above ' + state.threshold.toFixed(2) + ' before the window closed; no sweep.'
+      });
+    }
+
+    case 'flash-crash': {
+      if (!state.connected || !state.armed){
+        return addLog(state, {
+          at: action.now,
+          kind: 'system',
+          title: 'Arm the agent first',
+          detail: 'The flash-crash test runs through the keeper gates. Connect and arm so the comparison is honest.'
+        });
+      }
+      var wicked = state.sources.map(function(src){
+        if (src.venue === 'CoinGecko') return {venue: src.venue, seed: src.seed, price: 30.05};
+        return {venue: src.venue, seed: src.seed, price: src.price};
+      });
+      var votes = consensusVotes(wicked, state.threshold);
+      var swing = breakerSwing(wicked, state.sources);
+      var trip = swing > BREAKER_PCT;
+      var wickPrice = medianPrice(wicked);
+      var next = Object.assign({}, state, {
+        sources: wicked,
+        price: wickPrice,
+        history: state.history.concat([wickPrice]).slice(-28),
+        confirmation: null,
+        keeperPaused: trip,
+        breaker: trip ? {reason: 'single-venue swing ' + swing.toFixed(0) + '% over ' + BREAKER_PCT + '%', until: action.now + BREAKER_COOLDOWN} : null
+      });
+      return addLog(next, {
+        at: action.now,
+        kind: 'trigger',
+        title: 'Flash-crash wick ignored',
+        detail: 'CoinGecko wicked to 30.05 but OKX ' + state.sources[0].price.toFixed(2) + ' and Binance ' + state.sources[1].price.toFixed(2) + ' held. Consensus ' + votes + '/3 → ignored.' + (trip ? ' Volatility breaker paused the keeper for ' + (BREAKER_COOLDOWN / 1000) + 's.' : '')
+      });
     }
 
     case 'reset': {
@@ -587,31 +705,69 @@ function reduce(state, action){
       if (!state.running) return state;
       var key = dayKey(action.now);
       var ticked = state.dayKey === key ? state : Object.assign({}, state, {dayKey: key, spentToday: 0});
-      var drift = driftPrice(ticked.price, action.rand);
+
+      if (ticked.keeperPaused && ticked.breaker && action.now >= ticked.breaker.until){
+        ticked = Object.assign({}, ticked, {keeperPaused: false, breaker: null});
+        ticked = addLog(ticked, {
+          at: action.now,
+          kind: 'system',
+          title: 'Volatility normalised',
+          detail: 'Breaker cleared; the keeper is watching again.'
+        });
+      }
+
+      var sources = ticked.sources.map(function(src){
+        return {venue: src.venue, seed: src.seed, price: driftSource(src.price, src.seed, action.rand)};
+      });
+      var price = medianPrice(sources);
+      var votes = consensusVotes(sources, ticked.threshold);
       ticked = Object.assign({}, ticked, {
-        price: drift,
-        history: ticked.history.concat([drift]).slice(-28),
+        sources: sources,
+        price: price,
+        history: ticked.history.concat([price]).slice(-28),
         ticks: ticked.ticks + 1
       });
-      if (drift > ticked.threshold){
+
+      if (ticked.confirmation){
+        if (votes < 2){
+          return addLog(Object.assign({}, ticked, {confirmation: null}), {
+            at: action.now,
+            kind: 'trigger',
+            title: 'Confirmation aborted',
+            detail: 'Only ' + votes + '/3 sources are below ' + ticked.threshold.toFixed(2) + ' now; no sweep.'
+          });
+        }
+        return ticked;
+      }
+
+      if (ticked.keeperPaused){
+        if (ticked.ticks % 3 !== 0) return ticked;
+        return addLog(ticked, {
+          at: action.now,
+          kind: 'trigger',
+          title: 'Dip skipped (breaker)',
+          detail: 'OKB ' + price.toFixed(2) + ' is below ' + ticked.threshold.toFixed(2) + ' but the volatility breaker holds the keeper paused.'
+        });
+      }
+
+      if (votes < 2){
         if (ticked.ticks % 3 !== 0) return ticked;
         return addLog(ticked, {
           at: action.now,
           kind: 'trigger',
           title: 'Holding',
-          detail: 'OKB ' + drift.toFixed(2) + ' is above ' + ticked.threshold.toFixed(2) + '. No proposal.'
+          detail: 'Consensus ' + price.toFixed(2) + ' is above ' + ticked.threshold.toFixed(2) + ' (' + votes + '/3 sources). No proposal.'
         });
       }
-      var proposal = {
-        kind: 'sweep',
-        amount: ticked.sweepAmount,
-        target: ticked.savings,
-        keeper: true,
-        title: 'Dip sweep'
-      };
-      /* A denied proposal repeats the same verdict every tick; keep the feed readable. */
-      if (!evalPolicy(policyBits(ticked, proposal).bits).allow && ticked.ticks % 3 !== 0) return ticked;
-      return applyProposal(ticked, proposal, action.now);
+
+      return addLog(Object.assign({}, ticked, {
+        confirmation: {at: action.now, until: action.now + CONFIRM_MS, votes: votes, price: price}
+      }), {
+        at: action.now,
+        kind: 'trigger',
+        title: 'Dip seen — confirming ' + votes + '/3 sources',
+        detail: 'Consensus ' + price.toFixed(2) + ' is at or under ' + ticked.threshold.toFixed(2) + '. Window ' + (CONFIRM_MS / 1000) + 's.'
+      });
     }
 
     default:
@@ -625,6 +781,7 @@ function reduce(state, action){
 var KEY = 'latch.v1';
 var state = defaultState();
 var timer = null;
+var confirmTimer = null;
 
 function persist(){
   try {
@@ -645,10 +802,22 @@ function syncTicker(){
   }
 }
 
+function syncConfirmTimer(){
+  if (state.confirmation && !confirmTimer){
+    confirmTimer = setInterval(function(){
+      dispatch({type: 'confirm-check', now: Date.now()});
+    }, 1000);
+  } else if (!state.confirmation && confirmTimer){
+    clearInterval(confirmTimer);
+    confirmTimer = null;
+  }
+}
+
 function dispatch(action){
   state = reduce(state, action);
   persist();
   syncTicker();
+  syncConfirmTimer();
   render();
 }
 
@@ -660,6 +829,11 @@ function hydrate(){
     var next = Object.assign(defaultState(), parsed);
     next.lastSignals = null;
     if (!Array.isArray(next.logs) || next.logs.length === 0) next.logs = defaultState().logs;
+    if (!Array.isArray(next.sources) || next.sources.length !== 3) next.sources = defaultState().sources;
+    if (next.keeperPaused && next.breaker && Date.now() >= next.breaker.until){
+      next.keeperPaused = false;
+      next.breaker = null;
+    }
     state = next;
     if (state.running){
       state = addLog(state, {
@@ -1118,7 +1292,7 @@ function btn(label, onclick, opts){
   if (opts.icon) kids.push(icon(opts.icon));
   kids.push(h('span', {text: label}));
   var node = h('button', {
-    class: 'btn' + (opts.amber ? ' amber' : '') + (opts.ghost ? ' ghost' : '') + (opts.small ? ' sm' : ''),
+    class: 'btn' + (opts.amber ? ' amber' : '') + (opts.ghost ? ' ghost' : '') + (opts.small ? ' sm' : '') + (opts.block ? ' block' : ''),
     type: 'button',
     onclick: onclick
   }, kids);
@@ -1163,6 +1337,64 @@ function stat(label, value, note){
   );
 }
 
+function confirmBadge(s){
+  if (!s.confirmation) return null;
+  var left = Math.max(0, Math.ceil((s.confirmation.until - Date.now()) / 1000));
+  return h('div', {class: 'confirm-badge'},
+    h('span', {class: 'pulse', 'aria-hidden': 'true'}),
+    h('span', {text: 'Confirming — ' + s.confirmation.votes + '/3 sources, ' + left + 's remaining'})
+  );
+}
+
+function breakerBadge(s){
+  if (!s.keeperPaused) return null;
+  var left = s.breaker && s.breaker.until ? Math.max(0, Math.ceil((s.breaker.until - Date.now()) / 1000)) : 0;
+  return h('div', {class: 'breaker-badge'},
+    h('span', {text: 'Volatility breaker — keeper paused' + (left ? ' · ' + left + 's left' : '')}),
+    s.breaker && s.breaker.reason ? h('span', {class: 'tiny', text: s.breaker.reason}) : null
+  );
+}
+
+function sourceReadout(s){
+  return h('div', {class: 'sources'},
+    s.sources.map(function(src){
+      var below = src.price <= s.threshold;
+      return h('span', {class: 'src' + (below ? ' dip' : '')},
+        h('span', {class: 'src-v', text: src.venue}),
+        h('span', {class: 'src-p mono', text: src.price.toFixed(2) + (below ? ' ▼' : '')})
+      );
+    })
+  );
+}
+
+function daemonLabel(s){
+  if (!s.running) return s.armed ? 'Armed' : 'Off';
+  if (s.confirmation) return 'Confirming';
+  if (s.keeperPaused) return 'Paused · breaker';
+  if (s.paused) return 'Paused';
+  return 'Live';
+}
+
+function daemonNote(s){
+  if (!s.running) return 'Arming fee ' + ACTIVATION_USDT + ' USDT';
+  if (s.confirmation) return s.confirmation.votes + '/3 sources, confirming';
+  if (s.keeperPaused) return 'Volatility breaker holds it';
+  if (s.paused) return 'Circuit paused = 1';
+  return 'Trades without a click';
+}
+
+function keeperGateText(s){
+  if (s.confirmation) return 'confirming ' + s.confirmation.votes + '/3';
+  if (s.keeperPaused) return 'paused · volatility breaker';
+  return 'consensus 2/3 · TWAP fallback';
+}
+
+function sourcesText(s){
+  return s.sources.map(function(src){
+    return src.venue + ' ' + src.price.toFixed(2) + (src.price <= s.threshold ? ' ▼' : '');
+  }).join(' · ');
+}
+
 function priceCard(s, listening){
   var max = Math.max.apply(null, s.history.concat([1]));
   var bars = s.history.map(function(point){
@@ -1177,16 +1409,22 @@ function priceCard(s, listening){
         h('p', {class: 'label', text: 'OKB / USDT'}),
         h('p', {class: 'bigprice', text: s.price.toFixed(2)}),
         h('p', {class: 'note', text: listening
-          ? 'Listening. A print at ' + s.threshold.toFixed(2) + ' or lower fills itself.'
+          ? 'Listening. A dip below ' + s.threshold.toFixed(2) + ' must be seen by 2 of 3 sources before the sweep.'
           : 'Trade when price is ' + s.threshold.toFixed(2) + ' or lower. Start the listener to let it run.'})
       ),
       h('span', {class: listening ? 'dot live' : 'dot', 'aria-hidden': 'true'})
     ),
     h('div', {class: 'spark', 'aria-hidden': 'true'}, bars),
     h('p', {class: 'tiny mono', text: 'gate ' + s.threshold.toFixed(2) + ' · last ' + s.history.length + ' prints'}),
+    confirmBadge(s),
+    breakerBadge(s),
+    sourceReadout(s),
     h('div', {class: 'grid2', style: 'margin-top:.75rem'},
       btn('Inject dip', function(){ dispatch({type: 'dip', now: Date.now()}); }, {amber: true}),
       btn('Rogue 500 USDT', function(){ dispatch({type: 'rogue', now: Date.now()}); })
+    ),
+    h('div', {style: 'margin-top:.45rem'},
+      btn('Flash crash test · single-source wick', function(){ dispatch({type: 'flash-crash', now: Date.now()}); }, {ghost: true, block: true})
     )
   );
 }
@@ -1337,7 +1575,7 @@ function feedCard(s){
 
 function operateView(){
   var s = state;
-  var listening = s.running && !s.paused;
+  var listening = s.running && !s.paused && !s.keeperPaused;
   var next = {kind: 'sweep', amount: s.sweepAmount, target: s.savings, keeper: true, title: 'Next trade'};
   var checked = policyBits(s, next);
   var evaluated = evalPolicy(checked.bits);
@@ -1346,8 +1584,7 @@ function operateView(){
     h('section', {class: 'grid3'},
       stat('Container USDT', money(s.usdt), tapeName(s)),
       stat('Sent to savings', money(s.swept), 'Cap ' + money(s.spentToday) + ' / ' + money(s.daily) + ' today'),
-      stat('Daemon', s.running ? (s.paused ? 'Paused' : 'Live') : (s.armed ? 'Armed' : 'Off'),
-        listening ? 'Trades without a click' : 'Arming fee ' + ACTIVATION_USDT + ' USDT')
+      stat('Daemon', daemonLabel(s), daemonNote(s))
     ),
     h('section', {class: 'grid-5'}, priceCard(s, listening), bodyCard(s)),
     h('section', {class: 'grid-2'},
@@ -1480,6 +1717,7 @@ function submissionText(s){
     'Relay address: ' + (deployedRelay() ? deployedRelay().address + ' on ' + chainLabel(deployedRelay().chainId) : '(deploy it from this project after the demo run)'),
     'DeWEB: the public status page is the wallet-free view to publish on the container.',
     'Backend: a small Worker API holds the early-access list and the keeper heartbeat. The keeper posts a status line with KEEPER_TOKEN and never touches the server with a key.',
+    'Keeper discipline: the off-chain daemon requires 2 of 3 venues (OKX, Binance, CoinGecko) to agree on a dip, falls back to a 5-10 minute TWAP, and pauses itself on a volatility breaker. All of it is keeper-side, so handling market anomalies needed no circuit bit and no re-tape.',
     '',
     'This console is a preview: it evaluates the same 13-gate netlist locally and broadcasts nothing.'
   ].join('\n');
@@ -1490,10 +1728,11 @@ var DEMO_SCRIPT = [
   {t: '0:20', say: 'Users are circuit holders and small X Layer treasuries. We charge 5 USDT to arm, then 1% of each sweep, falling to a quarter of a percent as they save more. Denied calls are free.'},
   {t: '0:40', say: 'Show the relay balance, the tape name, and the processor field. Funds sit in the relay, and the circuit decides who may move them.'},
   {t: '1:00', say: 'Open Circuit. Seven bits. Walk one NAND. Allow is signal 19. The relay does not trust the daemon bits.'},
-  {t: '1:25', say: 'Connect, arm, start. Inject a dip. The feed shows bits, allow, and 50 USDT leaving for savings.'},
+  {t: '1:25', say: 'Connect, arm, start. Inject a dip. The badge confirms 2 of 3 price sources and counts down, then 50 USDT leaves for savings.'},
   {t: '1:50', say: 'Fire the rogue 500 USDT transfer. The circuit denies it: wrong function, unknown target, over both caps.'},
-  {t: '2:15', say: 'Pause the rule and dip again. paused = 1, so eval returns 0. Unpause for a second clean sweep.'},
-  {t: '2:35', say: 'Close on the form text: processor contract, circuit ID, revenue, and the DeWEB status page.'}
+  {t: '2:05', say: 'Hit Flash crash test. CoinGecko wicks down but OKX and Binance hold, so the keeper ignores the wick and the volatility breaker pauses it — all off-chain discipline, zero re-tape.'},
+  {t: '2:20', say: 'Pause the rule. paused = 1 drops the permission card to DENY. Unpause for a second clean sweep.'},
+  {t: '2:40', say: 'Close on the form text: processor contract, circuit ID, revenue, and the DeWEB status page.'}
 ];
 
 var FEE_TIERS = [
@@ -1618,7 +1857,9 @@ function statusView(){
           fact('Spent today', money(s.spentToday) + ' of ' + money(s.daily)),
           fact('Sent to savings', money(s.swept)),
           fact('Protocol booked', money(s.protocolEarned) + ' USDT'),
-          fact('Daemon', s.running ? (s.paused ? 'paused' : 'live') : (s.armed ? 'armed' : 'off')),
+          fact('Daemon', daemonLabel(s)),
+          fact('Keeper gate', keeperGateText(s)),
+          fact('Sources', sourcesText(s)),
           fact('Last decision', last)
         )
       )

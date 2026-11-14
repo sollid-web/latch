@@ -111,6 +111,36 @@ disclosed below.
     the intended trade: no fee switch is a smaller trust surface, and it is also
     why `feeBpsFor` is safe to call from anywhere.
 
+## Keeper discipline (off-chain, out of scope)
+
+The contract knows nothing about a "dip" or a market price. It enforces hard
+treasury rules — who may call, where funds go, and the caps — and that is what
+the audit above covers. Everything that depends on the market lives in the
+keeper, so the anomaly handling below needed **zero contract changes and zero
+re-tapes**.
+
+The keeper (`keeper/daemon.mjs`) gates every `tick` behind three off-chain
+checks, in order:
+
+1. **Multi-source consensus (primary).** OKB/USDT is read from OKX, Binance and
+   CoinGecko. A dip must be seen by at least two venues before a sweep is even
+   considered. A single venue wicking down (a CoinGecko glitch, a thin-book
+   print) is ignored.
+2. **Short TWAP (fallback).** If consensus is impossible — one venue
+   rate-limited or the pair missing — the 5–10 minute rolling average must also
+   be a dip.
+3. **Volatility breaker.** An hourly sigma above 3% of log returns, or a
+   single-venue spread above 6%, pauses the keeper (its own internal pause, not
+   the relay's `paused` bit) for a cooldown and skips execution until the market
+   normalises.
+
+The keeper's `paused` is internal and never touches the relay's bit 0. Bit 0
+stays the owner-only hard kill switch, so the separation is clean: the circuit
+says *what money may move*, the keeper says *whether the market signal is real*.
+A compromised keeper can only burn gas and trigger legal, capped sweeps to the
+whitelisted savings address; it cannot reinterpret a wick as a dip, move funds,
+or pause the relay.
+
 ## Coverage
 
 The suite asserts: owner comes from the constructor rather than `msg.sender`;
@@ -129,10 +159,10 @@ the limit and the pause bit set, plus the verdict false while unarmed; owner res
 denied; and a fuzz test that no amount between 1 and 200 tokens ever escapes the
 per-tx cap or the daily counter.
 
-Not covered, and out of scope for a contract audit: the daemon that calls `tick`
-(it lives outside this repo and is currently unfixed — a hand-rolled secp256k1
-that does not normalise `s` to the low half, and a 10^18 sweep amount that is
-wrong for 6-decimal tokens), the Cloudflare Worker, and the page.
+Not covered, and out of scope for a contract audit: the off-chain keeper
+(`keeper/daemon.mjs` — a Node script that signs with viem, reads the token's real
+`decimals()`, and refuses non-18-decimal tokens), the Cloudflare Worker, and the
+page.
 
 ## Questions worth paying an auditor to answer
 
