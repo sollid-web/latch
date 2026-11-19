@@ -1,5 +1,13 @@
 # Latch
 
+> **Status:** working MVP console; X Layer mainnet deployment in progress (TapeOut Accelerate, Dec 2026).
+
+**At a glance**
+- On-chain policy as hardware-style logic: a 13-gate NAND circuit returns a single allow bit for every sweep.
+- Keyless custody: USDT sits in an ERC-6551 circuit container; the keeper only pays gas and cannot move funds outside the policy.
+- Restart-safe: per-tx and daily caps live in the `LatchRelay` contract, not the daemon.
+- Stack: Solidity + Foundry, React console, Cloudflare Workers, Node keeper daemon.
+
 Autonomous savings agent for the X Layer TapeOut Accelerate program.
 
 When OKB trades at or below a threshold, Latch sweeps a capped amount of USDT from a TapeOut **circuit container** to one savings address. A TapeOut **NAND circuit** is the rule. The daemon does not hold a key that can move funds.
