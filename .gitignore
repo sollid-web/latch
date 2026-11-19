@@ -8,3 +8,6 @@ node_modules
 audit/out
 audit/cache
 lib
+keeper/.env
+keeper/tapeout-state.json
+.env

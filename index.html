@@ -198,7 +198,8 @@ footer{max-width:64rem;margin:0 auto;padding:0 1.15rem 2.5rem}
 
 /* ------------------------------------------------------------------ *
  * TapeOut policy circuit — ported from lib/latch/circuit.ts
- * 7 inputs, 13 NAND gates, 0 latches, 1 output (allow, signal 19).
+ * 7 inputs, 13 NAND gates, 0 latches, 1 output (allow, signal 21).
+ * TAP-02 numbering: s0 = 0, s1 = 1, s2..s8 = inputs, s9.. = gate outputs.
  * allow = !paused & keeper & whitelisted & actionOk & txCap & dailyOk & funded
  * ------------------------------------------------------------------ */
 var INPUTS = [
@@ -212,8 +213,8 @@ var INPUTS = [
 ];
 
 var GATES = [
-  {a:0,b:0},{a:1,b:7},{a:8,b:8},{a:9,b:2},{a:10,b:10},{a:11,b:3},{a:12,b:12},
-  {a:13,b:4},{a:14,b:14},{a:15,b:5},{a:16,b:16},{a:17,b:6},{a:18,b:18}
+  {a:2,b:2},{a:3,b:9},{a:10,b:10},{a:11,b:4},{a:12,b:12},{a:13,b:5},{a:14,b:14},
+  {a:15,b:6},{a:16,b:16},{a:17,b:7},{a:18,b:18},{a:19,b:8},{a:20,b:20}
 ];
 
 var N_IN = 7;
@@ -221,7 +222,7 @@ var N_OUT = 1;
 
 function evalPolicy(bits){
   if (bits.length !== N_IN) throw new Error('Latch policy expects 7 input bits');
-  var signals = bits.slice();
+  var signals = [false, true].concat(bits);
   for (var i = 0; i < GATES.length; i++){
     var left = signals[GATES[i].a];
     var right = signals[GATES[i].b];
@@ -249,7 +250,7 @@ function pad2(n){ return String(n).padStart(2, '0'); }
 
 function gateLabel(index){
   var g = GATES[index];
-  var out = N_IN + index;
+  var out = 2 + N_IN + index;
   if (index === 0) return 's' + pad2(out) + ' = NAND(s' + pad2(g.a) + ', s' + pad2(g.a) + ') · NOT paused';
   if (index % 2 === 1) return 's' + pad2(out) + ' = NAND(s' + pad2(g.a) + ', s' + pad2(g.b) + ')';
   return 's' + pad2(out) + ' = NAND(s' + pad2(g.a) + ', s' + pad2(g.a) + ') · AND fold';
@@ -304,7 +305,7 @@ function defaultState(){
       at: 0,
       kind: 'system',
       title: 'Policy netlist loaded',
-      detail: '13 NAND gates, 7 inputs, allow bit on signal 19. No key in the daemon.',
+      detail: '13 NAND gates, 7 inputs, allow bit on signal 21. No key in the daemon.',
       bits: '',
       allow: null
     }],
@@ -1627,7 +1628,7 @@ function circuitView(){
   });
 
   var gateRows = GATES.map(function(gate, index){
-    var out = N_IN + index;
+    var out = 2 + N_IN + index;
     return h('div', {class: 'gate'},
       h('span', {class: 'gate-label', text: gateLabel(index)}),
       h('span', {class: 'sig ' + (signals[out] ? 'ok' : 'no'), text: 's' + pad2(out) + ' = ' + (signals[out] ? '1' : '0')})
@@ -1644,7 +1645,7 @@ function circuitView(){
       h('p', {class: 'note', style: 'margin-top:.5rem',
         text: 'Seven inputs, thirteen NAND gates, no latches, one output. The evaluator below runs the same gate list the processor runs on chain, in the same order, on the bits LatchRelay derives from its own storage.'}),
       h('p', {class: 'tiny mono', style: 'margin-top:.5rem',
-        text: '7 inputs · 13 gates · 0 latches · ' + N_OUT + ' output · allow on signal ' + (N_IN + GATES.length)})
+        text: '7 inputs · 13 gates · 0 latches · ' + N_OUT + ' output · allow on signal ' + (2 + N_IN + GATES.length)})
     ),
     h('div', {class: 'card pad0'},
       h('div', {class: 'card-bar'},
@@ -1661,7 +1662,7 @@ function circuitView(){
       gateRows,
       h('div', {class: 'allowbar'},
         h('span', {class: 'mono', style: 'font-size:.82rem',
-          text: 's' + pad2(N_IN + GATES.length) + ' = allow = ' + (evaluated.allow ? '1' : '0')}),
+          text: 's' + pad2(2 + N_IN + GATES.length) + ' = allow = ' + (evaluated.allow ? '1' : '0')}),
         h('span', {class: 'badge mono ' + (evaluated.allow ? 'ok' : 'no'), text: evaluated.allow ? 'ALLOW' : 'DENY'})
       )
     ),
@@ -1740,7 +1741,7 @@ var DEMO_SCRIPT = [
   {t: '0:00', say: 'Treasuries want a savings sweep when OKB dumps. They will not hand a bot a private key.'},
   {t: '0:20', say: 'Users are circuit holders and small X Layer treasuries. We charge 5 USDT to arm, then 1% of each sweep, falling to a quarter of a percent as they save more. Denied calls are free.'},
   {t: '0:40', say: 'Show the relay balance, the tape name, and the processor field. Funds sit in the relay, and the circuit decides who may move them.'},
-  {t: '1:00', say: 'Open Circuit. Seven bits. Walk one NAND. Allow is signal 19. The relay does not trust the daemon bits.'},
+  {t: '1:00', say: 'Open Circuit. Seven bits. Walk one NAND. Allow is signal 21. The relay does not trust the daemon bits.'},
   {t: '1:25', say: 'Connect, arm, start. Inject a dip. The badge confirms 2 of 3 price sources and counts down, then 50 USDT leaves for savings.'},
   {t: '1:50', say: 'Fire the rogue 500 USDT transfer. The circuit denies it: wrong function, unknown target, over both caps.'},
   {t: '2:05', say: 'Hit Flash crash test. CoinGecko wicks down but OKX and Binance hold, so the keeper ignores the wick and the volatility breaker pauses it — all off-chain discipline, zero re-tape.'},

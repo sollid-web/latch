@@ -70,8 +70,19 @@ Reload the page while the daemon is running. The feed should say it resumed.
 
 Confirm current addresses in the TapeOut docs before you send anything. Factory, opener, and processor numbers move; do not trust a hardcoded processor from a different chain. BNB Chain processor numbers are not X Layer processor numbers.
 
-1. Tape out the netlist on an X Layer processor (TapeCode or the processor UI). Record the processor contract (`factory.cpuAt(n)`) and the circuit ID.
-2. Open the container. X Layer fee is **0.08 OKB**. Address is `opener.accountOf(processor, circuitId)`.
+1–2. Create your processor, mint 13 NAND transistors, tape out the policy and open the container — one resumable command (about 0.1 OKB total):
+
+```bash
+cd keeper && npm install
+echo "OWNER_PRIVATE_KEY=0x…" > .env
+node tapeout.mjs            # dry run: fees, balance, simulated first step
+SEND=1 node tapeout.mjs     # really send; re-run the same command if anything stops
+```
+
+   It refuses to send if its own TAP-02 evaluation of the netlist allows anything but `0x7e`, simulates each transaction before sending, and ends by checking `eval(0x7e)` = allow and `eval(0x7f)` = deny on the live processor. Results are saved to `keeper/tapeout-state.json`.
+
+   **TAP-02 wire numbering:** signal 0 is constant 0, signal 1 is constant 1, inputs start at signal 2, gate outputs follow. The netlist uses that numbering (allow is signal 21).
+
 3. Deploy, check and wire the console in one step (needs Foundry):
 
 ```bash

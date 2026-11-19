@@ -57,34 +57,47 @@ contract HookToken is Token(6) {
     }
 }
 
-/// @dev Stand-in for a TapeOut processor: interprets TAP-02 NAND records
-///      (opcode 0x00, operand A u24, operand B u24, big-endian) over the input
-///      bits, exactly the netlist the console prints. Output byte bit 0 = last signal.
+/// @dev Stand-in for a TapeOut processor with the live X Layer TAP-02 semantics
+///      (same as the processor reference checked against chain 196):
+///      signal 0 = constant 0, signal 1 = constant 1, inputs at 2..2+nIn-1
+///      (LSB-first from the input bytes), gate g output at 2+nIn+g, NAND only.
+///      Output bit k = signal (last nOut + k), LSB-first.
 contract NetlistProcessor {
     mapping(uint256 => bytes) public netlist;
+    mapping(uint256 => uint32) public nInOf;
+    mapping(uint256 => uint32) public nOutOf;
 
-    function tape(uint256 id, bytes calldata net) external {
+    function tape(uint256 id, bytes calldata net, uint32 nIn, uint32 nOut) external {
         netlist[id] = net;
+        nInOf[id] = nIn;
+        nOutOf[id] = nOut;
     }
 
-    function eval(uint256 id, bytes calldata inputs) external view returns (bytes memory) {
+    function eval(uint256 id, bytes calldata inputs) external view returns (bytes memory out) {
         bytes memory net = netlist[id];
         require(net.length > 0 && net.length % 7 == 0, "no circuit");
-        uint256 nGates = net.length / 7;
-        bool[] memory s = new bool[](7 + nGates);
-        uint8 inByte = uint8(inputs[0]);
-        for (uint256 i = 0; i < 7; i++) {
-            s[i] = (inByte >> i) & 1 == 1;
+        uint256 nIn = nInOf[id];
+        uint256 nOut = nOutOf[id];
+        require(inputs.length == (nIn + 7) / 8, "bad inputs");
+        uint256 n = net.length / 7;
+        bool[] memory s = new bool[](2 + nIn + n);
+        s[1] = true;
+        for (uint256 i = 0; i < nIn; i++) {
+            s[2 + i] = (uint8(inputs[i >> 3]) >> (i & 7)) & 1 == 1;
         }
-        for (uint256 g = 0; g < nGates; g++) {
+        for (uint256 g = 0; g < n; g++) {
             uint256 o = g * 7;
             require(uint8(net[o]) == 0x00, "opcode");
             uint256 a = (uint256(uint8(net[o + 1])) << 16) | (uint256(uint8(net[o + 2])) << 8) | uint8(net[o + 3]);
             uint256 b = (uint256(uint8(net[o + 4])) << 16) | (uint256(uint8(net[o + 5])) << 8) | uint8(net[o + 6]);
-            require(a < 7 + g && b < 7 + g, "wire");
-            s[7 + g] = !(s[a] && s[b]);
+            require(a < 2 + nIn + g && b < 2 + nIn + g, "wire");
+            s[2 + nIn + g] = !(s[a] && s[b]);
         }
-        return abi.encodePacked(uint8(s[7 + nGates - 1] ? 1 : 0));
+        out = new bytes((nOut + 7) / 8);
+        uint256 base = 2 + nIn + n - nOut;
+        for (uint256 k = 0; k < nOut; k++) {
+            if (s[base + k]) out[k >> 3] |= bytes1(uint8(1 << (k & 7)));
+        }
     }
 }
 
@@ -131,8 +144,11 @@ contract Container {
 }
 
 contract LatchRelayTest is Test {
-    // The 13-gate netlist from src/lib/latch/circuit.ts (netlistHex()).
+    // The 13-gate netlist from src/lib/latch/circuit.ts (netlistHex()), TAP-02 numbering.
     bytes internal constant NETLIST =
+        hex"00000002000002000000030000090000000a00000a0000000b0000040000000c00000c0000000d0000050000000e00000e0000000f0000060000001000001000000011000007000000120000120000001300000800000014000014";
+    // The netlist before the fix: wires numbered as if inputs started at signal 0.
+    bytes internal constant OLD_NETLIST =
         hex"000000000000000000000100000700000008000008000000090000020000000a00000a0000000b0000030000000c00000c0000000d0000040000000e00000e0000000f000005000000100000100000001100000600000012000012";
     uint256 internal constant CIRCUIT_ID = 7;
     uint256 internal constant U = 1e6; // 6-decimal USDT, as on X Layer
@@ -151,7 +167,7 @@ contract LatchRelayTest is Test {
         vm.warp(1_800_000_000);
         token = new Token(6);
         processor = new NetlistProcessor();
-        processor.tape(CIRCUIT_ID, NETLIST);
+        processor.tape(CIRCUIT_ID, NETLIST, 7, 1);
         container = new Container();
         relay = _deploy(address(processor), address(token));
         token.mint(address(container), 1000 * U);
@@ -207,6 +223,13 @@ contract LatchRelayTest is Test {
         for (uint256 b = 0; b < 128; b++) {
             assertEq(relay.circuitAllows(uint8(b)), b == 0x7e, "truth table");
         }
+    }
+
+    /// Regression: the pre-fix netlist is wrong on a real processor. It must not allow 0x7e.
+    function testOldNetlistIsWrongOnRealProcessor() public {
+        processor.tape(99, OLD_NETLIST, 7, 1);
+        bytes memory out = processor.eval(99, hex"7e");
+        assertEq(uint8(out[0]) & 1, 0, "old netlist would have denied the only valid byte");
     }
 
     function testCircuitDenialRevertsEvenWhenSolidityPasses() public {
