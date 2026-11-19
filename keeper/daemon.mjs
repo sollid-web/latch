@@ -36,6 +36,7 @@ import {
   createWalletClient,
   http,
   parseAbi,
+  parseUnits,
   encodeFunctionData,
   formatUnits
 } from 'viem';
@@ -208,26 +209,24 @@ async function readRelayStatus() {
   };
 }
 
-// The relay is decimal-strict (18 only). Read the real decimals and refuse to
-// sweep a 6-decimal token, exactly as the relay would revert. This is the fix
-// for the old "10^18 is wrong for USDT" bug.
+// Caps live on the relay in the token's own base units. Read the token's real
+// decimals (6 for X Layer USDT) and scale SWEEP_USDT with them, so "50" means
+// 50 tokens whatever the token is.
+let tokenDecimals = null;
 async function sweepAmount(relay) {
-  let decimals;
-  try {
-    decimals = await publicClient.readContract({
-      address: relay.token,
-      abi: ERC20_ABI,
-      functionName: 'decimals'
-    });
-  } catch (err) {
-    log('SKIP', 'cannot read token decimals: ' + err.message);
-    return 0n;
+  if (tokenDecimals === null) {
+    try {
+      tokenDecimals = Number(await publicClient.readContract({
+        address: relay.token,
+        abi: ERC20_ABI,
+        functionName: 'decimals'
+      }));
+    } catch (err) {
+      log('SKIP', 'cannot read token decimals: ' + err.message);
+      return 0n;
+    }
   }
-  if (Number(decimals) !== 18) {
-    log('SKIP', 'token decimals = ' + decimals + '; LatchRelay only accepts 18-decimal tokens — refusing to sweep');
-    return 0n;
-  }
-  const wanted = BigInt(Math.round(SWEEP_USDT * 1e18));
+  const wanted = parseUnits(String(SWEEP_USDT), tokenDecimals);
   let amount = wanted > relay.perTxCap ? relay.perTxCap : wanted;
   const dailyLeft = relay.dailyCap > relay.spentToday ? relay.dailyCap - relay.spentToday : 0n;
   if (amount > dailyLeft) amount = dailyLeft;
@@ -367,8 +366,10 @@ async function runOnce() {
     address: RELAY_ADDRESS,
     abi: RELAY_ABI,
     functionName: 'preview',
-    args: [amount]
-  }).catch((err) => {
+    args: [amount],
+    // preview reports the keeper bit from msg.sender, so ask as the keeper.
+    account: account.address
+  }).then(([bits, allow]) => ({ bits, allow })).catch((err) => {
     log('SKIP', 'preview failed: ' + err.message);
     return null;
   });

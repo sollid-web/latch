@@ -52,5 +52,8 @@ what money may move, the keeper decides whether the market signal is real.
 
 - Keep `.env` out of version control. The key is gas-only, but it is still a key.
 - `HEARTBEAT_URL`/`KEEPER_TOKEN` carry status only — never a key or an amount.
-- The daemon reads the token's real `decimals()` and refuses non-18-decimal
-  tokens, matching the relay's own check.
+- The daemon reads the token's real `decimals()` and scales `SWEEP_USDT` with
+  it, so `50` means 50 USDT on 6-decimal X Layer USDT. Relay caps are in the
+  token's base units, set at deploy.
+- `preview` is called with `from` = the keeper, because the relay reports the
+  keeper bit from `msg.sender`.

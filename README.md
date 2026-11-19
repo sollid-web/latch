@@ -68,20 +68,32 @@ Confirm current addresses in the TapeOut docs before you send anything. Factory,
 
 1. Tape out the netlist on an X Layer processor (TapeCode or the processor UI). Record the processor contract (`factory.cpuAt(n)`) and the circuit ID.
 2. Open the container. X Layer fee is **0.08 OKB**. Address is `opener.accountOf(processor, circuitId)`.
-3. Deploy `LatchRelay` with that processor, circuit ID, container, X Layer USDT (or BEM), savings, treasury, keeper, caps, and activation fee.
-4. Transfer the circuit NFT to the relay so `container.execute` is authorized.
-5. Fund the container with USDT. Arm the relay.
-6. Run the daemon with a keeper key that holds a little OKB for gas only:
+3. Deploy `contracts/LatchRelay.sol` (the only contract). Caps and fee are in the token's base units — X Layer USDT has **6 decimals**, so 50 USDT = `50000000`:
 
 ```bash
-LATCH_RPC=https://rpc.xlayer.tech \
-LATCH_RELAY=0xYourRelay \
-LATCH_KEEPER_KEY=0x… \
-LATCH_THRESHOLD=48 \
-node daemon/latch-daemon.mjs
+forge create contracts/LatchRelay.sol:LatchRelay \
+  --rpc-url https://rpc.xlayer.tech --chain 196 --private-key $OWNER_KEY --broadcast \
+  --constructor-args $PROCESSOR $CIRCUIT_ID $CONTAINER $USDT $SAVINGS $TREASURY $KEEPER \
+    50000000 150000000 5000000
 ```
 
-The skeleton prints its config and exits. Point it at your oracle and send `tick(amount)` only when the price is through the threshold. `preview(amount)` is the eth_call that matches the console.
+   Then confirm the circuit you taped is the one the relay calls — it must allow exactly `0x7e`:
+
+```bash
+cast call $RELAY "circuitAllows(uint8)(bool)" 126 --rpc-url https://rpc.xlayer.tech   # true
+cast call $RELAY "circuitAllows(uint8)(bool)" 127 --rpc-url https://rpc.xlayer.tech   # false (paused)
+```
+
+4. Transfer the circuit NFT to the relay so `container.execute` is authorized. This is one-way; `withdraw(to, amount)` is the owner's way to get funds back out.
+5. Fund the container with USDT, then call `arm()` from the owner key (pulls the 5 USDT activation fee to treasury).
+6. Run the keeper with a key that holds a little OKB for gas only:
+
+```bash
+cd keeper && cp env.example .env   # set KEEPER_PRIVATE_KEY, RPC_URL, RELAY_ADDRESS
+npm install && node daemon.mjs
+```
+
+   For the demo video, set `THRESHOLD` just above the live OKB price so a real sweep fires on camera, then call `tick` with 500 USDT from the keeper to record the on-chain rejection.
 
 7. Publish the status page as the container’s DeWEB site (`tape://<id>.2.<cpu>.tape` once the name is live).
 

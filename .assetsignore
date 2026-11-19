@@ -11,3 +11,14 @@ node_modules
 .git
 .DS_Store
 .npmrc
+
+# Only the console page is public. Source, keeper and audit material stay in git.
+contracts
+audit
+keeper
+server
+src
+lib
+foundry.toml
+README.md
+wrangler.jsonc
