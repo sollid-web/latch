@@ -2,16 +2,14 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
-import {LatchRelay} from "../../contracts/Main.sol";
+import {LatchRelay} from "../../contracts/LatchRelay.sol";
 
-/// @dev Plain 18-decimal token, no access control: the tests mint freely.
+/// @dev Plain token with configurable decimals; tests mint freely.
 contract Token {
-    string public symbol;
     uint8 public immutable decimals;
     mapping(address => uint256) public balanceOf;
 
-    constructor(string memory symbol_, uint8 decimals_) {
-        symbol = symbol_;
+    constructor(uint8 decimals_) {
         decimals = decimals_;
     }
 
@@ -19,7 +17,7 @@ contract Token {
         balanceOf[to] += amount;
     }
 
-    function transfer(address to, uint256 amount) external returns (bool) {
+    function transfer(address to, uint256 amount) external virtual returns (bool) {
         require(balanceOf[msg.sender] >= amount, "balance");
         balanceOf[msg.sender] -= amount;
         balanceOf[to] += amount;
@@ -27,19 +25,17 @@ contract Token {
     }
 }
 
-/// @dev Token that calls back into the relay while it is being paid out.
-contract HookToken {
-    mapping(address => uint256) public balanceOf;
+/// @dev Returns false instead of reverting.
+contract FalseToken is Token(6) {
+    function transfer(address, uint256) external pure override returns (bool) {
+        return false;
+    }
+}
+
+/// @dev Calls back into the relay while it is being paid out.
+contract HookToken is Token(6) {
     address public relay;
     bool public hookOn;
-
-    function decimals() external pure returns (uint8) {
-        return 18;
-    }
-
-    function mint(address to, uint256 amount) external {
-        balanceOf[to] += amount;
-    }
 
     function setRelay(address relay_) external {
         relay = relay_;
@@ -49,10 +45,10 @@ contract HookToken {
         hookOn = on;
     }
 
-    function transfer(address to, uint256 amount) external returns (bool) {
+    function transfer(address to, uint256 amount) external override returns (bool) {
         if (hookOn) {
             hookOn = false;
-            LatchRelay(relay).tick(1 ether);
+            LatchRelay(relay).tick(1e6);
         }
         require(balanceOf[msg.sender] >= amount, "balance");
         balanceOf[msg.sender] -= amount;
@@ -61,96 +57,200 @@ contract HookToken {
     }
 }
 
+/// @dev Stand-in for a TapeOut processor: interprets TAP-02 NAND records
+///      (opcode 0x00, operand A u24, operand B u24, big-endian) over the input
+///      bits, exactly the netlist the console prints. Output byte bit 0 = last signal.
+contract NetlistProcessor {
+    mapping(uint256 => bytes) public netlist;
+
+    function tape(uint256 id, bytes calldata net) external {
+        netlist[id] = net;
+    }
+
+    function eval(uint256 id, bytes calldata inputs) external view returns (bytes memory) {
+        bytes memory net = netlist[id];
+        require(net.length > 0 && net.length % 7 == 0, "no circuit");
+        uint256 nGates = net.length / 7;
+        bool[] memory s = new bool[](7 + nGates);
+        uint8 inByte = uint8(inputs[0]);
+        for (uint256 i = 0; i < 7; i++) {
+            s[i] = (inByte >> i) & 1 == 1;
+        }
+        for (uint256 g = 0; g < nGates; g++) {
+            uint256 o = g * 7;
+            require(uint8(net[o]) == 0x00, "opcode");
+            uint256 a = (uint256(uint8(net[o + 1])) << 16) | (uint256(uint8(net[o + 2])) << 8) | uint8(net[o + 3]);
+            uint256 b = (uint256(uint8(net[o + 4])) << 16) | (uint256(uint8(net[o + 5])) << 8) | uint8(net[o + 6]);
+            require(a < 7 + g && b < 7 + g, "wire");
+            s[7 + g] = !(s[a] && s[b]);
+        }
+        return abi.encodePacked(uint8(s[7 + nGates - 1] ? 1 : 0));
+    }
+}
+
+/// @dev Processor that always answers the same thing (a liar or a wall).
+contract ConstProcessor {
+    bytes public answer;
+
+    constructor(bytes memory answer_) {
+        answer = answer_;
+    }
+
+    function eval(uint256, bytes calldata) external view returns (bytes memory) {
+        return answer;
+    }
+
+    function netlist(uint256) external pure returns (bytes memory) {
+        return "";
+    }
+}
+
+/// @dev Minimal ERC-6551-style account: only the NFT holder can execute.
+contract Container {
+    address public nftOwner;
+
+    function setNftOwner(address o) external {
+        nftOwner = o;
+    }
+
+    function execute(address to, uint256 value, bytes calldata data, uint8 operation)
+        external
+        payable
+        returns (bytes memory)
+    {
+        require(msg.sender == nftOwner, "not NFT owner");
+        require(operation == 0, "call only");
+        (bool ok, bytes memory ret) = to.call{value: value}(data);
+        if (!ok) {
+            assembly {
+                revert(add(ret, 32), mload(ret))
+            }
+        }
+        return ret;
+    }
+}
+
 contract LatchRelayTest is Test {
-    LatchRelay internal relay;
-    Token internal token;
+    // The 13-gate netlist from src/lib/latch/circuit.ts (netlistHex()).
+    bytes internal constant NETLIST =
+        hex"000000000000000000000100000700000008000008000000090000020000000a00000a0000000b0000030000000c00000c0000000d0000040000000e00000e0000000f000005000000100000100000001100000600000012000012";
+    uint256 internal constant CIRCUIT_ID = 7;
+    uint256 internal constant U = 1e6; // 6-decimal USDT, as on X Layer
 
     address internal constant OWNER = address(0xC0FFEE);
     address internal constant KEEPER = address(0xCAFE);
     address internal constant SAVINGS = address(0x5A7E);
     address internal constant TREASURY = address(0x7BEA5);
 
+    LatchRelay internal relay;
+    Token internal token;
+    NetlistProcessor internal processor;
+    Container internal container;
+
     function setUp() public {
-        relay = new LatchRelay(OWNER);
-        token = new Token("USD", 18);
-        vm.startPrank(OWNER);
-        relay.setToken(address(token));
-        relay.setKeeper(KEEPER);
-        relay.setSavings(SAVINGS);
-        relay.setTreasury(TREASURY);
-        token.mint(address(relay), 1000 ether);
+        vm.warp(1_800_000_000);
+        token = new Token(6);
+        processor = new NetlistProcessor();
+        processor.tape(CIRCUIT_ID, NETLIST);
+        container = new Container();
+        relay = _deploy(address(processor), address(token));
+        token.mint(address(container), 1000 * U);
+        vm.prank(OWNER);
         relay.arm();
-        vm.stopPrank();
+    }
+
+    function _deploy(address proc, address tok) internal returns (LatchRelay r) {
+        vm.prank(OWNER);
+        r = new LatchRelay(proc, CIRCUIT_ID, address(container), tok, SAVINGS, TREASURY, KEEPER, 50 * U, 150 * U, 5 * U);
+        container.setNftOwner(address(r));
     }
 
     // ------------------------------------------------------------ construction
 
-    function testOwnerComesFromTheConstructorNotMsgSender() public {
-        LatchRelay fresh = new LatchRelay(OWNER);
-        assertEq(fresh.owner(), OWNER);
-        assertTrue(fresh.owner() != address(this));
-        assertEq(fresh.keeper(), OWNER);
-        assertEq(fresh.savings(), OWNER);
-        assertEq(fresh.treasury(), OWNER);
+    function testConstructorWiring() public view {
+        assertEq(relay.owner(), OWNER);
+        assertEq(address(relay.processor()), address(processor));
+        assertEq(relay.circuitId(), CIRCUIT_ID);
+        assertEq(relay.unit(), U);
+        assertEq(relay.perTxCap(), 50 * U);
+        assertEq(relay.dailyCap(), 150 * U);
+        assertEq(relay.activationFee(), 5 * U);
     }
 
-    function testCapsAndFeeAreThePublishedNumbers() public {
-        LatchRelay fresh = new LatchRelay(OWNER);
-        assertEq(fresh.perTxCap(), 50 ether);
-        assertEq(fresh.dailyCap(), 150 ether);
-        assertEq(fresh.ACTIVATION_FEE(), 5 ether);
-        assertEq(fresh.FEE_BPS(), 100);
-        assertFalse(fresh.armed());
-        assertFalse(fresh.paused());
-    }
-
-    function testZeroOwnerIsRejected() public {
+    function testZeroAddressesRejected() public {
         vm.expectRevert(LatchRelay.ZeroAddress.selector);
-        new LatchRelay(address(0));
+        new LatchRelay(address(0), 1, address(container), address(token), SAVINGS, TREASURY, KEEPER, 1, 1, 0);
+        vm.expectRevert(LatchRelay.ZeroAddress.selector);
+        new LatchRelay(address(processor), 1, address(container), address(token), address(0), TREASURY, KEEPER, 1, 1, 0);
+        vm.expectRevert(LatchRelay.ZeroAddress.selector);
+        new LatchRelay(address(processor), 1, address(container), address(token), SAVINGS, TREASURY, address(0), 1, 1, 0);
     }
 
-    // ------------------------------------------------------------------ token
+    function testCapOrderingRejected() public {
+        vm.expectRevert(LatchRelay.OverCap.selector);
+        new LatchRelay(address(processor), 1, address(container), address(token), SAVINGS, TREASURY, KEEPER, 2, 1, 0);
+        vm.expectRevert(LatchRelay.OverCap.selector);
+        new LatchRelay(address(processor), 1, address(container), address(token), SAVINGS, TREASURY, KEEPER, 0, 1, 0);
+    }
 
-    function testTokenWithSixDecimalsIsRejected() public {
-        LatchRelay fresh = new LatchRelay(OWNER);
-        Token six = new Token("USDC", 6);
-        vm.prank(OWNER);
+    function testCodelessTokenAndProcessorRejected() public {
         vm.expectRevert(LatchRelay.BadToken.selector);
-        fresh.setToken(address(six));
+        new LatchRelay(address(processor), 1, address(container), address(0xBEEF), SAVINGS, TREASURY, KEEPER, 1, 1, 0);
+        vm.expectRevert(LatchRelay.BadEval.selector);
+        new LatchRelay(address(0xBEEF), 1, address(container), address(token), SAVINGS, TREASURY, KEEPER, 1, 1, 0);
     }
 
-    function testTokenWithoutCodeIsRejected() public {
-        LatchRelay fresh = new LatchRelay(OWNER);
+    // ---------------------------------------------------------------- circuit
+
+    /// The taped-out netlist must allow exactly one byte: 0x7e (every bit set but paused).
+    function testNetlistTruthTableAllowsOnly0x7e() public view {
+        for (uint256 b = 0; b < 128; b++) {
+            assertEq(relay.circuitAllows(uint8(b)), b == 0x7e, "truth table");
+        }
+    }
+
+    function testCircuitDenialRevertsEvenWhenSolidityPasses() public {
+        Container c2 = new Container();
+        container = c2;
+        LatchRelay r = _deploy(address(new ConstProcessor(hex"00")), address(token));
+        token.mint(address(c2), 100 * U);
         vm.prank(OWNER);
-        vm.expectRevert(LatchRelay.BadToken.selector);
-        fresh.setToken(address(0xBEEF));
+        r.arm();
+        vm.prank(KEEPER);
+        vm.expectRevert(abi.encodeWithSelector(LatchRelay.CircuitDenied.selector, uint8(0x7e)));
+        r.tick(10 * U);
     }
 
-    function testTokenIsLockedOnceArmed() public {
-        Token other = new Token("OTHER", 18);
+    function testLyingCircuitCannotBypassSolidityCaps() public {
+        Container c2 = new Container();
+        container = c2;
+        LatchRelay r = _deploy(address(new ConstProcessor(hex"01")), address(token));
+        token.mint(address(c2), 1000 * U);
         vm.prank(OWNER);
-        vm.expectRevert(LatchRelay.TokenLocked.selector);
-        relay.setToken(address(other));
+        r.arm();
+        vm.prank(KEEPER);
+        vm.expectRevert(LatchRelay.OverCap.selector);
+        r.tick(500 * U);
     }
 
-    function testTokenIsLockedWhileHoldingABalance() public {
-        LatchRelay fresh = new LatchRelay(OWNER);
-        Token first = new Token("A", 18);
-        Token second = new Token("B", 18);
-        vm.startPrank(OWNER);
-        fresh.setToken(address(first));
-        first.mint(address(fresh), 1 ether);
-        vm.expectRevert(LatchRelay.TokenLocked.selector);
-        fresh.setToken(address(second));
-        vm.stopPrank();
+    function testEmptyEvalReverts() public {
+        Container c2 = new Container();
+        container = c2;
+        LatchRelay r = _deploy(address(new ConstProcessor("")), address(token));
+        token.mint(address(c2), 100 * U);
+        vm.prank(OWNER);
+        r.arm();
+        vm.prank(KEEPER);
+        vm.expectRevert(LatchRelay.BadEval.selector);
+        r.tick(10 * U);
     }
 
     // -------------------------------------------------------------------- arm
 
-    function testArmChargesTheFeeToTreasury() public {
+    function testArmPaysTreasuryFromContainer() public view {
         assertTrue(relay.armed());
-        assertEq(token.balanceOf(TREASURY), 5 ether);
-        assertEq(token.balanceOf(address(relay)), 995 ether);
+        assertEq(token.balanceOf(TREASURY), 5 * U);
+        assertEq(token.balanceOf(address(container)), 995 * U);
     }
 
     function testArmTwiceReverts() public {
@@ -159,312 +259,209 @@ contract LatchRelayTest is Test {
         relay.arm();
     }
 
-    function testArmWithoutFundingReverts() public {
-        LatchRelay fresh = new LatchRelay(OWNER);
-        vm.startPrank(OWNER);
-        fresh.setToken(address(token));
-        vm.expectRevert(LatchRelay.Underfunded.selector);
-        fresh.arm();
-        vm.stopPrank();
+    function testArmOnlyOwner() public {
+        Container c2 = new Container();
+        container = c2;
+        LatchRelay r = _deploy(address(processor), address(token));
+        vm.prank(KEEPER);
+        vm.expectRevert(LatchRelay.NotOwner.selector);
+        r.arm();
     }
 
-    function testArmWithoutTokenReverts() public {
-        LatchRelay fresh = new LatchRelay(OWNER);
+    function testArmUnderfundedReverts() public {
+        Container c2 = new Container();
+        container = c2;
+        LatchRelay r = _deploy(address(processor), address(token));
         vm.prank(OWNER);
-        vm.expectRevert(LatchRelay.TokenNotSet.selector);
-        fresh.arm();
+        vm.expectRevert(LatchRelay.UnderfundedActivation.selector);
+        r.arm();
+    }
+
+    function testRelayWithoutNftCannotMoveFunds() public {
+        container.setNftOwner(address(0xDEAD));
+        vm.prank(KEEPER);
+        vm.expectRevert(bytes("not NFT owner"));
+        relay.tick(10 * U);
     }
 
     // ------------------------------------------------------------------- tick
 
-    function testTickPaysSavingsAndFee() public {
-        uint256 before = token.balanceOf(SAVINGS);
+    function testTickSweepsAmountAndFee() public {
         vm.prank(KEEPER);
-        relay.tick(50 ether);
-        assertEq(token.balanceOf(SAVINGS) - before, 50 ether);
-        assertEq(token.balanceOf(TREASURY), 5 ether + 0.5 ether);
-        assertEq(relay.spentToday(), 50 ether);
+        relay.tick(50 * U);
+        assertEq(token.balanceOf(SAVINGS), 50 * U);
+        assertEq(token.balanceOf(TREASURY), 5 * U + (50 * U) / 100);
+        assertEq(relay.spentToday(), 50 * U);
+        assertEq(relay.volumeSwept(), 50 * U);
     }
 
-    function testTickRejectsAnyoneButTheKeeper() public {
+    function testTickOnlyKeeper() public {
         vm.prank(OWNER);
         vm.expectRevert(LatchRelay.NotKeeper.selector);
-        relay.tick(1 ether);
+        relay.tick(10 * U);
     }
 
-    function testTickRejectsAStranger() public {
-        vm.prank(address(0xBAD));
-        vm.expectRevert(LatchRelay.NotKeeper.selector);
-        relay.tick(1 ether);
+    function testTickRequiresArming() public {
+        Container c2 = new Container();
+        container = c2;
+        LatchRelay r = _deploy(address(processor), address(token));
+        token.mint(address(c2), 100 * U);
+        vm.prank(KEEPER);
+        vm.expectRevert(LatchRelay.NotArmed.selector);
+        r.tick(10 * U);
     }
 
-    function testPausedBlocksTick() public {
+    function testPausedTickReverts() public {
         vm.prank(OWNER);
         relay.setPaused(true);
         vm.prank(KEEPER);
         vm.expectRevert(LatchRelay.Paused.selector);
-        relay.tick(1 ether);
+        relay.tick(10 * U);
     }
 
-    function testTickRequiresArming() public {
-        LatchRelay fresh = new LatchRelay(OWNER);
-        vm.startPrank(OWNER);
-        fresh.setToken(address(token));
-        fresh.setKeeper(KEEPER);
-        token.mint(address(fresh), 100 ether);
-        vm.stopPrank();
-        vm.prank(KEEPER);
-        vm.expectRevert(LatchRelay.NotArmed.selector);
-        fresh.tick(1 ether);
-    }
-
-    function testZeroAmountReverts() public {
-        vm.prank(KEEPER);
+    function testZeroAndOversizedAmountsRevert() public {
+        vm.startPrank(KEEPER);
         vm.expectRevert(LatchRelay.OverCap.selector);
         relay.tick(0);
-    }
-
-    function testPerTxCapBoundary() public {
-        vm.prank(KEEPER);
-        relay.tick(50 ether);
-        vm.prank(KEEPER);
         vm.expectRevert(LatchRelay.OverCap.selector);
-        relay.tick(50 ether + 1);
-    }
-
-    function testDailyCapBoundary() public {
-        vm.startPrank(KEEPER);
-        relay.tick(50 ether);
-        relay.tick(50 ether);
-        relay.tick(50 ether);
-        vm.expectRevert(LatchRelay.OverCap.selector);
-        relay.tick(1 ether);
+        relay.tick(500 * U); // the console's "rogue 500 USDT"
         vm.stopPrank();
-        assertEq(relay.spentToday(), 150 ether);
     }
 
-    function testDailyCounterRollsOverAtTheNextUtcDay() public {
+    function testDailyCapAndUtcRollover() public {
         vm.startPrank(KEEPER);
-        relay.tick(50 ether);
-        relay.tick(50 ether);
-        relay.tick(50 ether);
+        relay.tick(50 * U);
+        relay.tick(50 * U);
+        relay.tick(50 * U);
         vm.expectRevert(LatchRelay.OverCap.selector);
-        relay.tick(1 ether);
+        relay.tick(1 * U);
         vm.warp(block.timestamp + 1 days);
-        relay.tick(50 ether);
+        relay.tick(50 * U);
         vm.stopPrank();
-        assertEq(relay.spentToday(), 50 ether);
+        assertEq(relay.spentToday(), 50 * U);
     }
 
-    function testUnderfundedVaultReverts() public {
-        LatchRelay fresh = new LatchRelay(OWNER);
-        vm.startPrank(OWNER);
-        fresh.setToken(address(token));
-        fresh.setKeeper(KEEPER);
-        fresh.setSavings(SAVINGS);
-        fresh.setTreasury(TREASURY);
-        token.mint(address(fresh), 5 ether);
-        fresh.arm();
-        vm.stopPrank();
+    function testUnderfundedIncludingFeeReverts() public {
+        vm.prank(OWNER);
+        relay.withdraw(OWNER, 995 * U - 50 * U); // leaves exactly 50, not 50 + fee
         vm.prank(KEEPER);
         vm.expectRevert(LatchRelay.Underfunded.selector);
-        fresh.tick(1 ether);
+        relay.tick(50 * U);
     }
 
-    function testFeeRoundsToZeroBelowOneHundredUnits() public {
-        vm.prank(KEEPER);
-        relay.tick(99);
-        assertEq(relay.feeOn(99), 0);
-        assertEq(relay.feeOn(100), 1);
-        assertEq(relay.feeOn(50 ether), 0.5 ether);
-    }
-
-    // ------------------------------------------------------------------ tiers
-
-    function testFeeLadderIsThePublishedOne() public {
-        assertEq(relay.feeBpsFor(0), 100);
-        assertEq(relay.feeBpsFor(999 ether), 100);
-        assertEq(relay.feeBpsFor(1_000 ether), 75);
-        assertEq(relay.feeBpsFor(4_999 ether), 75);
-        assertEq(relay.feeBpsFor(5_000 ether), 50);
-        assertEq(relay.feeBpsFor(19_999 ether), 50);
-        assertEq(relay.feeBpsFor(20_000 ether), 25);
-        assertEq(relay.feeBpsFor(10_000_000 ether), 25);
-    }
-
-    function testFeeLadderNeverRises() public {
-        uint256 last = relay.feeBpsFor(0);
-        for (uint256 v = 250 ether; v <= 25_000 ether; v += 250 ether) {
-            uint256 bps = relay.feeBpsFor(v);
-            assertLe(bps, last);
-            last = bps;
-        }
-    }
-
-    function testFeeFallsOnceAThousandIsSwept() public {
-        token.mint(address(relay), 5_000 ether);
-        vm.startPrank(KEEPER);
-        for (uint256 d = 0; d < 7; d++) {
-            relay.tick(50 ether);
-            relay.tick(50 ether);
-            relay.tick(50 ether);
-            vm.warp(block.timestamp + 1 days);
-        }
-        vm.stopPrank();
-        assertEq(relay.volumeSwept(), 1_050 ether);
-        assertEq(relay.feeBpsNow(), 75);
-        assertEq(relay.feeOn(50 ether), 0.375 ether);
-    }
-
-    function testReentrantTokenCannotReenterTick() public {
-        HookToken hook = new HookToken();
-        LatchRelay fresh = new LatchRelay(OWNER);
-        vm.startPrank(OWNER);
-        fresh.setToken(address(hook));
-        fresh.setKeeper(KEEPER);
-        fresh.setSavings(SAVINGS);
-        fresh.setTreasury(TREASURY);
-        hook.mint(address(fresh), 100 ether);
-        fresh.arm();
-        vm.stopPrank();
-        hook.setRelay(address(fresh));
-        hook.setHook(true);
-        vm.prank(KEEPER);
-        vm.expectRevert(LatchRelay.Reentered.selector);
-        fresh.tick(10 ether);
-    }
-
-    // ----------------------------------------------------------------- caps
-
-    function testCapsCanOnlyTighten() public {
-        vm.startPrank(OWNER);
-        relay.setCaps(25 ether, 100 ether);
-        assertEq(relay.perTxCap(), 25 ether);
-        assertEq(relay.dailyCap(), 100 ether);
-        vm.expectRevert(LatchRelay.CapRaised.selector);
-        relay.setCaps(30 ether, 100 ether);
-        vm.expectRevert(LatchRelay.CapRaised.selector);
-        relay.setCaps(25 ether, 120 ether);
-        vm.stopPrank();
-    }
-
-    function testCapsRejectPerTxAboveDaily() public {
+    function testFalseReturningTokenReverts() public {
+        FalseToken ft = new FalseToken();
+        Container c2 = new Container();
+        container = c2;
+        LatchRelay r = _deploy(address(processor), address(ft));
+        ft.mint(address(c2), 100 * U);
         vm.prank(OWNER);
-        vm.expectRevert(LatchRelay.OverCap.selector);
-        relay.setCaps(75 ether, 60 ether);
+        vm.expectRevert(LatchRelay.TransferFailed.selector);
+        r.arm();
     }
 
-    function testCapsRejectZero() public {
-        vm.startPrank(OWNER);
-        vm.expectRevert(LatchRelay.OverCap.selector);
-        relay.setCaps(0, 100 ether);
-        vm.expectRevert(LatchRelay.OverCap.selector);
-        relay.setCaps(10 ether, 0);
-        vm.stopPrank();
+    function testReentrancyBlocked() public {
+        HookToken ht = new HookToken();
+        Container c2 = new Container();
+        container = c2;
+        LatchRelay r = _deploy(address(processor), address(ht));
+        ht.mint(address(c2), 1000 * U);
+        vm.prank(OWNER);
+        r.arm();
+        vm.prank(OWNER);
+        r.setKeeper(address(ht)); // let the hook pass the keeper check, so only the lock stops it
+        ht.setRelay(address(r));
+        ht.setHook(true);
+        vm.prank(address(ht));
+        vm.expectRevert(LatchRelay.Reentered.selector);
+        r.tick(10 * U);
     }
 
-    function testOnlyOwnerSetsCaps() public {
+    // ---------------------------------------------------------------- preview
+
+    function testPreviewMatchesTickForKeeper() public {
         vm.prank(KEEPER);
-        vm.expectRevert(LatchRelay.NotOwner.selector);
-        relay.setCaps(1 ether, 1 ether);
-    }
-
-    // --------------------------------------------------------------- previews
-
-    function bit(uint8 bits, uint8 mask) internal pure returns (bool) {
-        return (bits & mask) != 0;
-    }
-
-    function testPreviewAllowsWhatTickAllows() public {
-        vm.prank(KEEPER);
-        (uint8 bits, bool allow) = relay.preview(50 ether);
+        (uint8 bits, bool allow) = relay.preview(50 * U);
+        assertEq(bits, 0x7e);
         assertTrue(allow);
-        assertFalse(bit(bits, 1));
-        assertTrue(bit(bits, 2));
-        assertTrue(bit(bits, 4));
-        assertTrue(bit(bits, 8));
-        assertTrue(bit(bits, 16));
-        assertTrue(bit(bits, 32));
-        assertTrue(bit(bits, 64));
     }
 
-    function testPreviewKeeperBitFollowsTheCaller() public {
-        vm.prank(KEEPER);
-        (uint8 keeperBits,) = relay.preview(1 ether);
-        assertTrue(bit(keeperBits, 2));
-        vm.prank(SAVINGS);
-        (uint8 strangerBits,) = relay.preview(1 ether);
-        assertFalse(bit(strangerBits, 2));
-    }
-
-    function testPreviewDropsTheCapBitOverTheLimit() public {
-        vm.prank(KEEPER);
-        (uint8 bits, bool allow) = relay.preview(50 ether + 1);
-        assertFalse(bit(bits, 16));
+    function testPreviewFromStrangerShowsKeeperBitClear() public view {
+        (uint8 bits, bool allow) = relay.preview(50 * U);
+        assertEq(bits & 2, 0);
         assertFalse(allow);
     }
 
-    function testPreviewReportsPause() public {
+    function testPreviewDeniesRogueAndPaused() public {
+        vm.prank(KEEPER);
+        (uint8 bits, bool allow) = relay.preview(500 * U);
+        assertEq(bits & 16, 0);
+        assertFalse(allow);
         vm.prank(OWNER);
         relay.setPaused(true);
         vm.prank(KEEPER);
-        (uint8 bits, bool allow) = relay.preview(1 ether);
-        assertTrue(bit(bits, 1));
+        (bits, allow) = relay.preview(10 * U);
+        assertEq(bits & 1, 1);
         assertFalse(allow);
     }
 
-    function testPreviewReportsUnarmed() public {
-        LatchRelay fresh = new LatchRelay(OWNER);
+    // ------------------------------------------------------------------ admin
+
+    function testCapsOnlyMoveDown() public {
         vm.startPrank(OWNER);
-        fresh.setToken(address(token));
-        fresh.setKeeper(KEEPER);
-        fresh.setSavings(SAVINGS);
-        token.mint(address(fresh), 100 ether);
+        relay.setCaps(20 * U, 40 * U);
+        vm.expectRevert(LatchRelay.CapRaised.selector);
+        relay.setCaps(30 * U, 40 * U);
         vm.stopPrank();
-        vm.prank(KEEPER);
-        (, bool allow) = fresh.preview(1 ether);
-        assertFalse(allow);
+        assertEq(relay.perTxCap(), 20 * U);
     }
 
-    // --------------------------------------------------------------- withdraw
-
-    function testOwnerCanRescue() public {
-        vm.prank(OWNER);
-        relay.withdraw(SAVINGS, 100 ether);
-        assertEq(token.balanceOf(SAVINGS), 100 ether);
-    }
-
-    function testKeeperCannotRescue() public {
+    function testWithdrawOnlyOwner() public {
         vm.prank(KEEPER);
         vm.expectRevert(LatchRelay.NotOwner.selector);
-        relay.withdraw(KEEPER, 1 ether);
-    }
-
-    function testRescueRejectsZeroAddress() public {
+        relay.withdraw(KEEPER, 1 * U);
         vm.prank(OWNER);
-        vm.expectRevert(LatchRelay.ZeroAddress.selector);
-        relay.withdraw(address(0), 1 ether);
+        relay.withdraw(OWNER, 100 * U);
+        assertEq(token.balanceOf(OWNER), 100 * U);
     }
 
-    function testRescueRejectsMoreThanTheBalance() public {
+    function testTransferOwnership() public {
         vm.prank(OWNER);
-        vm.expectRevert(LatchRelay.Underfunded.selector);
-        relay.withdraw(SAVINGS, 1000 ether);
+        relay.transferOwnership(KEEPER);
+        assertEq(relay.owner(), KEEPER);
+        vm.prank(OWNER);
+        vm.expectRevert(LatchRelay.NotOwner.selector);
+        relay.setPaused(true);
     }
 
-    // ------------------------------------------------------------------ fuzz
+    function testStatusReadsContainerBalance() public view {
+        (address t, bool armed_, bool paused_, uint256 bal,,,, address k, address s, address tr) = relay.status();
+        assertEq(t, address(token));
+        assertTrue(armed_);
+        assertFalse(paused_);
+        assertEq(bal, 995 * U);
+        assertEq(k, KEEPER);
+        assertEq(s, SAVINGS);
+        assertEq(tr, TREASURY);
+    }
 
-    function testFuzzCapsHoldForEveryAmount(uint96 raw) public {
-        uint256 value = bound(uint256(raw), 1, 200 ether);
-        bool overCap = value > relay.perTxCap();
-        vm.prank(KEEPER);
-        if (overCap) {
-            vm.expectRevert(LatchRelay.OverCap.selector);
-        }
-        relay.tick(value);
-        if (!overCap) {
-            assertLe(relay.spentToday(), relay.dailyCap());
-            assertLe(value, relay.perTxCap());
-        }
+    // -------------------------------------------------------------- fee ladder
+
+    function testFeeLadderScalesWithDecimals() public view {
+        assertEq(relay.feeBpsFor(0), 100);
+        assertEq(relay.feeBpsFor(1_000 * U), 75);
+        assertEq(relay.feeBpsFor(5_000 * U), 50);
+        assertEq(relay.feeBpsFor(20_000 * U), 25);
+    }
+
+    function testFuzzTickNeverExceedsCaps(uint256 a, uint256 b) public {
+        a = bound(a, 1, 50 * U);
+        b = bound(b, 1, 50 * U);
+        vm.startPrank(KEEPER);
+        relay.tick(a);
+        relay.tick(b);
+        vm.stopPrank();
+        assertLe(relay.spentToday(), relay.dailyCap());
+        assertEq(token.balanceOf(SAVINGS), a + b);
     }
 }
