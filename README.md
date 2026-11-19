@@ -51,7 +51,11 @@ Tape name on X Layer: `#<circuitId>@2.<processorNumber>` (area code 2, chain id 
 
 ## Try the console
 
-1. Connect (preview session — it does not sign).
+Once a relay is configured, the **Live relay** card at the top of Operate reads it from X Layer: balances, caps, the next sweep's policy byte and verdict, the processor's answer for `0x7e`/`0x7f`, and recent `Sweep` events with explorer links. Connect the owner wallet to arm or pause; connect the keeper wallet to sweep or send the rogue 500 (it reverts on chain). **Dry-run rogue 500** asks the chain for the revert reason without gas. The Circuit tab can query the deployed processor for any policy byte. To look at a relay before editing the config: `?relay=0x…` (add `&chain=1952` for testnet).
+
+The practice simulator below the live card works without a wallet:
+
+1. Connect (practice session — it does not sign).
 2. Arm · 5 USDT.
 3. Start.
 4. Inject dip. A 50 USDT sweep should execute.
@@ -68,21 +72,15 @@ Confirm current addresses in the TapeOut docs before you send anything. Factory,
 
 1. Tape out the netlist on an X Layer processor (TapeCode or the processor UI). Record the processor contract (`factory.cpuAt(n)`) and the circuit ID.
 2. Open the container. X Layer fee is **0.08 OKB**. Address is `opener.accountOf(processor, circuitId)`.
-3. Deploy `contracts/LatchRelay.sol` (the only contract). Caps and fee are in the token's base units — X Layer USDT has **6 decimals**, so 50 USDT = `50000000`:
+3. Deploy, check and wire the console in one step (needs Foundry):
 
 ```bash
-forge create contracts/LatchRelay.sol:LatchRelay \
-  --rpc-url https://rpc.xlayer.tech --chain 196 --private-key $OWNER_KEY --broadcast \
-  --constructor-args $PROCESSOR $CIRCUIT_ID $CONTAINER $USDT $SAVINGS $TREASURY $KEEPER \
-    50000000 150000000 5000000
+OWNER_KEY=0x… PROCESSOR=0x… CIRCUIT_ID=… CONTAINER=0x… \
+USDT=0x… SAVINGS=0x… TREASURY=0x… KEEPER=0x… \
+./scripts/golive.sh
 ```
 
-   Then confirm the circuit you taped is the one the relay calls — it must allow exactly `0x7e`:
-
-```bash
-cast call $RELAY "circuitAllows(uint8)(bool)" 126 --rpc-url https://rpc.xlayer.tech   # true
-cast call $RELAY "circuitAllows(uint8)(bool)" 127 --rpc-url https://rpc.xlayer.tech   # false (paused)
-```
+   It refuses to deploy unless the processor's `eval` allows `0x7e` and denies `0x7f` for your circuit, deploys `LatchRelay` with caps in USDT's 6-decimal units (50 / 150 / 5 by default), re-checks the circuit through the relay, and writes the relay address into `index.html` so the console goes live.
 
 4. Transfer the circuit NFT to the relay so `container.execute` is authorized. This is one-way; `withdraw(to, amount)` is the owner's way to get funds back out.
 5. Fund the container with USDT, then call `arm()` from the owner key (pulls the 5 USDT activation fee to treasury).

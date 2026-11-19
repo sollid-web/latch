@@ -177,6 +177,10 @@ footer{max-width:64rem;margin:0 auto;padding:0 1.15rem 2.5rem}
 .overlay{position:fixed;inset:0;z-index:60;background:rgba(3,4,3,.72);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);display:flex;justify-content:flex-end}
 .drawer{width:min(26rem,100%);height:100%;overflow:auto;background:#0d0f0c;border-left:1px solid var(--line-strong);box-shadow:-40px 0 80px -40px #000;padding:0 0 1.5rem}
 .drawer .body{padding:1.05rem}
+.card>.body{padding:.9rem 1.05rem}
+.card>.body .facts{grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));column-gap:1.4rem;margin-top:0}
+.card>.body a{color:var(--amber);text-decoration:none;border-bottom:1px solid rgba(242,169,78,.32)}
+.sim-note{margin:.3rem 0 -.2rem;font-size:.66rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
 .drawer>.card-bar{position:sticky;top:0;z-index:2;background:#0d0f0c;border-bottom:1px solid var(--line)}
 .facts{display:grid;gap:.7rem;margin-top:.8rem}
 .fact{display:grid;gap:.15rem;padding-bottom:.65rem;border-bottom:1px solid var(--line)}
@@ -1310,13 +1314,19 @@ function header(){
           h('span', {class: 'wordmark', text: 'LATCH'}),
           h('span', {class: 'tape', text: tapeName(s)})
         ),
-        h('p', {class: 'hdr-sub', text: 'Permissioned dip trade · X Layer 196 · preview'})
+        h('p', {class: 'hdr-sub', text: isLive()
+          ? 'Permissioned dip trade · ' + liveMeta().name + ' · live'
+          : 'Permissioned dip trade · X Layer 196 · simulator'})
       ),
       h('div', {class: 'hdr-actions'},
         btn('Status', function(){ statusOpen = true; render(); }, {small: true, ghost: true}),
-        btn(s.connected ? shortAddr(PREVIEW_WALLET) : 'Connect', function(){
-          dispatch({type: s.connected ? 'disconnect' : 'connect'});
-        }, {small: true, amber: !s.connected})
+        isLive()
+          ? btn(live.account ? shortAddr(live.account) : 'Connect wallet', function(){
+              if (!live.account) connectWallet();
+            }, {small: true, amber: !live.account})
+          : btn(s.connected ? shortAddr(PREVIEW_WALLET) : 'Connect', function(){
+              dispatch({type: s.connected ? 'disconnect' : 'connect'});
+            }, {small: true, amber: !s.connected})
       )
     ),
     h('nav', {class: 'tabs', 'aria-label': 'Sections'}, tabs.map(function(name){
@@ -1581,6 +1591,8 @@ function operateView(){
   var evaluated = evalPolicy(checked.bits);
 
   return h('div', {class: 'stack'},
+    isLive() ? liveCard() : null,
+    isLive() ? h('p', {class: 'sim-note', text: 'Practice simulator · the numbers below are simulated in this page'}) : null,
     h('section', {class: 'grid3'},
       stat('Container USDT', money(s.usdt), tapeName(s)),
       stat('Sent to savings', money(s.swept), 'Cap ' + money(s.spentToday) + ' / ' + money(s.daily) + ' today'),
@@ -1626,6 +1638,7 @@ function circuitView(){
   var copyLabel = h('span', {text: 'Copy'});
 
   return h('div', {class: 'stack'},
+    probeCard(),
     h('div', {class: 'card'},
       h('h2', {class: 'h2', text: 'The rule is a netlist, not a server'}),
       h('p', {class: 'note', style: 'margin-top:.5rem',
@@ -1868,6 +1881,392 @@ function statusView(){
 }
 
 /* ------------------------------------------------------------------ *
+ * Live relay — real X Layer reads and wallet actions.
+ * Turns on when APP_CONFIG.contracts.LatchRelay.address is set, or for a
+ * quick check with ?relay=0x… in the URL. Everything in this block is read
+ * from, or sent to, the deployed LatchRelay. Nothing here is simulated.
+ * ------------------------------------------------------------------ */
+var SEL = {
+  status: '0x200d2ed2', preview: '0xc317c377', circuitAllows: '0xb905eac7',
+  feeBpsNow: '0x1ca9f2e4', volumeSwept: '0x44bdb65a', owner: '0x8da5cb5b',
+  processor: '0xce1b1d43', circuitId: '0x030c9d5c', container: '0x90e534a7',
+  unit: '0x907af6c0', activationFee: '0x77d630ae',
+  arm: '0x370419e5', setPaused: '0x16c38b3c', tick: '0xfc7b6aee'
+};
+var TOPIC_SWEEP = '0x3da7689974f13093359934c7f011f3c8cbe727f25892e588f8eef693942efa4c';
+var ERRORS = {
+  '0xf512b278': 'NotKeeper', '0x8db2750a': 'NotArmed', '0x9e87fac8': 'Paused',
+  '0x342fa66d': 'OverCap', '0xe1a8ca9e': 'Underfunded', '0xb45c8aab': 'CircuitDenied',
+  '0x0e327146': 'BadEval', '0x30cd7471': 'NotOwner', '0x98a838c8': 'AlreadyArmed',
+  '0xbc57f770': 'UnderfundedActivation', '0x90b8ec18': 'TransferFailed', '0xb5dfd9e5': 'Reentered'
+};
+var CHAIN_META = {
+  196: {hex: '0xc4', name: 'X Layer Mainnet', rpc: 'https://rpc.xlayer.tech', scan: 'https://www.oklink.com/xlayer'},
+  1952: {hex: '0x7a0', name: 'X Layer Testnet', rpc: 'https://testrpc.xlayer.tech', scan: 'https://www.oklink.com/xlayer-test'}
+};
+
+var live = {
+  data: null, error: null, busy: false, at: 0,
+  account: null, walletChain: null, walletError: null,
+  txs: [], dryRun: null, probe: null, probeByte: 126
+};
+
+function liveRelay(){
+  var d = deployedRelay();
+  if (d && /^0x[0-9a-fA-F]{40}$/.test(d.address)) return d.address;
+  try {
+    var q = new URLSearchParams(location.search).get('relay');
+    if (q && /^0x[0-9a-fA-F]{40}$/.test(q)) return q;
+  } catch (err) { /* ignore */ }
+  return null;
+}
+function isLive(){ return !!liveRelay(); }
+function liveChainId(){
+  var cfg = appConfig();
+  var id = cfg && cfg.chainId ? Number(cfg.chainId) : 196;
+  try {
+    var q = new URLSearchParams(location.search).get('chain');
+    if (q) id = Number(q);
+  } catch (err) { /* ignore */ }
+  return CHAIN_META[id] ? id : 196;
+}
+function liveMeta(){ return CHAIN_META[liveChainId()]; }
+function liveRpcUrl(){
+  var cfg = appConfig();
+  return (cfg && cfg.rpc) ? String(cfg.rpc) : liveMeta().rpc;
+}
+function wallet(){
+  if (typeof window === 'undefined') return null;
+  return window.okxwallet || window.ethereum || null;
+}
+function walletOnChain(){
+  return !!(live.account && live.walletChain === liveChainId());
+}
+function scanTx(hash){ return liveMeta().scan + '/tx/' + hash; }
+function scanAddr(addr){ return liveMeta().scan + '/address/' + addr; }
+
+/* ---- JSON-RPC + ABI, by hand: one contract, a dozen calls ---- */
+function rpcCall(method, params){
+  var w = wallet();
+  if (walletOnChain() && w && method !== 'eth_getLogs') return w.request({method: method, params: params});
+  return fetch(liveRpcUrl(), {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify({jsonrpc: '2.0', id: Date.now(), method: method, params: params})
+  }).then(function(res){ return res.json(); }).then(function(body){
+    if (body.error){
+      var e = new Error(body.error.message || 'rpc error');
+      e.data = body.error.data;
+      throw e;
+    }
+    return body.result;
+  });
+}
+function word(hex){ return String(hex).replace(/^0x/, '').padStart(64, '0'); }
+function encUint(n){ return word(BigInt(n).toString(16)); }
+function words(hex){
+  var s = String(hex || '').replace(/^0x/, '');
+  var out = [];
+  for (var i = 0; i + 64 <= s.length; i += 64) out.push(s.slice(i, i + 64));
+  return out;
+}
+function wUint(w){ return BigInt('0x' + w); }
+function wAddr(w){ return '0x' + w.slice(24); }
+function wBool(w){ return BigInt('0x' + w) !== 0n; }
+function ethCall(data, from){
+  var tx = {to: liveRelay(), data: data};
+  if (from) tx.from = from;
+  return rpcCall('eth_call', [tx, 'latest']);
+}
+function revertName(err){
+  var data = err && (err.data && (err.data.data || err.data)) || '';
+  if (typeof data !== 'string'){
+    var m = String((err && err.message) || '').match(/0x[0-9a-fA-F]{8}/);
+    data = m ? m[0] : '';
+  }
+  var sel = String(data).slice(0, 10).toLowerCase();
+  if (ERRORS[sel]){
+    if (ERRORS[sel] === 'CircuitDenied' && data.length >= 74) return 'CircuitDenied(0x' + parseInt(data.slice(-2), 16).toString(16).padStart(2, '0') + ')';
+    return ERRORS[sel];
+  }
+  return (err && err.message) ? String(err.message).slice(0, 120) : 'reverted';
+}
+function tokens(raw, unit){
+  if (raw === null || raw === undefined || !unit) return '—';
+  var whole = Number(raw) / Number(unit);
+  return whole.toLocaleString(undefined, {maximumFractionDigits: 2});
+}
+
+function loadLive(force){
+  if (!isLive() || live.busy) return;
+  if (!force && Date.now() - live.at < 15000) return;
+  live.busy = true;
+  var d = {};
+  Promise.all([
+    ethCall(SEL.status), ethCall(SEL.unit), ethCall(SEL.feeBpsNow), ethCall(SEL.volumeSwept),
+    ethCall(SEL.owner), ethCall(SEL.processor), ethCall(SEL.circuitId), ethCall(SEL.container),
+    ethCall(SEL.activationFee),
+    ethCall(SEL.circuitAllows + encUint(0x7e)), ethCall(SEL.circuitAllows + encUint(0x7f))
+  ]).then(function(r){
+    var s = words(r[0]);
+    d.token = wAddr(s[0]); d.armed = wBool(s[1]); d.paused = wBool(s[2]);
+    d.balance = wUint(s[3]); d.perTxCap = wUint(s[4]); d.dailyCap = wUint(s[5]);
+    d.spentToday = wUint(s[6]); d.keeper = wAddr(s[7]); d.savings = wAddr(s[8]); d.treasury = wAddr(s[9]);
+    d.unit = wUint(words(r[1])[0]); d.feeBps = Number(wUint(words(r[2])[0]));
+    d.volumeSwept = wUint(words(r[3])[0]); d.owner = wAddr(words(r[4])[0]);
+    d.processor = wAddr(words(r[5])[0]); d.circuitId = wUint(words(r[6])[0]);
+    d.container = wAddr(words(r[7])[0]); d.activationFee = wUint(words(r[8])[0]);
+    d.allows7e = wBool(words(r[9])[0]); d.allows7f = wBool(words(r[10])[0]);
+    d.sweep = d.perTxCap;
+    // The verdict tick would reach right now, asked as the keeper.
+    return ethCall(SEL.preview + encUint(d.sweep), d.keeper);
+  }).then(function(p){
+    var w = words(p);
+    d.previewBits = Number(wUint(w[0]));
+    d.previewAllow = wBool(w[1]);
+    return rpcCall('eth_blockNumber', []).then(function(bn){
+      var to = BigInt(bn);
+      var from = to > 9000n ? to - 9000n : 0n;
+      return rpcCall('eth_getLogs', [{address: liveRelay(), topics: [TOPIC_SWEEP], fromBlock: '0x' + from.toString(16), toBlock: '0x' + to.toString(16)}]);
+    }).then(function(logs){
+      d.sweeps = (logs || []).slice(-6).reverse().map(function(l){
+        var w2 = words(l.data);
+        return {hash: l.transactionHash, amount: wUint(w2[0]), fee: wUint(w2[1])};
+      });
+    }).catch(function(){ d.sweeps = null; });
+  }).then(function(){
+    live.data = d;
+    live.error = null;
+  }).catch(function(err){
+    live.error = 'Could not read the relay: ' + ((err && err.message) || err);
+  }).then(function(){
+    live.at = Date.now();
+    live.busy = false;
+    render();
+  });
+}
+
+/* ---- wallet ---- */
+function connectWallet(){
+  var w = wallet();
+  if (!w){
+    live.walletError = 'No wallet found. Install OKX Wallet or MetaMask, then reload.';
+    render();
+    return;
+  }
+  live.walletError = null;
+  w.request({method: 'eth_requestAccounts'}).then(function(accts){
+    live.account = accts && accts[0] ? accts[0] : null;
+    return w.request({method: 'eth_chainId'});
+  }).then(function(id){
+    live.walletChain = Number(id);
+    if (live.walletChain !== liveChainId()) return switchChain();
+  }).catch(function(err){
+    live.walletError = (err && err.message) || String(err);
+  }).then(function(){ render(); loadLive(true); });
+}
+function switchChain(){
+  var w = wallet();
+  var meta = liveMeta();
+  return w.request({method: 'wallet_switchEthereumChain', params: [{chainId: meta.hex}]}).catch(function(err){
+    if (err && (err.code === 4902 || /Unrecognized chain/i.test(err.message || ''))){
+      return w.request({method: 'wallet_addEthereumChain', params: [{
+        chainId: meta.hex, chainName: meta.name,
+        nativeCurrency: {name: 'OKB', symbol: 'OKB', decimals: 18},
+        rpcUrls: [meta.rpc], blockExplorerUrls: [meta.scan]
+      }]});
+    }
+    throw err;
+  }).then(function(){
+    return w.request({method: 'eth_chainId'});
+  }).then(function(id){ live.walletChain = Number(id); });
+}
+(function watchWallet(){
+  var w = wallet();
+  if (!w || !w.on) return;
+  w.on('accountsChanged', function(a){ live.account = a && a[0] ? a[0] : null; render(); });
+  w.on('chainChanged', function(id){ live.walletChain = Number(id); render(); loadLive(true); });
+})();
+
+function sendRelay(label, data, opts){
+  opts = opts || {};
+  var w = wallet();
+  if (!walletOnChain() || !w) return;
+  var tx = {from: live.account, to: liveRelay(), data: data};
+  // A fixed gas limit lets a transaction we expect to revert reach the chain,
+  // so the rejection is recorded on X Layer rather than only in the wallet.
+  if (opts.forceGas) tx.gas = '0x493e0';
+  var entry = {label: label, hash: null, state: 'signing', note: ''};
+  live.txs.unshift(entry);
+  render();
+  w.request({method: 'eth_sendTransaction', params: [tx]}).then(function(hash){
+    entry.hash = hash;
+    entry.state = 'pending';
+    render();
+    return waitReceipt(hash);
+  }).then(function(rcpt){
+    entry.state = rcpt && rcpt.status === '0x1' ? 'confirmed' : 'reverted on chain';
+  }).catch(function(err){
+    entry.state = 'not sent';
+    entry.note = revertName(err);
+  }).then(function(){ render(); loadLive(true); });
+}
+function waitReceipt(hash){
+  return new Promise(function(resolve, reject){
+    var tries = 0;
+    (function poll(){
+      rpcCall('eth_getTransactionReceipt', [hash]).then(function(r){
+        if (r) return resolve(r);
+        if (++tries > 60) return reject(new Error('no receipt after 2 minutes'));
+        setTimeout(poll, 2000);
+      }).catch(reject);
+    })();
+  });
+}
+
+/* ---- read-only checks anyone can run ---- */
+function dryRunRogue(){
+  var d = live.data;
+  if (!d) return;
+  var amount = 500n * d.unit;
+  live.dryRun = {state: 'asking'};
+  render();
+  // eth_call of tick() as the keeper: the chain runs the real checks and
+  // returns the revert reason, without anyone paying gas.
+  ethCall(SEL.tick + encUint(amount), d.keeper).then(function(){
+    live.dryRun = {state: 'done', text: 'tick(500 USDT) would SUCCEED — check the caps!', ok: false};
+  }).catch(function(err){
+    live.dryRun = {state: 'done', text: 'tick(500 USDT) rejected on chain: ' + revertName(err), ok: true};
+  }).then(render);
+}
+function probeCircuit(){
+  var b = Math.max(0, Math.min(127, Number(live.probeByte) || 0));
+  live.probe = {state: 'asking', byte: b};
+  render();
+  ethCall(SEL.circuitAllows + encUint(b)).then(function(r){
+    live.probe = {state: 'done', byte: b, allow: wBool(words(r)[0])};
+  }).catch(function(err){
+    live.probe = {state: 'done', byte: b, error: revertName(err)};
+  }).then(render);
+}
+
+/* ---- view ---- */
+function liveRole(){
+  var d = live.data;
+  if (!d || !live.account) return null;
+  if (sameAddress(live.account, d.owner)) return 'owner';
+  if (sameAddress(live.account, d.keeper)) return 'keeper';
+  return 'viewer';
+}
+function link(text, href){
+  return h('a', {href: href, target: '_blank', rel: 'noopener noreferrer', text: text});
+}
+function liveFact(label, value){
+  return h('div', {class: 'fact'}, h('dt', {text: label}), h('dd', {class: 'mono'}, value));
+}
+
+function liveCard(){
+  var d = live.data;
+  var meta = liveMeta();
+  var bar = h('div', {class: 'card-bar'},
+    h('h2', {class: 'h2', text: 'Live relay · ' + meta.name}),
+    h('span', {class: 'badge mono ' + (d && d.armed && !d.paused ? 'ok' : 'no'),
+      text: !d ? 'READING' : d.paused ? 'PAUSED' : d.armed ? 'ARMED' : 'NOT ARMED'})
+  );
+  if (!d){
+    return h('div', {class: 'card pad0'}, bar,
+      h('div', {class: 'body'}, h('p', {class: 'tiny', text: live.error || 'Reading ' + shortAddr(liveRelay()) + ' on chain…'})));
+  }
+  var u = d.unit;
+  var role = liveRole();
+  var actions = [];
+  if (!live.account){
+    actions.push(btn('Connect wallet', connectWallet, {amber: true, small: true}));
+  } else if (!walletOnChain()){
+    actions.push(btn('Switch to ' + meta.name, function(){ switchChain().then(render, function(e){ live.walletError = e.message; render(); }); }, {amber: true, small: true}));
+  }
+  if (role === 'owner' && walletOnChain()){
+    if (!d.armed) actions.push(btn('Arm on chain · ' + tokens(d.activationFee, u) + ' USDT', function(){ sendRelay('arm()', SEL.arm); }, {amber: true, small: true}));
+    actions.push(btn(d.paused ? 'Resume' : 'Pause', function(){
+      sendRelay(d.paused ? 'setPaused(false)' : 'setPaused(true)', SEL.setPaused + encUint(d.paused ? 0 : 1));
+    }, {small: true}));
+  }
+  if (role === 'keeper' && walletOnChain()){
+    actions.push(btn('Sweep ' + tokens(d.sweep, u) + ' USDT on chain', function(){ sendRelay('tick(' + tokens(d.sweep, u) + ')', SEL.tick + encUint(d.sweep)); }, {amber: true, small: true}));
+    actions.push(btn('Send rogue 500 (must revert)', function(){ sendRelay('tick(500) — rogue', SEL.tick + encUint(500n * u), {forceGas: true}); }, {small: true}));
+  }
+  actions.push(btn('Dry-run rogue 500', dryRunRogue, {small: true, ghost: true}));
+  actions.push(btn('Refresh', function(){ loadLive(true); }, {small: true, ghost: true}));
+
+  var bitsStr = d.previewBits.toString(2).padStart(7, '0').split('').reverse().join('');
+  var facts = h('dl', {class: 'facts'},
+    liveFact('Relay', link(shortAddr(liveRelay()), scanAddr(liveRelay()))),
+    liveFact('Container', link(shortAddr(d.container), scanAddr(d.container))),
+    liveFact('Container USDT', h('span', {text: tokens(d.balance, u)})),
+    liveFact('Sent to savings', h('span', {text: tokens(d.volumeSwept, u) + ' total · ' + tokens(d.spentToday, u) + ' / ' + tokens(d.dailyCap, u) + ' today'})),
+    liveFact('Caps', h('span', {text: tokens(d.perTxCap, u) + ' per tx · ' + tokens(d.dailyCap, u) + ' daily · fee ' + (d.feeBps / 100).toFixed(2) + '%'})),
+    liveFact('Next sweep verdict', h('span', {class: d.previewAllow ? 'ok' : 'no',
+      text: (d.previewAllow ? 'ALLOW' : 'DENY') + ' · byte 0x' + d.previewBits.toString(16).padStart(2, '0') + ' · bits ' + bitsStr})),
+    liveFact('TapeOut circuit', h('span', {}, link(shortAddr(d.processor), scanAddr(d.processor)),
+      h('span', {text: ' #' + d.circuitId.toString() + ' · eval(0x7e)=' + (d.allows7e ? 'allow' : 'deny') + ', eval(0x7f)=' + (d.allows7f ? 'allow' : 'deny')}))),
+    liveFact('Keeper', link(shortAddr(d.keeper), scanAddr(d.keeper))),
+    liveFact('Savings', link(shortAddr(d.savings), scanAddr(d.savings))),
+    liveFact('Owner', link(shortAddr(d.owner), scanAddr(d.owner))),
+    liveFact('You', h('span', {text: live.account ? shortAddr(live.account) + (role ? ' · ' + role : '') : 'not connected'}))
+  );
+
+  var circuitOk = d.allows7e && !d.allows7f;
+  var extra = [];
+  if (!circuitOk) extra.push(h('p', {class: 'tiny no', text: 'Circuit check failed: the taped-out circuit should allow 0x7e and deny 0x7f. Check the processor and circuit ID before funding.'}));
+  if (live.walletError) extra.push(h('p', {class: 'tiny no', text: live.walletError}));
+  if (live.error) extra.push(h('p', {class: 'tiny no', text: live.error}));
+  if (live.dryRun) extra.push(h('p', {class: 'tiny ' + (live.dryRun.ok ? 'ok' : 'no'), text: live.dryRun.state === 'asking' ? 'Asking the chain…' : live.dryRun.text}));
+  live.txs.slice(0, 5).forEach(function(t){
+    extra.push(h('p', {class: 'tiny mono'},
+      h('span', {text: t.label + ' · ' + t.state + (t.note ? ' · ' + t.note : '') + ' '}),
+      t.hash ? link(shortAddr(t.hash), scanTx(t.hash)) : null));
+  });
+  if (d.sweeps && d.sweeps.length){
+    extra.push(h('p', {class: 'label', text: 'Recent sweeps on chain'}));
+    d.sweeps.forEach(function(s){
+      extra.push(h('p', {class: 'tiny mono'},
+        h('span', {text: tokens(s.amount, u) + ' USDT + ' + tokens(s.fee, u) + ' fee · '}),
+        link(shortAddr(s.hash), scanTx(s.hash))));
+    });
+  }
+
+  return h('div', {class: 'card pad0'}, bar,
+    h('div', {class: 'body'}, facts, extra),
+    h('div', {class: 'card-foot'},
+      h('div', {class: 'row', style: 'flex-wrap:wrap;gap:.45rem'}, actions),
+      h('span', {class: 'tiny', text: 'Read from X Layer ' + (live.at ? since(live.at) : '') + '. Owner and keeper buttons appear when the connected wallet holds that role.'})
+    )
+  );
+}
+
+function probeCard(){
+  if (!isLive()) return null;
+  var p = live.probe;
+  var result = !p ? 'Pick a byte (0–127) and ask the deployed processor.'
+    : p.state === 'asking' ? 'Asking the chain…'
+    : p.error ? 'eval failed: ' + p.error
+    : 'Processor says ' + (p.allow ? 'ALLOW' : 'DENY') + ' for 0x' + p.byte.toString(16).padStart(2, '0') +
+      ' (expected ' + (p.byte === 0x7e ? 'ALLOW' : 'DENY') + ')';
+  return h('div', {class: 'card'},
+    h('p', {class: 'label', text: 'Ask the taped-out circuit on chain'}),
+    h('div', {class: 'row', style: 'margin-top:.5rem'},
+      h('label', {class: 'field'},
+        h('span', {text: 'Policy byte'}),
+        h('input', {type: 'number', min: '0', max: '127', 'data-k': 'probe-byte', value: String(live.probeByte),
+          oninput: function(e){ live.probeByte = e.target.value; }})
+      ),
+      btn('Ask chain', probeCircuit, {small: true, amber: true})
+    ),
+    h('p', {class: 'tiny ' + (p && p.state === 'done' && !p.error && (p.allow === (p.byte === 0x7e)) ? 'ok' : ''), style: 'margin-top:.5rem', text: result})
+  );
+}
+
+/* ------------------------------------------------------------------ *
  * Render
  * ------------------------------------------------------------------ */
 function render(){
@@ -1890,8 +2289,11 @@ function render(){
   app.append(main);
   app.append(h('footer', {},
     h('p', {class: 'foot',
-      text: 'Preview build. The netlist evaluator and the policy state machine run in this page — the balances and receipts here are simulated, and nothing on this page signs or broadcasts. LatchRelay is real: deploy it from this project and the Caps, fee and arming numbers above are the ones the contract enforces.'})
+      text: isLive()
+        ? 'The Live relay card reads the deployed LatchRelay on ' + liveMeta().name + ' and sends real transactions from your wallet. The practice simulator below it runs in this page and never signs.'
+        : 'Simulator build. The netlist evaluator and the policy state machine run in this page — the balances and receipts here are simulated, and nothing on this page signs or broadcasts. LatchRelay is real: deploy it from this project and the Caps, fee and arming numbers above are the ones the contract enforces.'})
   ));
+  if (isLive()) loadLive(false);
   if (statusOpen){
     app.append(statusView());
     loadPublic(false);
@@ -1921,6 +2323,7 @@ hydrate();
 loadOpsToken();
 render();
 syncTicker();
+if (isLive()) setInterval(function(){ loadLive(false); }, 20000);
 </script>
 </body>
 </html>
