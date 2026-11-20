@@ -33,31 +33,57 @@ const fee = await pub.readContract({ address: FACTORY, abi: ABI, functionName: '
 say('block ' + head + ' · deployFee() = ' + (typeof fee === 'bigint' ? fee + ' wei (' + formatEther(fee) + ' OKB)' : fee));
 say('cpuCount() = ' + await pub.readContract({ address: FACTORY, abi: ABI, functionName: 'cpuCount' }));
 const code = await pub.getCode({ address: FACTORY });
-say('factory code size: ' + ((code.length - 2) / 2) + ' bytes' + (code.length < 400 ? ' (proxy: ' + code + ')' : ''));
+say('factory code size: ' + ((code.length - 2) / 2) + ' bytes');
 const sel = toFunctionSelector(CREATE);
-say('createCPU selector ' + sel + (code.toLowerCase().includes(sel.slice(2)) ? ' found in code' : ' NOT found in code (proxy or renamed)'));
-
-// Walk back through factory logs to find recent createCPU transactions.
-let found = [];
-let to = head;
-const STEP = 5000n;
-for (let i = 0; i < 120 && found.length < 3 && to > 0n; i++){
-  const fromBlock = to > STEP ? to - STEP : 0n;
-  let logs = [];
-  try { logs = await pub.getLogs({ address: FACTORY, fromBlock, toBlock: to }); }
-  catch (e) { say('getLogs ' + fromBlock + '-' + to + ' failed: ' + (e.shortMessage || e.message).split('\n')[0]); break; }
-  const hashes = [...new Set(logs.map((l) => l.transactionHash))].reverse();
-  for (const h of hashes){
-    if (found.length >= 3) break;
-    const tx = await pub.getTransaction({ hash: h });
-    if (tx.to?.toLowerCase() !== FACTORY) continue;
-    const rc = await pub.getTransactionReceipt({ hash: h });
-    if (rc.status !== 'success') continue;
-    found.push({ tx, rc });
-  }
-  to = fromBlock - 1n;
+// ERC-1967 proxy: logic lives at the implementation slot.
+let logic = FACTORY;
+const slot = await pub.getStorageAt({ address: FACTORY, slot: '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc' });
+if (slot && BigInt(slot) !== 0n){
+  logic = '0x' + slot.slice(-40);
+  const icode = await pub.getCode({ address: logic });
+  say('proxy implementation ' + logic + ' (' + ((icode.length - 2) / 2) + ' bytes)');
+  say('createCPU(string,string,string,uint256,uint256) selector ' + sel + (icode.toLowerCase().includes(sel.slice(2)) ? ' FOUND in implementation' : ' NOT in implementation — signature changed'));
+  const pushes = [...new Set([...icode.toLowerCase().matchAll(/63([0-9a-f]{8})/g)].map((m) => '0x' + m[1]))].slice(0, 60);
+  say('implementation function selectors (first 60): ' + pushes.join(' '));
 }
-if (!found.length) say('No recent factory transactions found in the last ' + (head - to) + ' blocks.');
+
+// Try the call with a few plausible fees (simulation only).
+if (from){
+  const args = ['Latch Diagnose', 'LDIAG', 'diagnostic', 1000n, 10_000_000_000_000n];
+  for (const v of [typeof fee === 'bigint' ? fee : 0n, 0n, 6_600_000_000_000_000n, 10_000_000_000_000_000n]){
+    const r = await pub.simulateContract({ account: from, address: FACTORY, abi: ABI, functionName: 'createCPU', args, value: v })
+      .then(() => 'would SUCCEED').catch((e) => 'reverts: ' + ((e.cause && e.cause.data && e.cause.data.errorName) || (e.shortMessage || e.message).split('\n')[0]));
+    say('createCPU with value ' + formatEther(v) + ' OKB → ' + r);
+  }
+}
+
+// Find the newest processor's creation block by binary search on historical code.
+let found = [];
+const count = await pub.readContract({ address: FACTORY, abi: ABI, functionName: 'cpuCount' });
+const newest = await pub.readContract({ address: FACTORY, abi: parseAbi(['function cpuAt(uint256) view returns (address)']), functionName: 'cpuAt', args: [count - 1n] });
+say('newest processor #' + (count - 1n) + ' = ' + newest);
+let lo = 0n, hi = head, archive = true;
+try { await pub.getCode({ address: newest, blockNumber: head - 1000n }); } catch (e) { archive = false; say('RPC has no history (' + (e.shortMessage || e.message).split('\n')[0] + ')'); }
+if (archive){
+  while (lo < hi){
+    const mid = (lo + hi) / 2n;
+    const c = await pub.getCode({ address: newest, blockNumber: mid }).catch(() => undefined);
+    if (c && c !== '0x') hi = mid; else lo = mid + 1n;
+  }
+  say('created in block ' + lo);
+  const logs = await pub.getLogs({ address: FACTORY, fromBlock: lo, toBlock: lo }).catch((e) => { say('getLogs failed: ' + e.shortMessage); return []; });
+  let hashes = [...new Set(logs.map((l) => l.transactionHash))];
+  if (!hashes.length){
+    const blk = await pub.getBlock({ blockNumber: lo, includeTransactions: true });
+    hashes = blk.transactions.filter((t) => t.to && t.to.toLowerCase() === FACTORY).map((t) => t.hash);
+  }
+  for (const h of hashes){
+    const tx = await pub.getTransaction({ hash: h });
+    const rc = await pub.getTransactionReceipt({ hash: h });
+    if (rc.status === 'success') found.push({ tx, rc });
+  }
+}
+if (!found.length) say('Could not locate the creation transaction.');
 
 for (const { tx, rc } of found){
   say('\n--- successful factory tx ' + tx.hash + ' (block ' + rc.blockNumber + ')');
