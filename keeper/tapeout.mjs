@@ -21,7 +21,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createPublicClient, createWalletClient, http, parseAbi, formatEther,
-  decodeEventLog, defineChain
+  decodeEventLog, defineChain, decodeErrorResult
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
@@ -67,6 +67,9 @@ const ABI = parseAbi([
   'function approve(address spender, uint256 amount) returns (bool)',
   'function decimals() view returns (uint8)'
 ]);
+
+const ALLOWANCE_ERR = parseAbi(['error ERC20InsufficientAllowance(address spender, uint256 allowance, uint256 needed)']);
+const BEM_BALANCE = parseAbi(['function balanceOf(address) view returns (uint256)']);
 
 // Processor settings to try, in order. The first one that simulates cleanly is used.
 // Name uniqueness and a zero mint price are the usual reasons createCPU reverts.
@@ -138,23 +141,67 @@ async function main(){
   console.log('Total ≈          ' + formatEther(total) + ' OKB + gas (keep ~0.01 OKB extra)');
   console.log('Netlist          ' + NETLIST + ' (' + GATES.length + ' gates, allows only 0x7e)');
   if (!state.processor && bemBal < deployFee) throw new Error('Not enough BEM on X Layer: need ' + fmtBem(deployFee) + ' BEM (token ' + TAPEOUT.bem + ') in ' + account.address + ', have ' + fmtBem(bemBal) + '.');
-  if (balance < total + 5_000_000_000_000_000n) throw new Error('Not enough OKB. Send at least ' + formatEther(total + 10_000_000_000_000_000n) + ' OKB to ' + account.address + ' on X Layer.');
+  if (balance < openFee + 3_000_000_000_000_000n) throw new Error('Not enough OKB. Send at least ' + formatEther(total + 10_000_000_000_000_000n) + ' OKB to ' + account.address + ' on X Layer.');
   if (!SEND) console.log('\nDRY RUN — simulating only. Run with SEND=1 to send for real.\n');
 
-  async function send(label, address, functionName, args, value){
-    let request;
-    try {
-      ({ request } = await pub.simulateContract({ account, address, abi: ABI, functionName, args, value }));
-    } catch (err) {
-      throw new Error(label + ' would revert: ' + reason(err));
+  async function simulate(address, functionName, args, value){
+    return pub.simulateContract({ account, address, abi: ABI, functionName, args, value });
+  }
+  // If a call reverts with ERC20InsufficientAllowance, return { spender, needed }.
+  function allowanceAsk(err){
+    let c = err;
+    while (c){
+      const data = typeof c.data === 'string' ? c.data : (c.data && c.data.data);
+      if (typeof data === 'string' && data.startsWith('0xfb8f41b2')){
+        const d = decodeErrorResult({ abi: ALLOWANCE_ERR, data });
+        return { spender: d.args[0], needed: d.args[2] };
+      }
+      if (c.data && c.data.errorName === 'ERC20InsufficientAllowance') return { spender: c.data.args[0], needed: c.data.args[2] };
+      c = c.cause;
     }
-    console.log('  ✓ simulated  ' + label + (value ? '  (' + formatEther(value) + ' OKB)' : ''));
+    return null;
+  }
+  async function sendTx(label, request){
     if (!SEND) return null;
     const hash = await wallet.writeContract(request);
     console.log('    sent       https://www.oklink.com/xlayer/tx/' + hash);
     const receipt = await pub.waitForTransactionReceipt({ hash });
     if (receipt.status !== 'success') throw new Error(label + ' reverted on chain: ' + hash);
     return receipt;
+  }
+  // TapeOut fees moved from OKB to BEM in Nov 2026. Try the OKB value first; if the
+  // chain says it wants a BEM allowance instead, approve exactly that and pay in BEM.
+  async function send(label, address, functionName, args, value){
+    let request;
+    try {
+      ({ request } = await simulate(address, functionName, args, value));
+      console.log('  ✓ simulated  ' + label + (value ? '  (' + formatEther(value) + ' OKB)' : ''));
+      return await sendTx(label, request);
+    } catch (first) {
+      if (first.message && first.message.includes('reverted on chain')) throw first;
+      let ask = allowanceAsk(first);
+      if (!ask && value){
+        try { await simulate(address, functionName, args, 0n); } catch (second) { ask = allowanceAsk(second); }
+      }
+      if (!ask) throw new Error(label + ' would revert: ' + reason(first));
+      const have = await pub.readContract({ address: TAPEOUT.bem, abi: BEM_BALANCE, functionName: 'balanceOf', args: [account.address] });
+      console.log('  ' + label + ' is paid in BEM: ' + fmtBem(ask.needed) + ' BEM to ' + ask.spender + ' (you have ' + fmtBem(have) + ')');
+      if (have < ask.needed) throw new Error('Not enough BEM for ' + label + ': need ' + fmtBem(ask.needed) + ', have ' + fmtBem(have));
+      const { request: approveReq } = await simulate(TAPEOUT.bem, 'approve', [ask.spender, ask.needed], 0n);
+      console.log('  ✓ simulated  approve ' + fmtBem(ask.needed) + ' BEM');
+      if (!SEND){
+        console.log('  (dry run: ' + label + ' can be simulated only after the approval exists)');
+        return null;
+      }
+      await sendTx('approve BEM for ' + label, approveReq);
+      try {
+        ({ request } = await simulate(address, functionName, args, 0n));
+      } catch (third) {
+        throw new Error(label + ' would revert even after the BEM approval: ' + reason(third));
+      }
+      console.log('  ✓ simulated  ' + label + ' (paid in BEM)');
+      return await sendTx(label, request);
+    }
   }
   const findEvent = (receipt, name) => receipt.logs.map((l) => {
     try { return decodeEventLog({ abi: ABI, data: l.data, topics: l.topics }); } catch { return null; }
@@ -217,10 +264,10 @@ async function main(){
   if (!state.circuitId && have < need){
     console.log('Step 2/4  mint ' + (need - have) + ' NAND transistors');
     const amount = need - have;
-    // Value = mint price × amount + one protocol fee, read from this processor's own transistor contract.
-    const [price, pfee] = await Promise.all([read(state.transistors, 'mintPrice'), read(state.transistors, 'protocolFee')]);
-    const value = price * amount + pfee;
+    // Nov 2026: mint price 0, a flat 0.01 BEM protocol fee per mint call, pulled by approval.
+    const value = 0n;
     const r = await send('mint NAND × ' + amount, state.transistors, 'mint', [NAND, amount], value);
+    if (!r) return dryRunEnd();
     state.mintTx = r.transactionHash;
     save();
   }
@@ -230,6 +277,7 @@ async function main(){
     console.log('Step 3/4  tape out the 13-gate policy');
     const fee = await read(state.processor, 'TAPEOUT_FEE');
     const r = await send('tapeout', state.processor, 'tapeout', [NETLIST, N_IN, N_OUT], fee);
+    if (!r) return dryRunEnd();
     const ev = findEvent(r, 'TapedOut');
     if (!ev) throw new Error('tapeout: no TapedOut event in ' + r.transactionHash);
     state.circuitId = ev.args.circuitId.toString();
@@ -244,6 +292,7 @@ async function main(){
   if (!(await read(TAPEOUT.opener, 'isOpened', [state.processor, id]))){
     console.log('Step 4/4  open the container');
     const r = await send('open container', TAPEOUT.opener, 'open', [state.processor, id], openFee);
+    if (!r) return dryRunEnd();
     state.openTx = r.transactionHash;
   }
   save();
