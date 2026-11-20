@@ -20,12 +20,17 @@
     "outputs": 1,
     "allows": "0x7e only (verified on chain: eval(0x7e)=0x01, eval(0x7f)=0x00)",
     "mintTx": "0xad02e4f123a0321615951c4a188ca7b7925fbaa79ea064239a6778c5487ff541",
-    "tapeoutTx": "0x98fbfe8668acf1f5127d6d825dcc3b6751169de9c9843185723b11b3b1906304"
+    "tapeoutTx": "0x98fbfe8668acf1f5127d6d825dcc3b6751169de9c9843185723b11b3b1906304",
+    "nftOwner": "0xA4b9259279e4D5130FA563cB64B7aB73e2237A02"
   },
   "container": {
     "address": "0xa38EB1b5Bf13C423b5aE5D844F08dc6774A9fCe0",
     "openTx": "0xb9022c913e8af88d9886d908315ced3914079bc184bbb85c2f6cbf09c75df369"
   },
   "owner": "0xb4bDEAc86CBdd0C148BB98504e1c35d8451A23a4",
-  "relay": null
+  "relay": null,
+  "failedRelay": {
+    "address": "0xA4b9259279e4D5130FA563cB64B7aB73e2237A02",
+    "note": "Container-custody relay without execute fee; holds circuit #1 NFT; 15 USDT0 stuck in container 0xa38E\u2026fCe0 (ProtocolFeeTooLow). Superseded by the self-custody vault."
+  }
 }

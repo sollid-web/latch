@@ -1595,7 +1595,7 @@ function operateView(){
     isLive() ? liveCard() : null,
     isLive() ? h('p', {class: 'sim-note', text: 'Practice simulator · the numbers below are simulated in this page'}) : null,
     h('section', {class: 'grid3'},
-      stat('Container USDT', money(s.usdt), tapeName(s)),
+      stat('Vault USDT', money(s.usdt), tapeName(s)),
       stat('Sent to savings', money(s.swept), 'Cap ' + money(s.spentToday) + ' / ' + money(s.daily) + ' today'),
       stat('Daemon', daemonLabel(s), daemonNote(s))
     ),
@@ -2206,8 +2206,8 @@ function liveCard(){
   var bitsStr = d.previewBits.toString(2).padStart(7, '0').split('').reverse().join('');
   var facts = h('dl', {class: 'facts'},
     liveFact('Relay', link(shortAddr(liveRelay()), scanAddr(liveRelay()))),
-    liveFact('Container', link(shortAddr(d.container), scanAddr(d.container))),
-    liveFact('Container USDT', h('span', {text: tokens(d.balance, u)})),
+    
+    liveFact('Vault USDT', h('span', {text: tokens(d.balance, u)})),
     liveFact('Sent to savings', h('span', {text: tokens(d.volumeSwept, u) + ' total · ' + tokens(d.spentToday, u) + ' / ' + tokens(d.dailyCap, u) + ' today'})),
     liveFact('Caps', h('span', {text: tokens(d.perTxCap, u) + ' per tx · ' + tokens(d.dailyCap, u) + ' daily · fee ' + (d.feeBps / 100).toFixed(2) + '%'})),
     liveFact('Next sweep verdict', h('span', {class: d.previewAllow ? 'ok' : 'no',

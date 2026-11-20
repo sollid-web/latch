@@ -2,8 +2,9 @@
 
 Everything an auditor needs to start on the first hour of the review, and nothing
 that belongs in the shipped page. The contract is `contracts/LatchRelay.sol`
-(`LatchRelay`, ~300 lines, no imports). It calls the TapeOut processor's `eval`
-and moves funds only through the ERC-6551 container. The suite is
+(`LatchRelay`, ~330 lines, no imports): a self-custody vault whose every sweep
+must be allowed by the TapeOut processor's `eval` for a taped-out circuit
+(X Layer: processor 0x3728…6813, circuit #1). The suite is
 `audit/test/LatchRelay.t.sol.txt`.
 
 ## Why the test file ends in `.txt`
@@ -40,79 +41,62 @@ slither contracts/LatchRelay.sol --solc 0.8.24
 
 ## What the contract claims
 
-A savings sweep whose funds never leave the TapeOut circuit container except
-through two locks in the same transaction. The tokens sit in an ERC-6551
-container; the relay owns the circuit NFT, so only the relay can call
-`container.execute`. A keeper key, funded only for gas, calls `tick(amount)`.
-Solidity checks keeper, armed, pause, per-tx cap, daily cap and funding; then the
-relay builds the 7-bit policy byte and requires `processor.eval(circuitId, byte)`
-to return allow. Only then does the container transfer `amount` to the fixed
-`savings` address and the fee to the fixed `treasury` address. Neither the
-Solidity checks nor the circuit is trusted alone: a lying processor cannot
-lift a cap, and a denying processor blocks a sweep the Solidity would allow.
+A savings sweep whose funds never leave the vault except through two locks in
+the same transaction. Tokens sit in the relay contract itself (funded by a plain
+transfer). A keeper key, funded only for gas, calls `tick(amount)`. Solidity
+checks keeper, armed, pause, per-tx cap, daily cap and funding; then the relay
+builds the 7-bit policy byte and requires `processor.eval(circuitId, byte)` to
+return allow (STATICCALL: the circuit can deny, never move funds). Only then
+does the vault transfer `amount` to the fixed `savings` address and the fee to
+the fixed `treasury` address. A lying processor cannot lift a cap; a denying
+processor blocks a sweep the Solidity would allow.
 
 Seven bits, bit 0 least significant: 0 paused, 1 caller is the keeper, 2 target
 is savings, 3 action is the sweep, 4 within per-tx cap, 5 within daily cap,
-6 container holds amount + fee. The taped-out netlist (13 NAND gates) allows
-exactly `0x7e`. `circuitAllows(byte)` exposes the circuit's raw answer so anyone
-can check the deployed netlist against that truth table. `preview(amount)`
-returns the byte for the real caller and the verdict `tick` would reach.
+6 vault holds amount + fee. The taped-out netlist (13 NAND gates, TAP-02 wire
+numbering) allows exactly `0x7e`; verified on X Layer. `circuitAllows(byte)`
+exposes the circuit's raw answer; `preview(amount)` returns the byte for the
+real caller and the verdict `tick` would reach.
 
-Units: caps, activation fee and fee tiers are in the token's base units. Tiers
-scale with `decimals()` read at deploy (1 000 / 5 000 / 20 000 whole tokens), so
-6-decimal X Layer USDT works. Fee ladder 100 / 75 / 50 / 25 bps by cumulative
-principal swept. Processor, circuit ID, container, token, savings, treasury and
-activation fee are immutable. Caps only move down.
+Units: caps, activation fee and fee tiers are in the token's base units; tiers
+scale with `decimals()`. Fee ladder 100 / 75 / 50 / 25 bps by cumulative
+principal swept. Processor, circuit ID, token, savings, treasury and activation
+fee are immutable. Caps only move down.
 
 ## Threat model
 
 | Actor | Can | Cannot |
 | --- | --- | --- |
-| Owner (deployer EOA, transferable) | pause, set keeper, tighten caps, arm, withdraw, transfer ownership | raise a cap, change savings/treasury/token/processor, take back the NFT |
+| Owner (deployer EOA, transferable) | pause, set keeper, tighten caps, arm, withdraw, transfer ownership | raise a cap, change savings/treasury/token/processor |
 | Keeper (hot key, gas only) | call `tick` within caps when the circuit allows | choose a destination, unpause, set caps, withdraw, arm |
-| TapeOut processor | deny any sweep | approve a sweep the Solidity checks reject |
+| TapeOut processor | deny any sweep (or break sweeps by reverting) | move funds, approve a sweep Solidity rejects, block `withdraw` |
 | Stranger | read everything, call `preview`/`circuitAllows` | call `tick` or any admin function |
 | Token contract | refuse transfers, reenter | reenter past the `nonReentrant` lock |
 
-A compromised keeper can only trigger legal, capped sweeps to `savings`. A
-compromised owner key can `withdraw` everything — intended and disclosed.
+`withdraw` never touches the processor, so the owner can always recover funds
+even if the processor reverts or is upgraded.
+
+## History: why the vault holds funds itself
+
+The first mainnet relay (0xA4b9…7A02) kept funds in the circuit's ERC-6551
+container. TapeOut containers charge 0.0013 OKB on every `execute`, which that
+relay never attached, so every call reverted with `ProtocolFeeTooLow(0, 1.3e15)`.
+It owned the circuit NFT, so 15 USDT0 in that container is stuck unless TapeOut
+waives the fee. The current design reads the circuit's public `eval` and holds
+funds itself: no NFT transfer, no container fee per sweep, and `golive.sh`
+proves a mainnet deposit-and-withdraw round trip before any real funding.
 
 ## Disclosed limitations
 
-0. **TapeOut containers charge an OKB protocol fee on every `execute`**
-   (0.0013 OKB on X Layer, found when the first deployment could not arm:
-   `ProtocolFeeTooLow(0, 1.3e15)`). The relay pays `execFee` per execute from
-   its OKB balance; callers attach it (`execCost(amount)` for a sweep) or the
-   owner pre-funds the relay. `execFee` is owner-settable up to 0.01 OKB, and
-   `withdrawOkb` recovers unused OKB. The first relay (0xA4b9…7A02) predates
-   this and cannot execute.
-
-1. **The owner can withdraw the entire container balance** to any address. The
-   relay holds the circuit NFT permanently, so without this funds could strand.
-2. **The NFT is one-way.** Once the relay owns it, the container can only act
-   through the relay. A new relay means a new container.
-3. **`eval` input/output encoding is assumed**: one input byte, allow = bit 0 of
-   the first output byte. Confirm against the TapeOut processor docs on the
-   target processor before funding; `circuitAllows(126)`/`(127)` is the check.
-4. **The fee rounds down**, and is zero below 100 base units.
-5. **The day is UTC calendar midnight**, not a rolling 24 hours.
-6. **Wrong deploy numbers need a redeploy**: caps only go down; fee and
+1. **The owner can withdraw the entire vault balance** to any address.
+2. **`eval` input/output encoding**: one input byte, allow = bit 0 of the first
+   output byte — verified on X Layer for circuit #1.
+3. **The fee rounds down**, and is zero below 100 base units.
+4. **The day is UTC calendar midnight**, not a rolling 24 hours.
+5. **Wrong deploy numbers need a redeploy**: caps only go down; fee and
    activation fee are fixed.
-7. **Fee-on-transfer and rebasing tokens are not supported.**
-8. **The fee for a sweep uses the tier before it**, not including it.
-
-## Static analysis
-
-Slither (81 detectors, informational excluded) on `contracts/LatchRelay.sol`:
-0 results. Before that run it reported three items, triaged as follows:
-
-| Detector | Where | Verdict |
-| --- | --- | --- |
-| reentrancy-no-eth | `arm()` set `armed` after `_pull` | Not exploitable (owner-only, `nonReentrant`, only views could observe it). Fixed anyway: state is written before the external call. |
-| divide-before-multiply | `_spentToday`, `_rollDay` | Intentional: floors `block.timestamp` to UTC midnight. Suppressed inline. |
-| timestamp | same | Intentional: a daily cap; validator drift of seconds is irrelevant. Suppressed inline. |
-
-Reproduce: `slither contracts/LatchRelay.sol --compile-force-framework solc`.
+6. **Fee-on-transfer and rebasing tokens are not supported.**
+7. **The fee for a sweep uses the tier before it**, not including it.
 
 ## Keeper discipline (off-chain, out of scope)
 
@@ -146,23 +130,22 @@ or pause the relay.
 
 ## Coverage
 
-37 tests. The test processor interprets the real TAP-02 netlist bytes from
-`src/lib/latch/circuit.ts`, and the test container enforces NFT ownership, so
-the suite exercises the actual circuit and custody path: constructor wiring and
-rejection of zero addresses, bad cap order and code-less token/processor; the
-full 128-entry truth table (only `0x7e` allows); a denying processor reverting
-`CircuitDenied` when Solidity passes; a lying processor unable to lift the
-per-tx cap; empty `eval` output; arm fee accounting, double arm, owner-only and
-underfunded arm; a relay without the NFT unable to move funds; sweep and fee
-accounting; keeper-only, unarmed, paused, zero and the 500-USDT rogue amount;
-daily cap and UTC rollover; underfunded including fee; false-returning token;
-reentrancy; `preview` for keeper, stranger, rogue and paused; caps only down;
-owner-only withdraw; ownership transfer; `status`; the fee ladder at 6
-decimals; a fee-charging container (unfunded relay reverts, caller-attached
-fee works, zero fee surfaces the container's error, fee bound, OKB recovery);
+32 tests. The test processor implements TAP-02 semantics (constants at signals
+0/1, inputs from signal 2, nIn/nOut, input length, output packing) and runs the
+exact circuit #1 netlist. Covered: constructor wiring and rejections; the full
+128-entry truth table (only `0x7e` allows); a regression showing the
+pre-fix netlist fails on a real processor; denying, lying and empty-output
+processors; arm fee accounting, double arm, owner-only, underfunded arm; sweep
+and fee accounting; keeper-only, unarmed, paused, zero and rogue amounts; daily
+cap and UTC rollover; underfunded including fee; false-returning token;
+reentrancy (token revert reason bubbled); `preview` for keeper, stranger, rogue
+and paused; caps only down; withdraw owner-only, while paused, unarmed, and with
+a broken processor; ownership transfer; `status`; the fee ladder at 6 decimals;
 and a fuzz test that two sweeps never exceed the caps.
 
-Not covered: the off-chain keeper, the Cloudflare Worker, and the page.
+Also rehearsed on a local chain 196: `golive.sh` (settings check, circuit check,
+deposit/withdraw round trip), arm, a 2-token sweep, a rogue 500 rejected on
+chain with `OverCap`, full withdraw, and the console in headless Chrome.
 
 ## Questions worth paying an auditor to answer
 
