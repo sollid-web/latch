@@ -52,7 +52,7 @@ if (from){
   const args = ['Latch Diagnose', 'LDIAG', 'diagnostic', 1000n, 10_000_000_000_000n];
   for (const v of [typeof fee === 'bigint' ? fee : 0n, 0n, 6_600_000_000_000_000n, 10_000_000_000_000_000n]){
     const r = await pub.simulateContract({ account: from, address: FACTORY, abi: ABI, functionName: 'createCPU', args, value: v })
-      .then(() => 'would SUCCEED').catch((e) => 'reverts: ' + ((e.cause && e.cause.data && e.cause.data.errorName) || (e.shortMessage || e.message).split('\n')[0]));
+      .then(() => 'would SUCCEED').catch((e) => { const d = e.cause && e.cause.data; return 'reverts: ' + (d && d.errorName ? d.errorName + '(' + (d.args || []).map(String).join(', ') + ')' : (e.shortMessage || e.message).split('\n')[0]); });
     say('createCPU with value ' + formatEther(v) + ' OKB → ' + r);
   }
 }

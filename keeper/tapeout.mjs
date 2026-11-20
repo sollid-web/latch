@@ -66,11 +66,14 @@ const ABI = parseAbi([
 // Processor settings to try, in order. The first one that simulates cleanly is used.
 // Name uniqueness and a zero mint price are the usual reasons createCPU reverts.
 const SUFFIX = process.env.CPU_SUFFIX || '';
+// The newest processor on mainnet (Nov 2026) was created with 0 OKB, mint price 0,
+// supply 10000, so those come first. value: null means "use deployFee()".
 const CPU_VARIANTS = [
-  { name: 'Latch' + SUFFIX, symbol: 'LATCH' + SUFFIX, supply: 1000n, mintPrice: 10_000_000_000_000n },
-  { name: 'Latch Policy' + SUFFIX, symbol: 'LATCHP' + SUFFIX, supply: 1000n, mintPrice: 10_000_000_000_000n },
-  { name: 'Latch Sweep Relay' + SUFFIX, symbol: 'LTCHR' + SUFFIX, supply: 100000n, mintPrice: 10_000_000_000_000n },
-  { name: 'Latch' + SUFFIX, symbol: 'LATCH' + SUFFIX, supply: 1000n, mintPrice: 0n }
+  { name: 'Latch Policy' + SUFFIX, symbol: 'LATCHP' + SUFFIX, supply: 10000n, mintPrice: 0n, value: 0n },
+  { name: 'Latch Sweep Relay' + SUFFIX, symbol: 'LTCHR' + SUFFIX, supply: 10000n, mintPrice: 0n, value: 0n },
+  { name: 'Latch Policy' + SUFFIX, symbol: 'LATCHP' + SUFFIX, supply: 10000n, mintPrice: 0n, value: null },
+  { name: 'Latch Policy' + SUFFIX, symbol: 'LATCHP' + SUFFIX, supply: 10000n, mintPrice: 10_000_000_000_000n, value: 0n },
+  { name: 'Latch Policy' + SUFFIX, symbol: 'LATCHP' + SUFFIX, supply: 1000n, mintPrice: 10_000_000_000_000n, value: null }
 ];
 
 const SEND = process.env.SEND === '1';
@@ -152,19 +155,20 @@ async function main(){
     let chosen = null;
     for (const v of CPU_VARIANTS){
       try {
+        const value = v.value === null ? deployFee : v.value;
         await pub.simulateContract({ account, address: TAPEOUT.factory, abi: ABI, functionName: 'createCPU',
-          args: [v.name, v.symbol, STORY, v.supply, v.mintPrice], value: deployFee });
-        chosen = v;
-        console.log('  ✓ simulates  name "' + v.name + '", symbol ' + v.symbol + ', supply ' + v.supply + ', mint price ' + formatEther(v.mintPrice) + ' OKB');
+          args: [v.name, v.symbol, STORY, v.supply, v.mintPrice], value });
+        chosen = { ...v, value };
+        console.log('  ✓ simulates  name "' + v.name + '", symbol ' + v.symbol + ', supply ' + v.supply + ', mint price ' + formatEther(v.mintPrice) + ' OKB, sending ' + formatEther(value) + ' OKB');
         break;
       } catch (err) {
-        console.log('  ✗ reverts    name "' + v.name + '", mint price ' + formatEther(v.mintPrice) + ' OKB → ' + reason(err));
+        console.log('  ✗ reverts    name "' + v.name + '", supply ' + v.supply + ', mint price ' + formatEther(v.mintPrice) + ', sending ' + (v.value === null ? 'deployFee' : formatEther(v.value) + ' OKB') + ' → ' + reason(err));
       }
     }
     if (!chosen) throw new Error('createCPU reverts for every setting tried. Paste this whole output to Claude.');
     if (!SEND) return dryRunEnd();
     const r = await send('createCPU', TAPEOUT.factory, 'createCPU',
-      [chosen.name, chosen.symbol, STORY, chosen.supply, chosen.mintPrice], deployFee);
+      [chosen.name, chosen.symbol, STORY, chosen.supply, chosen.mintPrice], chosen.value);
     const ev = findEvent(r, 'CPUCreated');
     if (!ev) throw new Error('createCPU: no CPUCreated event in ' + r.transactionHash);
     // Do not trust event argument order: the processor is the one with TAPEOUT_FEE(),
@@ -240,7 +244,8 @@ function reason(err){
   const parts = [];
   let e = err;
   while (e){
-    if (e.data && e.data.errorName) parts.push(e.data.errorName + (e.data.args ? '(' + e.data.args.join(', ') + ')' : ''));
+    if (e.data && e.data.errorName) parts.push(e.data.errorName + (e.data.args ? '(' + e.data.args.map(String).join(', ') + ')' : ''));
+    if (typeof e.data === 'string' && e.data.length > 2) parts.push('data ' + e.data.slice(0, 74));
     if (e.reason) parts.push(e.reason);
     if (e.signature) parts.push('error ' + e.signature);
     e = e.cause;
