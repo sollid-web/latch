@@ -30,6 +30,8 @@ loadEnv(path.join(HERE, '.env'));
 
 const TAPEOUT = {
   factory: '0x1f09daefa827f02cbb40967cc91b259763760761',
+  // createCPU pulls deployFee() of BEM (8 decimals) from the caller (Nov 2026).
+  bem: '0x60e62efa9405d6873c5deabd4e6cc91c25363952',
   opener: '0x536add8f30f03b69f6fbf29d425a816a0dc50106'
 };
 const NAND = 0n;
@@ -60,7 +62,10 @@ const ABI = parseAbi([
   'function cpuCount() view returns (uint256)',
   'function cpuAt(uint256) view returns (address)',
   'function transistors() view returns (address)',
-  'function mintPrice() view returns (uint256)'
+  'function mintPrice() view returns (uint256)',
+  'function allowance(address owner, address spender) view returns (uint256)',
+  'function approve(address spender, uint256 amount) returns (bool)',
+  'function decimals() view returns (uint8)'
 ]);
 
 // Processor settings to try, in order. The first one that simulates cleanly is used.
@@ -68,12 +73,12 @@ const ABI = parseAbi([
 const SUFFIX = process.env.CPU_SUFFIX || '';
 // The newest processor on mainnet (Nov 2026) was created with 0 OKB, mint price 0,
 // supply 10000, so those come first. value: null means "use deployFee()".
+// Matches the newest successful mainnet createCPU: no OKB attached, mint price 0
+// (MAX_MINT_PRICE is 0.000001 OKB), the BEM fee pulled via approve. Only the name varies.
 const CPU_VARIANTS = [
   { name: 'Latch Policy' + SUFFIX, symbol: 'LATCHP' + SUFFIX, supply: 10000n, mintPrice: 0n, value: 0n },
   { name: 'Latch Sweep Relay' + SUFFIX, symbol: 'LTCHR' + SUFFIX, supply: 10000n, mintPrice: 0n, value: 0n },
-  { name: 'Latch Policy' + SUFFIX, symbol: 'LATCHP' + SUFFIX, supply: 10000n, mintPrice: 0n, value: null },
-  { name: 'Latch Policy' + SUFFIX, symbol: 'LATCHP' + SUFFIX, supply: 10000n, mintPrice: 10_000_000_000_000n, value: 0n },
-  { name: 'Latch Policy' + SUFFIX, symbol: 'LATCHP' + SUFFIX, supply: 1000n, mintPrice: 10_000_000_000_000n, value: null }
+  { name: 'Latch Savings Circuit' + SUFFIX, symbol: 'LTCHS' + SUFFIX, supply: 10000n, mintPrice: 0n, value: 0n }
 ];
 
 const SEND = process.env.SEND === '1';
@@ -118,15 +123,21 @@ async function main(){
   } catch { /* keep the October figure */ }
   const mintFee = refProtocolFee + 10_000_000_000_000n * BigInt(GATES.length);
   const tapeoutGuess = 1_300_000_000_000_000n; // read for real once the processor exists
-  const total = (state.processor ? 0n : deployFee) + mintFee + tapeoutGuess + openFee;
+  const total = mintFee + tapeoutGuess + openFee;
+  const [bemBal, bemAllow] = await Promise.all([
+    pub.readContract({ address: TAPEOUT.bem, abi: parseAbi(['function balanceOf(address) view returns (uint256)']), functionName: 'balanceOf', args: [account.address] }),
+    read(TAPEOUT.bem, 'allowance', [account.address, TAPEOUT.factory])
+  ]);
 
   console.log('Owner wallet     ' + account.address);
   console.log('OKB balance      ' + formatEther(balance));
-  console.log('Fees             createCPU ' + formatEther(deployFee) + ' · mint 13 NAND ≈ ' + formatEther(mintFee) +
+  console.log('BEM              balance ' + fmtBem(bemBal) + ' · approved to factory ' + fmtBem(bemAllow) + ' · createCPU fee ' + fmtBem(deployFee));
+  console.log('Fees             createCPU ' + fmtBem(deployFee) + ' BEM · mint 13 NAND ≈ ' + formatEther(mintFee) +
     ' · tapeout ≈ ' + formatEther(tapeoutGuess) + ' · open ' + formatEther(openFee));
   console.log('Factory          ' + TAPEOUT.factory + ' · ' + cpuCount + ' processors so far');
   console.log('Total ≈          ' + formatEther(total) + ' OKB + gas (keep ~0.01 OKB extra)');
   console.log('Netlist          ' + NETLIST + ' (' + GATES.length + ' gates, allows only 0x7e)');
+  if (!state.processor && bemBal < deployFee) throw new Error('Not enough BEM on X Layer: need ' + fmtBem(deployFee) + ' BEM (token ' + TAPEOUT.bem + ') in ' + account.address + ', have ' + fmtBem(bemBal) + '.');
   if (balance < total + 5_000_000_000_000_000n) throw new Error('Not enough OKB. Send at least ' + formatEther(total + 10_000_000_000_000_000n) + ' OKB to ' + account.address + ' on X Layer.');
   if (!SEND) console.log('\nDRY RUN — simulating only. Run with SEND=1 to send for real.\n');
 
@@ -152,6 +163,18 @@ async function main(){
   // 1. Processor
   if (!state.processor){
     console.log('Step 1/4  create your processor');
+    if (bemAllow < deployFee){
+      console.log('  approve ' + fmtBem(deployFee) + ' BEM to the TapeOut factory (exact amount, nothing more)');
+      if (!SEND){
+        await pub.simulateContract({ account, address: TAPEOUT.bem, abi: ABI, functionName: 'approve', args: [TAPEOUT.factory, deployFee] });
+        console.log('  ✓ simulated  approve');
+        console.log('\nDry run OK up to the approval. createCPU can only be simulated after the approval exists,');
+        console.log('so the real run approves first, then simulates createCPU before sending it.');
+        console.log('When ready:  SEND=1 node tapeout.mjs');
+        return;
+      }
+      await send('approve BEM', TAPEOUT.bem, 'approve', [TAPEOUT.factory, deployFee], 0n);
+    }
     let chosen = null;
     for (const v of CPU_VARIANTS){
       try {
@@ -239,6 +262,8 @@ async function main(){
   console.log('  PROCESSOR=' + state.processor + ' CIRCUIT_ID=' + state.circuitId + ' CONTAINER=' + state.container + ' \\');
   console.log('  OWNER_KEY=$OWNER_PRIVATE_KEY USDT=… SAVINGS=… TREASURY=… KEEPER=… ./scripts/golive.sh');
 }
+
+function fmtBem(x){ return x === null || x === undefined ? '?' : (Number(x) / 1e8).toString(); }
 
 function reason(err){
   const parts = [];
