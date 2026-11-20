@@ -183,11 +183,12 @@ contract LatchRelay {
     function arm() external onlyOwner nonReentrant {
         if (armed) revert AlreadyArmed();
         uint256 fee = activationFee;
+        // Effects before interactions; a failed pull reverts the whole call.
+        armed = true;
         if (fee > 0) {
             if (token.balanceOf(address(container)) < fee) revert UnderfundedActivation();
             _pull(treasury, fee);
         }
-        armed = true;
         emit Armed(msg.sender, fee);
     }
 
@@ -327,6 +328,7 @@ contract LatchRelay {
         if (result.length < 32 || !abi.decode(result, (bool))) revert TransferFailed();
     }
 
+    // slither-disable-next-line divide-before-multiply,timestamp
     function _spentToday() internal view returns (uint256) {
         uint256 start = (block.timestamp / DAY) * DAY;
         if (start != dayStart) return 0;
@@ -334,6 +336,8 @@ contract LatchRelay {
     }
 
     /// @dev UTC day, matching the console's calendar date. Not a rolling 24h window.
+    ///      Flooring to midnight is intentional (Slither divide-before-multiply).
+    // slither-disable-next-line divide-before-multiply,timestamp
     function _rollDay() internal {
         uint256 start = (block.timestamp / DAY) * DAY;
         if (start != dayStart) {

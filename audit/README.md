@@ -93,6 +93,19 @@ compromised owner key can `withdraw` everything — intended and disclosed.
 7. **Fee-on-transfer and rebasing tokens are not supported.**
 8. **The fee for a sweep uses the tier before it**, not including it.
 
+## Static analysis
+
+Slither (81 detectors, informational excluded) on `contracts/LatchRelay.sol`:
+0 results. Before that run it reported three items, triaged as follows:
+
+| Detector | Where | Verdict |
+| --- | --- | --- |
+| reentrancy-no-eth | `arm()` set `armed` after `_pull` | Not exploitable (owner-only, `nonReentrant`, only views could observe it). Fixed anyway: state is written before the external call. |
+| divide-before-multiply | `_spentToday`, `_rollDay` | Intentional: floors `block.timestamp` to UTC midnight. Suppressed inline. |
+| timestamp | same | Intentional: a daily cap; validator drift of seconds is irrelevant. Suppressed inline. |
+
+Reproduce: `slither contracts/LatchRelay.sol --compile-force-framework solc`.
+
 ## Keeper discipline (off-chain, out of scope)
 
 The contract knows nothing about a "dip" or a market price. It enforces hard
