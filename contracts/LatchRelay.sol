@@ -42,12 +42,17 @@ interface IERC20 {
 ///         public view; this contract only reads it. Funds never leave except
 ///         to `savings`/`treasury` via `tick`/`arm`, or to the owner's choice
 ///         via `withdraw`, all plain token transfers from this contract.
+///         `withdraw` never touches the processor. It does depend on the token:
+///         if the token issuer pauses transfers or blocks this address, no
+///         contract holding that token can move it. Keep balances small.
 contract LatchRelay {
     /// @notice Starting sweep fee. Falls with cumulative volume (see feeBpsFor).
     uint256 public constant FEE_BPS = 100;
     uint256 private constant DAY = 1 days;
 
     address public owner;
+    /// @notice Two-step ownership: the new owner must accept.
+    address public pendingOwner;
     IProcessor public immutable processor;
     uint256 public immutable circuitId;
     IERC20 public immutable token;
@@ -74,6 +79,7 @@ contract LatchRelay {
     event KeeperSet(address indexed keeper);
     event PausedSet(bool paused);
     event Withdrawn(address indexed to, uint256 amount);
+    event OwnershipTransferStarted(address indexed from, address indexed to);
     event OwnershipTransferred(address indexed from, address indexed to);
 
     error NotOwner();
@@ -91,6 +97,7 @@ contract LatchRelay {
     error CapRaised();
     error Reentered();
     error BadToken();
+    error BadRecipient();
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
@@ -120,6 +127,11 @@ contract LatchRelay {
                 || treasury_ == address(0) || keeper_ == address(0)
         ) revert ZeroAddress();
         if (perTxCap_ == 0 || dailyCap_ == 0 || perTxCap_ > dailyCap_) revert OverCap();
+        // Sweeps to the token or processor contract could never come back.
+        if (
+            savings_ == token_ || savings_ == processor_ || treasury_ == token_ || treasury_ == processor_
+                || savings_ == address(this) || treasury_ == address(this)
+        ) revert BadRecipient();
         if (processor_.code.length == 0) revert BadEval();
         if (token_.code.length == 0) revert BadToken();
         uint8 dec = IERC20(token_).decimals();
@@ -141,10 +153,20 @@ contract LatchRelay {
 
     // ---------------------------------------------------------------- admin
 
+    /// @notice Step 1: propose a new owner. Nothing changes until they accept,
+    ///         so a typo cannot lock the vault.
     function transferOwnership(address next) external onlyOwner {
         if (next == address(0)) revert ZeroAddress();
-        emit OwnershipTransferred(owner, next);
-        owner = next;
+        pendingOwner = next;
+        emit OwnershipTransferStarted(owner, next);
+    }
+
+    /// @notice Step 2: the proposed owner accepts.
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert NotOwner();
+        emit OwnershipTransferred(owner, msg.sender);
+        owner = msg.sender;
+        pendingOwner = address(0);
     }
 
     function setPaused(bool next) external onlyOwner {
@@ -158,8 +180,7 @@ contract LatchRelay {
         emit KeeperSet(next);
     }
 
-    /// @notice Caps can only move down. Raising them would let a stolen owner key
-    ///         set a higher ceiling for the keeper.
+    /// @notice Caps can only move down, so a stolen keeper key's ceiling never rises.
     function setCaps(uint256 perTxCap_, uint256 dailyCap_) external onlyOwner {
         if (perTxCap_ == 0 || dailyCap_ == 0 || perTxCap_ > dailyCap_) revert OverCap();
         if (perTxCap_ > perTxCap || dailyCap_ > dailyCap) revert CapRaised();
@@ -169,6 +190,7 @@ contract LatchRelay {
     }
 
     /// @notice Pays `activationFee` of `token` from the vault to `treasury`.
+    ///         The `Armed` event's first field is the owner who armed it.
     ///         A zero fee still arms.
     function arm() external onlyOwner nonReentrant {
         if (armed) revert AlreadyArmed();
@@ -182,10 +204,15 @@ contract LatchRelay {
     }
 
     /// @notice Owner rescue: the only path that can send funds anywhere except
-    ///         savings and treasury. Works paused or unarmed.
+    ///         savings and treasury. Works paused, unarmed, and with a broken
+    ///         processor. `amount = type(uint256).max` withdraws everything, so a
+    ///         keeper sweep landing first cannot make a full withdraw fail.
     function withdraw(address to, uint256 amount) external onlyOwner nonReentrant {
         if (to == address(0)) revert ZeroAddress();
-        if (amount == 0 || amount > token.balanceOf(address(this))) revert Underfunded();
+        uint256 bal = token.balanceOf(address(this));
+        if (amount == type(uint256).max) amount = bal;
+        // slither-disable-next-line incorrect-equality (rejecting a zero withdraw; not balance-gameable)
+        if (amount == 0 || amount > bal) revert Underfunded();
         _send(to, amount);
         emit Withdrawn(to, amount);
     }
@@ -312,6 +339,7 @@ contract LatchRelay {
 
     /// @dev Token transfer from the vault. Accepts an empty return (non-standard
     ///      tokens) or a single `true`; anything else reverts.
+    // slither-disable-next-line low-level-calls,assembly (safe-transfer pattern, bubbles token errors)
     function _send(address to, uint256 amount) internal {
         (bool ok, bytes memory ret) =
             address(token).call(abi.encodeWithSelector(IERC20.transfer.selector, to, amount));
@@ -324,6 +352,7 @@ contract LatchRelay {
             }
             revert TransferFailed();
         }
+        // slither-disable-next-line incorrect-equality (no return data = non-standard token)
         if (ret.length == 0) {
             if (address(token).code.length == 0) revert TransferFailed();
             return;

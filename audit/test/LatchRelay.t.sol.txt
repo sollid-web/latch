@@ -412,13 +412,45 @@ contract LatchRelayTest is Test {
         assertEq(token.balanceOf(address(r)), 0);
     }
 
-    function testTransferOwnership() public {
+    function testTwoStepOwnership() public {
         vm.prank(OWNER);
         relay.transferOwnership(KEEPER);
+        assertEq(relay.owner(), OWNER, "nothing changes until accepted");
+        assertEq(relay.pendingOwner(), KEEPER);
+        vm.prank(SAVINGS);
+        vm.expectRevert(LatchRelay.NotOwner.selector);
+        relay.acceptOwnership();
+        vm.prank(KEEPER);
+        relay.acceptOwnership();
         assertEq(relay.owner(), KEEPER);
+        assertEq(relay.pendingOwner(), address(0));
         vm.prank(OWNER);
         vm.expectRevert(LatchRelay.NotOwner.selector);
         relay.setPaused(true);
+    }
+
+    function testOwnershipTypoIsRecoverable() public {
+        vm.startPrank(OWNER);
+        relay.transferOwnership(address(0xdead));
+        relay.transferOwnership(KEEPER); // fix the typo: still owner
+        relay.withdraw(OWNER, type(uint256).max);
+        vm.stopPrank();
+        assertEq(token.balanceOf(address(relay)), 0);
+    }
+
+    function testWithdrawMaxBeatsKeeperFrontRun() public {
+        vm.prank(KEEPER);
+        relay.tick(1); // lands first
+        vm.prank(OWNER);
+        relay.withdraw(OWNER, type(uint256).max);
+        assertEq(token.balanceOf(address(relay)), 0);
+    }
+
+    function testBadRecipientsRejected() public {
+        vm.expectRevert(LatchRelay.BadRecipient.selector);
+        new LatchRelay(address(processor), 1, address(token), address(token), TREASURY, KEEPER, 1, 1, 0);
+        vm.expectRevert(LatchRelay.BadRecipient.selector);
+        new LatchRelay(address(processor), 1, address(token), SAVINGS, address(processor), KEEPER, 1, 1, 0);
     }
 
     function testStatusReadsVaultBalance() public view {

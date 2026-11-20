@@ -1,0 +1,270 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {Test} from "forge-std/Test.sol";
+import {LatchRelay, IProcessor} from "../../contracts/LatchRelay.sol";
+
+/// Tether-like token: blocklist on sender (TetherTokenV2 style), global pause,
+/// optional fee-on-transfer, optional "block recipient" mode.
+contract TetherLike {
+    uint8 public constant decimals = 6;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => bool) public isBlocked;
+    bool public paused;
+    bool public blockRecipients;
+    uint256 public feeBps;
+
+    function mint(address to, uint256 a) external { balanceOf[to] += a; }
+    function block_(address u) external { isBlocked[u] = true; }
+    function unblock(address u) external { isBlocked[u] = false; }
+    function setPaused(bool p) external { paused = p; }
+    function setBlockRecipients(bool b) external { blockRecipients = b; }
+    function setFee(uint256 b) external { feeBps = b; }
+    function destroyBlockedFunds(address u) external { require(isBlocked[u]); balanceOf[u] = 0; }
+
+    function transfer(address to, uint256 a) external returns (bool) {
+        require(!paused, "Pausable: paused");
+        require(!isBlocked[msg.sender], "TetherToken: from is blocked");
+        if (blockRecipients) require(!isBlocked[to], "TetherToken: to is blocked");
+        require(balanceOf[msg.sender] >= a, "balance");
+        balanceOf[msg.sender] -= a;
+        uint256 f = (a * feeBps) / 10_000;
+        balanceOf[to] += a - f;
+        return true;
+    }
+}
+
+/// TAP-02 processor running the taped-out circuit #1 netlist (copied from the suite).
+contract NetlistProcessor {
+    mapping(uint256 => bytes) public netlist;
+    function tape(uint256 id, bytes calldata net) external { netlist[id] = net; }
+    function eval(uint256 id, bytes calldata inputs) external view returns (bytes memory out) {
+        bytes memory net = netlist[id];
+        require(net.length > 0 && inputs.length == 1, "bad");
+        uint256 nIn = 7; uint256 n = net.length / 7;
+        bool[] memory s = new bool[](2 + nIn + n);
+        s[1] = true;
+        for (uint256 i = 0; i < nIn; i++) s[2 + i] = (uint8(inputs[0]) >> i) & 1 == 1;
+        for (uint256 g = 0; g < n; g++) {
+            uint256 o = g * 7;
+            uint256 a = (uint256(uint8(net[o + 1])) << 16) | (uint256(uint8(net[o + 2])) << 8) | uint8(net[o + 3]);
+            uint256 b = (uint256(uint8(net[o + 4])) << 16) | (uint256(uint8(net[o + 5])) << 8) | uint8(net[o + 6]);
+            s[2 + nIn + g] = !(s[a] && s[b]);
+        }
+        out = new bytes(1);
+        if (s[2 + nIn + n - 1]) out[0] = 0x01;
+    }
+}
+
+/// Processor "upgraded" by TapeOut in various hostile/broken ways.
+contract BrokenProcessor {
+    uint256 public mode; // 1 revert, 2 writes state (non-view), 3 burn gas, 4 returndata bomb, 5 requires fee
+    uint256 public counter;
+    function setMode(uint256 m) external { mode = m; }
+    function eval(uint256, bytes calldata) external payable returns (bytes memory out) {
+        if (mode == 1) revert("upgraded: eval disabled");
+        if (mode == 2) { counter++; return hex"01"; }
+        if (mode == 3) { while (true) {} }
+        if (mode == 4) { assembly { return(0, 3000000) } }
+        if (mode == 5) { require(msg.value >= 1.3e15, "ProtocolFeeTooLow"); return hex"01"; }
+        return hex"01";
+    }
+}
+
+contract PocTest is Test {
+    bytes internal constant NETLIST =
+        hex"00000002000002000000030000090000000a00000a0000000b0000040000000c00000c0000000d0000050000000e00000e0000000f0000060000001000001000000011000007000000120000120000001300000800000014000014";
+    uint256 internal constant U = 1e6;
+    address internal constant OWNER = address(0xC0FFEE);
+    address internal constant KEEPER = address(0xCAFE);
+    address internal constant SAVINGS = address(0x5A7E);
+    address internal constant TREASURY = address(0x7BEA5);
+
+    TetherLike internal usdt;
+    NetlistProcessor internal proc;
+    LatchRelay internal relay;
+
+    function setUp() public {
+        vm.warp(1_800_000_000);
+        usdt = new TetherLike();
+        proc = new NetlistProcessor();
+        proc.tape(1, NETLIST);
+        relay = _deploy(address(proc));
+        usdt.mint(address(relay), 5 * U);
+        vm.prank(OWNER);
+        relay.arm(); // 1 USDT0 to treasury, 4 left
+    }
+
+    function _deploy(address p) internal returns (LatchRelay r) {
+        vm.prank(OWNER);
+        r = new LatchRelay(p, 1, address(usdt), SAVINGS, TREASURY, KEEPER, 2 * U, 6 * U, 1 * U);
+    }
+
+    // ---- Q3: "owner can always recover the full balance" ----
+
+    /// Token-level blocklist of the relay freezes everything; nothing in the relay can help.
+    function test_BlacklistedRelay_WithdrawImpossible() public {
+        usdt.block_(address(relay));
+        vm.prank(OWNER);
+        vm.expectRevert(bytes("TetherToken: from is blocked"));
+        relay.withdraw(OWNER, 4 * U);
+        // issuer can then burn the frozen balance
+        usdt.destroyBlockedFunds(address(relay));
+        assertEq(usdt.balanceOf(address(relay)), 0);
+    }
+
+    /// Global token pause: withdraw reverts until unpaused (temporary).
+    function test_PausedToken_WithdrawReverts() public {
+        usdt.setPaused(true);
+        vm.prank(OWNER);
+        vm.expectRevert(bytes("Pausable: paused"));
+        relay.withdraw(OWNER, 4 * U);
+        usdt.setPaused(false);
+        vm.prank(OWNER);
+        relay.withdraw(OWNER, 4 * U);
+    }
+
+    /// If only the owner EOA is blocked (as recipient), withdraw to another address works.
+    function test_BlockedOwner_WithdrawToOtherAddressWorks() public {
+        usdt.setBlockRecipients(true);
+        usdt.block_(OWNER);
+        vm.prank(OWNER);
+        vm.expectRevert(bytes("TetherToken: to is blocked"));
+        relay.withdraw(OWNER, 4 * U);
+        vm.prank(OWNER);
+        relay.withdraw(address(0xBEEF), 4 * U);
+        assertEq(usdt.balanceOf(address(0xBEEF)), 4 * U);
+    }
+
+    /// Processor upgraded/broken in every way: tick dies, withdraw always works.
+    function test_ProcessorFailureModes_TickDies_WithdrawWorks() public {
+        BrokenProcessor bp = new BrokenProcessor();
+        for (uint256 m = 1; m <= 5; m++) {
+            LatchRelay r = _deploy(address(bp));
+            usdt.mint(address(r), 5 * U);
+            vm.prank(OWNER);
+            r.arm();
+            bp.setMode(m);
+            vm.prank(KEEPER);
+            (bool ok,) = address(r).call{gas: 5_000_000}(abi.encodeCall(LatchRelay.tick, (1 * U)));
+            assertFalse(ok, "tick must fail");
+            // preview is also unusable (keeper skips)
+            vm.prank(KEEPER);
+            (ok,) = address(r).call{gas: 5_000_000}(abi.encodeCall(LatchRelay.preview, (1 * U)));
+            assertFalse(ok, "preview must fail");
+            vm.prank(OWNER);
+            r.withdraw(OWNER, 4 * U);
+            assertEq(usdt.balanceOf(address(r)), 0);
+        }
+    }
+
+    /// A (compromised) keeper can front-run a full-balance withdraw and make it revert.
+    /// Recovery: pause first, then withdraw. No withdrawAll / max sentinel exists.
+    function test_KeeperFrontRunsFullWithdraw() public {
+        uint256 bal = usdt.balanceOf(address(relay)); // owner reads 4 USDT0
+        vm.prank(KEEPER);
+        relay.tick(1); // front-run with 1 base unit (fee 0)
+        vm.prank(OWNER);
+        vm.expectRevert(LatchRelay.Underfunded.selector);
+        relay.withdraw(OWNER, bal);
+        // FIXED (L-1): withdraw(max) empties the vault even after the front-run.
+        vm.prank(OWNER);
+        relay.withdraw(OWNER, type(uint256).max);
+        assertEq(usdt.balanceOf(address(relay)), 0);
+    }
+
+    /// Single-step ownership: a typo permanently removes withdraw. On an unarmed
+    /// vault (or with a dead processor) the balance is then locked forever.
+    function test_OwnershipTypo_NowRecoverable() public {
+        BrokenProcessor bp = new BrokenProcessor();
+        bp.setMode(1);
+        LatchRelay r = _deploy(address(bp));
+        usdt.mint(address(r), 5 * U);
+        vm.prank(OWNER);
+        r.transferOwnership(address(0xDEaD0000000000000000000000000000000000aA)); // typo
+        // FIXED (M-3): two-step ownership, so the typo changes nothing and funds stay recoverable.
+        assertEq(r.owner(), OWNER);
+        vm.prank(OWNER);
+        r.withdraw(OWNER, 5 * U);
+        assertEq(usdt.balanceOf(address(r)), 0);
+    }
+
+    // ---- fee / cap edge cases ----
+
+    /// Any tick < 100 base units pays zero fee (fee evasion by splitting).
+    function test_FeeRoundsToZeroBelow100Units() public {
+        uint256 t0 = usdt.balanceOf(TREASURY);
+        vm.startPrank(KEEPER);
+        for (uint256 i; i < 10; i++) relay.tick(99);
+        vm.stopPrank();
+        assertEq(usdt.balanceOf(TREASURY), t0);
+        assertEq(usdt.balanceOf(SAVINGS), 990);
+    }
+
+    /// dailyCap bounds principal only; real outflow per day = dailyCap + fees.
+    function test_DailyOutflowExceedsDailyCapByFees() public {
+        usdt.mint(address(relay), 10 * U);
+        uint256 b0 = usdt.balanceOf(address(relay));
+        vm.startPrank(KEEPER);
+        relay.tick(2 * U); relay.tick(2 * U); relay.tick(2 * U);
+        vm.stopPrank();
+        assertEq(b0 - usdt.balanceOf(address(relay)), 6 * U + 60_000); // 6.06 > 6
+    }
+
+    /// The tick path can only ever send 0x7e to the circuit: every other bit
+    /// pattern is rejected by Solidity first, so the circuit is a pure
+    /// second opinion that TapeOut (as processor upgrader) can veto.
+    function test_TickAlwaysEvaluates0x7e(uint256 amt) public {
+        usdt.mint(address(relay), 10 * U);
+        amt = bound(amt, 1, 2 * U);
+        vm.expectCall(address(proc), abi.encodeCall(IProcessor.eval, (1, hex"7e")));
+        vm.prank(KEEPER);
+        relay.tick(amt);
+    }
+
+    /// Public getter spentToday() is raw storage and stale after UTC midnight;
+    /// status() reports the rolled value. A console reading spentToday() is wrong.
+    function test_SpentTodayGetterStaleAfterRollover() public {
+        vm.prank(KEEPER);
+        relay.tick(2 * U);
+        vm.warp(block.timestamp + 1 days);
+        (,,,,,, uint256 s,,,) = relay.status();
+        assertEq(s, 0);
+        assertEq(relay.spentToday(), 2 * U); // stale
+    }
+
+    /// Fee-on-transfer token: no lock, savings just receive less. (USDT0 has no fee today.)
+    function test_FeeOnTransfer_NoLock() public {
+        usdt.setFee(100);
+        vm.prank(KEEPER);
+        relay.tick(1 * U);
+        assertEq(usdt.balanceOf(SAVINGS), 990_000);
+        uint256 rest = usdt.balanceOf(address(relay));
+        vm.prank(OWNER);
+        relay.withdraw(OWNER, rest);
+        assertEq(usdt.balanceOf(address(relay)), 0);
+    }
+
+    /// Keeper sizing: after 2 ticks of 2 USDT0 from a 4.0 vault... the remainder
+    /// below perTxCap + fee is never swept because daemon.mjs does not clamp to balance.
+    function test_KeeperRemainderNeverSwept() public {
+        vm.prank(KEEPER);
+        relay.tick(2 * U); // 4 -> 1.98
+        vm.prank(KEEPER);
+        (uint8 bits, bool allow) = relay.preview(2 * U); // what daemon.mjs asks next
+        assertEq(bits & 64, 0);
+        assertFalse(allow);
+        assertEq(usdt.balanceOf(address(relay)), 1_980_000);
+    }
+
+    /// Lowering dailyCap below spentToday just blocks sweeps for the day (fine).
+    function test_SetCapsBelowSpentToday() public {
+        vm.prank(KEEPER);
+        relay.tick(2 * U);
+        vm.prank(OWNER);
+        relay.setCaps(1 * U, 1 * U);
+        vm.prank(KEEPER);
+        vm.expectRevert(LatchRelay.OverCap.selector);
+        relay.tick(1);
+    }
+}

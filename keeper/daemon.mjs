@@ -69,6 +69,7 @@ const BREAKER_SWING_PCT = Number(env('BREAKER_SWING_PCT', '6'));
 const BREAKER_COOLDOWN_MS = Number(env('BREAKER_COOLDOWN_MS', '600000'));
 
 const RELAY_ABI = parseAbi([
+  'function feeBpsNow() view returns (uint256)',
   'function tick(uint256 amount)',
   'function preview(uint256 amount) view returns (uint8 bits, bool allow)',
   'function status() view returns (address token_, bool armed_, bool paused_, uint256 balance_, uint256 perTxCap_, uint256 dailyCap_, uint256 spentToday_, address keeper_, address savings_, address treasury_)',
@@ -230,6 +231,12 @@ async function sweepAmount(relay) {
   let amount = wanted > relay.perTxCap ? relay.perTxCap : wanted;
   const dailyLeft = relay.dailyCap > relay.spentToday ? relay.dailyCap - relay.spentToday : 0n;
   if (amount > dailyLeft) amount = dailyLeft;
+  // The vault must cover amount + fee; never ask for more than it can pay.
+  try {
+    const bps = await publicClient.readContract({ address: RELAY_ADDRESS, abi: RELAY_ABI, functionName: 'feeBpsNow' });
+    const affordable = (relay.balance * 10_000n) / (10_000n + bps);
+    if (amount > affordable) amount = affordable;
+  } catch { /* status/preview still gate the send */ }
   if (amount <= 0n) {
     log('SKIP', 'daily cap exhausted — not sweeping');
     return 0n;
@@ -245,12 +252,18 @@ async function sendTick(amount) {
     data
   });
   const gasPrice = await publicClient.getGasPrice();
-  return walletClient.sendTransaction({
+  // Refuse absurd gas prices from a misbehaving RPC (X Layer gas is normally tiny).
+  const maxGwei = BigInt(process.env.MAX_GAS_GWEI || '50');
+  if (gasPrice > maxGwei * 1_000_000_000n) throw new Error('gas price ' + gasPrice + ' wei above MAX_GAS_GWEI=' + maxGwei);
+  const hash = await walletClient.sendTransaction({
     to: RELAY_ADDRESS,
     data,
     gas: gas + gas / 5n, // +20% headroom
     gasPrice
   });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
+  if (receipt.status !== 'success') throw new Error('tick mined but reverted: ' + hash);
+  return hash;
 }
 
 /* ---------------------------------------------------------------- heartbeat */
@@ -382,7 +395,7 @@ async function runOnce() {
   log('SWEEP', `${via} dip ${consensusPrice.toFixed(2)} <= ${THRESHOLD} (${votes}/${ok.length} venues) — sending tick(${amount})`);
   const hash = await sendTick(amount);
   lastSweepAt = now;
-  log('SWEPT', 'tick broadcast ' + hash);
+  log('SWEPT', 'tick confirmed ' + hash);
   await heartbeat(relay, { paused: 0, running: 1, price: consensusPrice || 0, lastTx: hash });
 }
 
@@ -424,7 +437,7 @@ async function main() {
   log('START', 'keeper ' + account.address + ' watching relay ' + RELAY_ADDRESS + ' on chain ' + CHAIN_ID);
   log('START', 'threshold ' + THRESHOLD + ' · sweep ' + SWEEP_USDT + ' USDT · consensus 2/3 · TWAP fallback · volatility breaker on');
 
-  await runOnce();
+  await runOnce().catch((err) => log('ERR', (err && err.message) || String(err)));
   setInterval(() => {
     runOnce().catch((err) => log('ERR', (err && err.message) || String(err)));
   }, PRICE_INTERVAL_MS);
