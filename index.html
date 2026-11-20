@@ -1892,7 +1892,7 @@ var SEL = {
   feeBpsNow: '0x1ca9f2e4', volumeSwept: '0x44bdb65a', owner: '0x8da5cb5b',
   processor: '0xce1b1d43', circuitId: '0x030c9d5c', container: '0x90e534a7',
   unit: '0x907af6c0', activationFee: '0x77d630ae',
-  arm: '0x370419e5', setPaused: '0x16c38b3c', tick: '0xfc7b6aee'
+  execFee: '0x5df970ef', arm: '0x370419e5', setPaused: '0x16c38b3c', tick: '0xfc7b6aee'
 };
 var TOPIC_SWEEP = '0x3da7689974f13093359934c7f011f3c8cbe727f25892e588f8eef693942efa4c';
 var ERRORS = {
@@ -2007,7 +2007,8 @@ function loadLive(force){
     ethCall(SEL.status), ethCall(SEL.unit), ethCall(SEL.feeBpsNow), ethCall(SEL.volumeSwept),
     ethCall(SEL.owner), ethCall(SEL.processor), ethCall(SEL.circuitId), ethCall(SEL.container),
     ethCall(SEL.activationFee),
-    ethCall(SEL.circuitAllows + encUint(0x7e)), ethCall(SEL.circuitAllows + encUint(0x7f))
+    ethCall(SEL.circuitAllows + encUint(0x7e)), ethCall(SEL.circuitAllows + encUint(0x7f)),
+    ethCall(SEL.execFee).catch(function(){ return '0x0'; })
   ]).then(function(r){
     var s = words(r[0]);
     d.token = wAddr(s[0]); d.armed = wBool(s[1]); d.paused = wBool(s[2]);
@@ -2018,6 +2019,7 @@ function loadLive(force){
     d.processor = wAddr(words(r[5])[0]); d.circuitId = wUint(words(r[6])[0]);
     d.container = wAddr(words(r[7])[0]); d.activationFee = wUint(words(r[8])[0]);
     d.allows7e = wBool(words(r[9])[0]); d.allows7f = wBool(words(r[10])[0]);
+    d.execFee = words(r[11]).length ? wUint(words(r[11])[0]) : 0n;
     d.sweep = d.perTxCap;
     // The verdict tick would reach right now, asked as the keeper.
     return ethCall(SEL.preview + encUint(d.sweep), d.keeper);
@@ -2094,6 +2096,8 @@ function sendRelay(label, data, opts){
   var w = wallet();
   if (!walletOnChain() || !w) return;
   var tx = {from: live.account, to: liveRelay(), data: data};
+  // TapeOut containers charge OKB per execute; the relay forwards what we attach.
+  if (opts.value) tx.value = '0x' + BigInt(opts.value).toString(16);
   // A fixed gas limit lets a transaction we expect to revert reach the chain,
   // so the rejection is recorded on X Layer rather than only in the wallet.
   if (opts.forceGas) tx.gas = '0x493e0';
@@ -2187,14 +2191,14 @@ function liveCard(){
     actions.push(btn('Switch to ' + meta.name, function(){ switchChain().then(render, function(e){ live.walletError = e.message; render(); }); }, {amber: true, small: true}));
   }
   if (role === 'owner' && walletOnChain()){
-    if (!d.armed) actions.push(btn('Arm on chain · ' + tokens(d.activationFee, u) + ' USDT', function(){ sendRelay('arm()', SEL.arm); }, {amber: true, small: true}));
+    if (!d.armed) actions.push(btn('Arm on chain · ' + tokens(d.activationFee, u) + ' USDT', function(){ sendRelay('arm()', SEL.arm, {value: d.execFee}); }, {amber: true, small: true}));
     actions.push(btn(d.paused ? 'Resume' : 'Pause', function(){
       sendRelay(d.paused ? 'setPaused(false)' : 'setPaused(true)', SEL.setPaused + encUint(d.paused ? 0 : 1));
     }, {small: true}));
   }
   if (role === 'keeper' && walletOnChain()){
-    actions.push(btn('Sweep ' + tokens(d.sweep, u) + ' USDT on chain', function(){ sendRelay('tick(' + tokens(d.sweep, u) + ')', SEL.tick + encUint(d.sweep)); }, {amber: true, small: true}));
-    actions.push(btn('Send rogue 500 (must revert)', function(){ sendRelay('tick(500) — rogue', SEL.tick + encUint(500n * u), {forceGas: true}); }, {small: true}));
+    actions.push(btn('Sweep ' + tokens(d.sweep, u) + ' USDT on chain', function(){ sendRelay('tick(' + tokens(d.sweep, u) + ')', SEL.tick + encUint(d.sweep), {value: 2n * d.execFee}); }, {amber: true, small: true}));
+    actions.push(btn('Send rogue 500 (must revert)', function(){ sendRelay('tick(500) — rogue', SEL.tick + encUint(500n * u), {forceGas: true, value: 2n * d.execFee}); }, {small: true}));
   }
   actions.push(btn('Dry-run rogue 500', dryRunRogue, {small: true, ghost: true}));
   actions.push(btn('Refresh', function(){ loadLive(true); }, {small: true, ghost: true}));

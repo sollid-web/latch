@@ -48,7 +48,7 @@ contract HookToken is Token(6) {
     function transfer(address to, uint256 amount) external override returns (bool) {
         if (hookOn) {
             hookOn = false;
-            LatchRelay(relay).tick(1e6);
+            LatchRelay(payable(relay)).tick(1e6);
         }
         require(balanceOf[msg.sender] >= amount, "balance");
         balanceOf[msg.sender] -= amount;
@@ -118,9 +118,12 @@ contract ConstProcessor {
     }
 }
 
-/// @dev Minimal ERC-6551-style account: only the NFT holder can execute.
+/// @dev Minimal ERC-6551-style account: only the NFT holder can execute, and each
+///      execute must pay the protocol fee in native coin, like TapeOut's containers.
 contract Container {
     address public nftOwner;
+    uint256 public constant PROTOCOL_FEE = 1.3e15;
+    error ProtocolFeeTooLow(uint256 sent, uint256 needed);
 
     function setNftOwner(address o) external {
         nftOwner = o;
@@ -132,8 +135,9 @@ contract Container {
         returns (bytes memory)
     {
         require(msg.sender == nftOwner, "not NFT owner");
+        if (msg.value < PROTOCOL_FEE) revert ProtocolFeeTooLow(msg.value, PROTOCOL_FEE);
         require(operation == 0, "call only");
-        (bool ok, bytes memory ret) = to.call{value: value}(data);
+        (bool ok, bytes memory ret) = to.call{value: value}(data); // fee stays in the container
         if (!ok) {
             assembly {
                 revert(add(ret, 32), mload(ret))
@@ -152,6 +156,7 @@ contract LatchRelayTest is Test {
         hex"000000000000000000000100000700000008000008000000090000020000000a00000a0000000b0000030000000c00000c0000000d0000040000000e00000e0000000f000005000000100000100000001100000600000012000012";
     uint256 internal constant CIRCUIT_ID = 7;
     uint256 internal constant U = 1e6; // 6-decimal USDT, as on X Layer
+    uint256 internal constant EF = 1.3e15; // container execute fee, OKB
 
     address internal constant OWNER = address(0xC0FFEE);
     address internal constant KEEPER = address(0xCAFE);
@@ -177,8 +182,9 @@ contract LatchRelayTest is Test {
 
     function _deploy(address proc, address tok) internal returns (LatchRelay r) {
         vm.prank(OWNER);
-        r = new LatchRelay(proc, CIRCUIT_ID, address(container), tok, SAVINGS, TREASURY, KEEPER, 50 * U, 150 * U, 5 * U);
+        r = new LatchRelay(proc, CIRCUIT_ID, address(container), tok, SAVINGS, TREASURY, KEEPER, 50 * U, 150 * U, 5 * U, EF);
         container.setNftOwner(address(r));
+        vm.deal(address(r), 1 ether); // pre-funded for execute fees
     }
 
     // ------------------------------------------------------------ construction
@@ -195,25 +201,25 @@ contract LatchRelayTest is Test {
 
     function testZeroAddressesRejected() public {
         vm.expectRevert(LatchRelay.ZeroAddress.selector);
-        new LatchRelay(address(0), 1, address(container), address(token), SAVINGS, TREASURY, KEEPER, 1, 1, 0);
+        new LatchRelay(address(0), 1, address(container), address(token), SAVINGS, TREASURY, KEEPER, 1, 1, 0, 0);
         vm.expectRevert(LatchRelay.ZeroAddress.selector);
-        new LatchRelay(address(processor), 1, address(container), address(token), address(0), TREASURY, KEEPER, 1, 1, 0);
+        new LatchRelay(address(processor), 1, address(container), address(token), address(0), TREASURY, KEEPER, 1, 1, 0, 0);
         vm.expectRevert(LatchRelay.ZeroAddress.selector);
-        new LatchRelay(address(processor), 1, address(container), address(token), SAVINGS, TREASURY, address(0), 1, 1, 0);
+        new LatchRelay(address(processor), 1, address(container), address(token), SAVINGS, TREASURY, address(0), 1, 1, 0, 0);
     }
 
     function testCapOrderingRejected() public {
         vm.expectRevert(LatchRelay.OverCap.selector);
-        new LatchRelay(address(processor), 1, address(container), address(token), SAVINGS, TREASURY, KEEPER, 2, 1, 0);
+        new LatchRelay(address(processor), 1, address(container), address(token), SAVINGS, TREASURY, KEEPER, 2, 1, 0, 0);
         vm.expectRevert(LatchRelay.OverCap.selector);
-        new LatchRelay(address(processor), 1, address(container), address(token), SAVINGS, TREASURY, KEEPER, 0, 1, 0);
+        new LatchRelay(address(processor), 1, address(container), address(token), SAVINGS, TREASURY, KEEPER, 0, 1, 0, 0);
     }
 
     function testCodelessTokenAndProcessorRejected() public {
         vm.expectRevert(LatchRelay.BadToken.selector);
-        new LatchRelay(address(processor), 1, address(container), address(0xBEEF), SAVINGS, TREASURY, KEEPER, 1, 1, 0);
+        new LatchRelay(address(processor), 1, address(container), address(0xBEEF), SAVINGS, TREASURY, KEEPER, 1, 1, 0, 0);
         vm.expectRevert(LatchRelay.BadEval.selector);
-        new LatchRelay(address(0xBEEF), 1, address(container), address(token), SAVINGS, TREASURY, KEEPER, 1, 1, 0);
+        new LatchRelay(address(0xBEEF), 1, address(container), address(token), SAVINGS, TREASURY, KEEPER, 1, 1, 0, 0);
     }
 
     // ---------------------------------------------------------------- circuit
@@ -426,6 +432,75 @@ contract LatchRelayTest is Test {
         (bits, allow) = relay.preview(10 * U);
         assertEq(bits & 1, 1);
         assertFalse(allow);
+    }
+
+    // ------------------------------------------------------------ execute fee
+
+    function _unfunded() internal returns (LatchRelay r) {
+        Container c2 = new Container();
+        container = c2;
+        vm.prank(OWNER);
+        r = new LatchRelay(address(processor), CIRCUIT_ID, address(c2), address(token), SAVINGS, TREASURY, KEEPER, 50 * U, 150 * U, 5 * U, EF);
+        c2.setNftOwner(address(r));
+        token.mint(address(c2), 100 * U);
+    }
+
+    function testUnfundedRelayCannotPayContainerFee() public {
+        LatchRelay r = _unfunded();
+        vm.prank(OWNER);
+        vm.expectRevert(abi.encodeWithSelector(LatchRelay.NoExecFee.selector, 0, EF));
+        r.arm();
+    }
+
+    function testCallerCanAttachExecFee() public {
+        LatchRelay r = _unfunded();
+        vm.deal(OWNER, 1 ether);
+        vm.prank(OWNER);
+        r.arm{value: EF}();
+        assertTrue(r.armed());
+        vm.deal(KEEPER, 1 ether);
+        uint256 cost = r.execCost(10 * U);
+        assertEq(cost, 2 * EF);
+        vm.prank(KEEPER);
+        r.tick{value: cost}(10 * U);
+        assertEq(address(r).balance, 0);
+        assertEq(address(container).balance, 3 * EF);
+    }
+
+    /// A relay with execFee 0 cannot drive a fee-charging container: the container's own error surfaces.
+    function testZeroExecFeeHitsContainerFee() public {
+        Container c2 = new Container();
+        container = c2;
+        vm.prank(OWNER);
+        LatchRelay r = new LatchRelay(address(processor), CIRCUIT_ID, address(c2), address(token), SAVINGS, TREASURY, KEEPER, 50 * U, 150 * U, 0, 0);
+        c2.setNftOwner(address(r));
+        token.mint(address(c2), 10 * U);
+        vm.prank(OWNER);
+        vm.expectRevert(abi.encodeWithSelector(Container.ProtocolFeeTooLow.selector, 0, EF));
+        r.withdraw(OWNER, 1);
+    }
+
+    function testExecFeeBoundedAndOwnerOnly() public {
+        vm.prank(KEEPER);
+        vm.expectRevert(LatchRelay.NotOwner.selector);
+        relay.setExecFee(1);
+        vm.prank(OWNER);
+        vm.expectRevert(abi.encodeWithSelector(LatchRelay.NoExecFee.selector, 0.02 ether, 0.01 ether));
+        relay.setExecFee(0.02 ether);
+        vm.prank(OWNER);
+        relay.setExecFee(2e15);
+        assertEq(relay.execFee(), 2e15);
+    }
+
+    function testOwnerRecoversOkb() public {
+        uint256 bal = address(relay).balance;
+        vm.prank(KEEPER);
+        vm.expectRevert(LatchRelay.NotOwner.selector);
+        relay.withdrawOkb(payable(KEEPER), bal);
+        vm.prank(OWNER);
+        relay.withdrawOkb(payable(OWNER), bal);
+        assertEq(OWNER.balance, bal);
+        assertEq(address(relay).balance, 0);
     }
 
     // ------------------------------------------------------------------ admin

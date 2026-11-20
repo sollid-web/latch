@@ -69,7 +69,8 @@ const BREAKER_SWING_PCT = Number(env('BREAKER_SWING_PCT', '6'));
 const BREAKER_COOLDOWN_MS = Number(env('BREAKER_COOLDOWN_MS', '600000'));
 
 const RELAY_ABI = parseAbi([
-  'function tick(uint256 amount)',
+  'function tick(uint256 amount) payable',
+  'function execCost(uint256 amount) view returns (uint256)',
   'function preview(uint256 amount) view returns (uint8 bits, bool allow)',
   'function status() view returns (address token_, bool armed_, bool paused_, uint256 balance_, uint256 perTxCap_, uint256 dailyCap_, uint256 spentToday_, address keeper_, address savings_, address treasury_)',
   'function token() view returns (address)',
@@ -239,15 +240,21 @@ async function sweepAmount(relay) {
 
 async function sendTick(amount) {
   const data = encodeFunctionData({ abi: RELAY_ABI, functionName: 'tick', args: [amount] });
+  // TapeOut containers charge OKB per execute; the relay forwards what we attach.
+  const value = await publicClient.readContract({
+    address: RELAY_ADDRESS, abi: RELAY_ABI, functionName: 'execCost', args: [amount]
+  });
   const gas = await publicClient.estimateGas({
     account: account.address,
     to: RELAY_ADDRESS,
-    data
+    data,
+    value
   });
   const gasPrice = await publicClient.getGasPrice();
   return walletClient.sendTransaction({
     to: RELAY_ADDRESS,
     data,
+    value,
     gas: gas + gas / 5n, // +20% headroom
     gasPrice
   });
@@ -266,8 +273,8 @@ async function heartbeat(relay, extra) {
     armed: relay ? (relay.armed ? 1 : 0) : 0,
     paused: extra.paused || 0,
     running: extra.running || 1,
-    spentToday: relay ? Number(formatUnits(relay.spentToday, 18)) : 0,
-    sweptTotal: relay ? Number(formatUnits(relay.volumeSwept, 18)) : 0,
+    spentToday: relay ? Number(formatUnits(relay.spentToday, tokenDecimals ?? 6)) : 0,
+    sweptTotal: relay && relay.volumeSwept !== undefined ? Number(formatUnits(relay.volumeSwept, tokenDecimals ?? 6)) : 0,
     lastTx: extra.lastTx || undefined,
     relay: RELAY_ADDRESS,
     chainId: CHAIN_ID

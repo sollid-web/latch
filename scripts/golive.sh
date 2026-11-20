@@ -11,7 +11,9 @@
 #   SAVINGS=0x…          where sweeps go
 #   TREASURY=0x…         where fees go
 #   KEEPER=0x…           address of the keeper's gas-only key
-# Optional: RPC (default https://rpc.xlayer.tech), CHAIN_ID (default 196),
+# Optional: EXEC_FEE in wei, the OKB the container charges per execute
+#           (default 1300000000000000 = 0.0013 OKB, TapeOut Nov 2026),
+#           RPC (default https://rpc.xlayer.tech), CHAIN_ID (default 196),
 #           PER_TX / DAILY / ACTIVATION in whole tokens (default 50 / 150 / 5).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -20,6 +22,7 @@ cd "$(dirname "$0")/.."
 RPC="${RPC:-https://rpc.xlayer.tech}"
 CHAIN_ID="${CHAIN_ID:-196}"
 PER_TX="${PER_TX:-50}"; DAILY="${DAILY:-150}"; ACTIVATION="${ACTIVATION:-5}"
+EXEC_FEE="${EXEC_FEE:-1300000000000000}"
 
 step(){ printf '\n== %s\n' "$*"; }
 fail(){ printf 'STOP: %s\n' "$*" >&2; exit 1; }
@@ -46,7 +49,7 @@ step "Deploying LatchRelay"
 OUT=$(forge create contracts/LatchRelay.sol:LatchRelay \
   --rpc-url "$RPC" --chain "$CHAIN_ID" --private-key "$OWNER_KEY" --broadcast \
   --constructor-args "$PROCESSOR" "$CIRCUIT_ID" "$CONTAINER" "$USDT" "$SAVINGS" "$TREASURY" "$KEEPER" \
-    $((PER_TX * UNIT)) $((DAILY * UNIT)) $((ACTIVATION * UNIT)))
+    $((PER_TX * UNIT)) $((DAILY * UNIT)) $((ACTIVATION * UNIT)) "$EXEC_FEE")
 echo "$OUT"
 RELAY=$(echo "$OUT" | awk '/Deployed to/{print $3}')
 [ -n "$RELAY" ] || fail "deploy failed"
@@ -74,8 +77,10 @@ PY
 cat <<EOF
 
 Done. Remaining, in order:
-  1. Transfer the circuit NFT to the relay:  $RELAY
-     (until then container.execute rejects the relay)
+  1. Check the relay, then transfer the circuit NFT to it:  $RELAY
+     (until then container.execute rejects the relay; this is one-way)
+     Each container call costs $EXEC_FEE wei of OKB: attach it to arm/withdraw
+     (cast send … --value $EXEC_FEE), the keeper attaches execCost() per sweep.
   2. Fund the container $CONTAINER with USDT.
   3. Open the console, connect the owner wallet, press "Arm on chain".
   4. keeper/.env: RELAY_ADDRESS=$RELAY, then: cd keeper && npm install && node daemon.mjs

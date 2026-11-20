@@ -79,6 +79,14 @@ compromised owner key can `withdraw` everything — intended and disclosed.
 
 ## Disclosed limitations
 
+0. **TapeOut containers charge an OKB protocol fee on every `execute`**
+   (0.0013 OKB on X Layer, found when the first deployment could not arm:
+   `ProtocolFeeTooLow(0, 1.3e15)`). The relay pays `execFee` per execute from
+   its OKB balance; callers attach it (`execCost(amount)` for a sweep) or the
+   owner pre-funds the relay. `execFee` is owner-settable up to 0.01 OKB, and
+   `withdrawOkb` recovers unused OKB. The first relay (0xA4b9…7A02) predates
+   this and cannot execute.
+
 1. **The owner can withdraw the entire container balance** to any address. The
    relay holds the circuit NFT permanently, so without this funds could strand.
 2. **The NFT is one-way.** Once the relay owns it, the container can only act
@@ -138,7 +146,7 @@ or pause the relay.
 
 ## Coverage
 
-31 tests. The test processor interprets the real TAP-02 netlist bytes from
+37 tests. The test processor interprets the real TAP-02 netlist bytes from
 `src/lib/latch/circuit.ts`, and the test container enforces NFT ownership, so
 the suite exercises the actual circuit and custody path: constructor wiring and
 rejection of zero addresses, bad cap order and code-less token/processor; the
@@ -150,7 +158,9 @@ accounting; keeper-only, unarmed, paused, zero and the 500-USDT rogue amount;
 daily cap and UTC rollover; underfunded including fee; false-returning token;
 reentrancy; `preview` for keeper, stranger, rogue and paused; caps only down;
 owner-only withdraw; ownership transfer; `status`; the fee ladder at 6
-decimals; and a fuzz test that two sweeps never exceed the caps.
+decimals; a fee-charging container (unfunded relay reverts, caller-attached
+fee works, zero fee surfaces the container's error, fee bound, OKB recovery);
+and a fuzz test that two sweeps never exceed the caps.
 
 Not covered: the off-chain keeper, the Cloudflare Worker, and the page.
 

@@ -48,9 +48,17 @@ interface IERC20 {
 ///         `container.execute` will reject the relay. This contract cannot
 ///         forward the NFT, so once it holds the token the token stays here.
 ///         `withdraw` is the owner's way to get funds back out of the container.
+///
+///         TapeOut containers charge a protocol fee in OKB on every `execute`
+///         (0.0013 OKB on X Layer, Nov 2026). The relay pays `execFee` per
+///         execute from its own OKB balance: callers can attach it as msg.value
+///         (a sweep makes two executes when the fee is non-zero), or the owner
+///         can pre-fund the relay by sending it OKB.
 contract LatchRelay {
     /// @notice Starting sweep fee. Falls with cumulative volume (see feeBpsFor).
     uint256 public constant FEE_BPS = 100;
+    /// @notice Upper bound for the per-execute OKB fee the owner can set.
+    uint256 public constant MAX_EXEC_FEE = 0.01 ether;
     uint8 public constant OP_CALL = 0;
     uint256 private constant DAY = 1 days;
 
@@ -72,6 +80,8 @@ contract LatchRelay {
     uint256 public dayStart;
     uint256 public volumeSwept;
     uint256 public immutable activationFee;
+    /// @notice OKB paid to the container on each execute.
+    uint256 public execFee;
     uint256 private locked;
 
     event Armed(address indexed payer, uint256 fee);
@@ -83,6 +93,8 @@ contract LatchRelay {
     event PausedSet(bool paused);
     event Withdrawn(address indexed to, uint256 amount);
     event OwnershipTransferred(address indexed from, address indexed to);
+    event ExecFeeSet(uint256 execFee);
+    event OkbWithdrawn(address indexed to, uint256 amount);
 
     error NotOwner();
     error NotKeeper();
@@ -99,6 +111,8 @@ contract LatchRelay {
     error CapRaised();
     error Reentered();
     error BadToken();
+    error NoExecFee(uint256 have, uint256 need);
+    error OkbTransferFailed();
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
@@ -122,13 +136,15 @@ contract LatchRelay {
         address keeper_,
         uint256 perTxCap_,
         uint256 dailyCap_,
-        uint256 activationFee_
+        uint256 activationFee_,
+        uint256 execFee_
     ) {
         if (
             processor_ == address(0) || container_ == address(0) || token_ == address(0)
                 || savings_ == address(0) || treasury_ == address(0) || keeper_ == address(0)
         ) revert ZeroAddress();
         if (perTxCap_ == 0 || dailyCap_ == 0 || perTxCap_ > dailyCap_) revert OverCap();
+        if (execFee_ > MAX_EXEC_FEE) revert NoExecFee(execFee_, MAX_EXEC_FEE);
         if (processor_.code.length == 0) revert BadEval();
         if (token_.code.length == 0) revert BadToken();
         uint8 dec = IERC20(token_).decimals();
@@ -146,8 +162,13 @@ contract LatchRelay {
         perTxCap = perTxCap_;
         dailyCap = dailyCap_;
         activationFee = activationFee_;
+        execFee = execFee_;
         emit OwnershipTransferred(address(0), msg.sender);
+        emit ExecFeeSet(execFee_);
     }
+
+    /// @notice Accept OKB to pre-fund container execute fees.
+    receive() external payable {}
 
     // ---------------------------------------------------------------- admin
 
@@ -168,6 +189,21 @@ contract LatchRelay {
         emit KeeperSet(next);
     }
 
+    /// @notice Follow TapeOut if it changes the container's execute fee. Bounded.
+    function setExecFee(uint256 next) external onlyOwner {
+        if (next > MAX_EXEC_FEE) revert NoExecFee(next, MAX_EXEC_FEE);
+        execFee = next;
+        emit ExecFeeSet(next);
+    }
+
+    /// @notice Recover OKB held for execute fees.
+    function withdrawOkb(address payable to, uint256 amount) external onlyOwner nonReentrant {
+        if (to == address(0)) revert ZeroAddress();
+        (bool ok,) = to.call{value: amount}("");
+        if (!ok) revert OkbTransferFailed();
+        emit OkbWithdrawn(to, amount);
+    }
+
     /// @notice Caps can only move down. Raising them would let a stolen owner key
     ///         empty the container up to the new ceiling.
     function setCaps(uint256 perTxCap_, uint256 dailyCap_) external onlyOwner {
@@ -180,7 +216,7 @@ contract LatchRelay {
 
     /// @notice Pulls `activationFee` of `token` from the container to `treasury`.
     ///         A zero fee still arms. The relay must already own the circuit NFT.
-    function arm() external onlyOwner nonReentrant {
+    function arm() external payable onlyOwner nonReentrant {
         if (armed) revert AlreadyArmed();
         uint256 fee = activationFee;
         // Effects before interactions; a failed pull reverts the whole call.
@@ -196,7 +232,7 @@ contract LatchRelay {
     ///         this the only way out of the container would be sweeps to savings.
     ///         It is the only path that can send funds anywhere except savings
     ///         and treasury, and only the owner can call it.
-    function withdraw(address to, uint256 amount) external onlyOwner nonReentrant {
+    function withdraw(address to, uint256 amount) external payable onlyOwner nonReentrant {
         if (to == address(0)) revert ZeroAddress();
         if (amount == 0 || amount > token.balanceOf(address(container))) revert Underfunded();
         _pull(to, amount);
@@ -207,7 +243,8 @@ contract LatchRelay {
 
     /// @notice Keeper pays gas. Destination, pause, caps, and funding are enforced
     ///         here. The circuit must also allow, or the call reverts.
-    function tick(uint256 amount) external nonReentrant {
+    ///         Attach `execCost(amount)` OKB unless the relay is pre-funded.
+    function tick(uint256 amount) external payable nonReentrant {
         if (msg.sender != keeper) revert NotKeeper();
         if (!armed) revert NotArmed();
         if (paused) revert Paused();
@@ -279,6 +316,12 @@ contract LatchRelay {
         treasury_ = treasury;
     }
 
+    /// @notice OKB a sweep of `amount` spends on container execute fees.
+    function execCost(uint256 amount) external view returns (uint256) {
+        uint256 fee = (amount * feeBpsFor(volumeSwept)) / 10_000;
+        return fee > 0 ? 2 * execFee : execFee;
+    }
+
     function feeOn(uint256 amount) external view returns (uint256) {
         return (amount * feeBpsFor(volumeSwept)) / 10_000;
     }
@@ -323,7 +366,9 @@ contract LatchRelay {
     ///      (non-standard tokens) or a single `true`; anything else reverts.
     function _pull(address recipient, uint256 amount) internal {
         bytes memory data = abi.encodeWithSelector(IERC20.transfer.selector, recipient, amount);
-        bytes memory result = container.execute(address(token), 0, data, OP_CALL);
+        uint256 pay = execFee;
+        if (address(this).balance < pay) revert NoExecFee(address(this).balance, pay);
+        bytes memory result = container.execute{value: pay}(address(token), 0, data, OP_CALL);
         if (result.length == 0) return;
         if (result.length < 32 || !abi.decode(result, (bool))) revert TransferFailed();
     }
