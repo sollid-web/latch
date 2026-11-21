@@ -1931,6 +1931,7 @@ function liveChainId(){
   } catch (err) { /* ignore */ }
   return CHAIN_META[id] ? id : 196;
 }
+var eip6963 = [];
 function liveMeta(){ return CHAIN_META[liveChainId()]; }
 function liveRpcUrl(){
   var cfg = appConfig();
@@ -1938,7 +1939,10 @@ function liveRpcUrl(){
 }
 function wallet(){
   if (typeof window === 'undefined') return null;
-  return window.okxwallet || window.ethereum || null;
+  if (window.okxwallet) return window.okxwallet;
+  var okx = eip6963.filter(function(p){ return p && p.info && /okx|okex/i.test(p.info.rdns || p.info.name || ''); })[0];
+  if (okx) return okx.provider;
+  return window.ethereum || (eip6963[0] && eip6963[0].provider) || null;
 }
 function walletOnChain(){
   return !!(live.account && live.walletChain === liveChainId());
@@ -1947,25 +1951,47 @@ function scanTx(hash){ return liveMeta().scan + '/tx/' + hash; }
 function scanAddr(addr){ return liveMeta().scan + '/address/' + addr; }
 
 /* ---- JSON-RPC + ABI, by hand: one contract, a dozen calls ---- */
-function rpcCall(method, params){
-  // Reads go to the public RPC first, so a wallet's own (sometimes flaky) X Layer endpoint
-  // can never break the page. The wallet is only the fallback and the signer.
-  var w = wallet();
-  return fetch(liveRpcUrl(), {
+var RPC_FALLBACKS = {196: ['https://rpc.xlayer.tech', 'https://xlayerrpc.okx.com'], 1952: ['https://testrpc.xlayer.tech']};
+var rpcGood = 0;
+function rpcUrls(){
+  var cfg = appConfig();
+  var list = (cfg && cfg.rpc) ? [String(cfg.rpc)] : [];
+  (RPC_FALLBACKS[liveChainId()] || [liveMeta().rpc]).forEach(function(u){ if (list.indexOf(u) < 0) list.push(u); });
+  return list;
+}
+function rpcOnce(url, method, params){
+  return fetch(url, {
     method: 'POST',
     headers: {'content-type': 'application/json'},
-    body: JSON.stringify({jsonrpc: '2.0', id: Date.now(), method: method, params: params})
-  }).then(function(res){ return res.json(); }).then(function(body){
+    body: JSON.stringify({jsonrpc: '2.0', id: 1, method: method, params: params})
+  }).then(function(res){
+    if (!res.ok) throw new Error('RPC ' + url.replace(/^https?:\/\//, '') + ' answered HTTP ' + res.status);
+    return res.json();
+  }).then(function(body){
     if (body.error){
       var e = new Error(body.error.message || 'rpc error');
       e.data = body.error.data;
+      e.isRpcAnswer = true;   // a real answer (e.g. a revert); do not retry elsewhere
       throw e;
     }
     return body.result;
-  }, function(netErr){
-    if (walletOnChain() && w && method !== 'eth_getLogs') return w.request({method: method, params: params});
-    throw netErr;
   });
+}
+function rpcCall(method, params){
+  // Reads use the public RPCs (with fallbacks) so a wallet's own endpoint can never break the page.
+  var urls = rpcUrls();
+  var w = wallet();
+  var i = 0;
+  function attempt(k){
+    var url = urls[(rpcGood + k) % urls.length];
+    return rpcOnce(url, method, params).then(function(r){ rpcGood = (rpcGood + k) % urls.length; return r; }, function(err){
+      if (err && err.isRpcAnswer) throw err;
+      if (k + 1 < urls.length) return attempt(k + 1);
+      if (walletOnChain() && w && method !== 'eth_getLogs') return w.request({method: method, params: params});
+      throw err;
+    });
+  }
+  return attempt(0);
 }
 function word(hex){ return String(hex).replace(/^0x/, '').padStart(64, '0'); }
 function encUint(n){ return word(BigInt(n).toString(16)); }
@@ -2054,15 +2080,14 @@ function loadLive(force){
 }
 
 /* ---- wallet ---- */
-var eip6963 = [];
 if (typeof window !== 'undefined'){
   window.addEventListener('eip6963:announceProvider', function(ev){
-    if (ev && ev.detail && ev.detail.provider) eip6963.push(ev.detail.provider);
+    if (ev && ev.detail && ev.detail.provider) eip6963.push({provider: ev.detail.provider, info: ev.detail.info || {}});
   });
   try { window.dispatchEvent(new Event('eip6963:requestProvider')); } catch (e) {}
 }
 function connectWallet(retry){
-  var w = wallet() || eip6963[0] || null;
+  var w = wallet();
   if (!w && retry !== 'retried'){
     // Wallet extensions often inject a moment after the page loads.
     live.walletError = 'Looking for a wallet…';
@@ -2084,7 +2109,10 @@ function connectWallet(retry){
     live.walletChain = Number(id);
     if (live.walletChain !== liveChainId()) return switchChain();
   }).catch(function(err){
-    live.walletError = (err && err.message) || String(err);
+    live.walletError = (err && err.code === -32002)
+      ? 'Your wallet already has a connection request waiting. Open the wallet and approve or reject it, then try again.'
+      : (err && err.code === 4001) ? 'Connection was rejected in the wallet.'
+      : ((err && err.message) || String(err));
   }).then(function(){ render(); loadLive(true); });
 }
 function switchChain(){
