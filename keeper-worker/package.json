@@ -1,0 +1,18 @@
+{
+  "name": "latch-keeper-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Latch helper bot as a Cloudflare cron Worker (runs 24/7, no server).",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "test": "node test/local.mjs"
+  },
+  "dependencies": {
+    "viem": "^2.17.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0",
+    "solc": "^0.8.28"
+  }
+}
