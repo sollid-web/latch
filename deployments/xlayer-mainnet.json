@@ -35,7 +35,7 @@
     "token": "0x779Ded0c9e1022225f8E0630b35a9b54bE713736",
     "savings": "0x9005cb6847903AFC626eB4Dee5137606C567FeE7",
     "treasury": "0xb4bDEAc86CBdd0C148BB98504e1c35d8451A23a4",
-    "keeper": "0x4A5dF9bc0222b86FBf99B6b27D5ac54918B0BC74",
+    "keeper": "0x61A84AF1f9306A7103AA3D33Cc62E045e398dDBd",
     "caps": {
       "perTx": "2 USDT0",
       "daily": "6 USDT0",
@@ -45,7 +45,9 @@
       "fundTx": "0xf32515455a8105f320731eb8c7f28d0b098d5d54018105bdcafb321c18b99ec9",
       "withdrawTx": "0x5ab0464cceb133c8f1115c8d65408931db1cbfbd31ae8d6946dc91ad367ce157"
     },
-    "forkRehearsal": "FORK REHEARSAL OK before deploy"
+    "forkRehearsal": "FORK REHEARSAL OK before deploy",
+    "armed": true,
+    "funded": "5.2 USDT0; 1 USDT0 activation fee paid to treasury"
   },
   "failedRelay": {
     "address": "0xA4b9259279e4D5130FA563cB64B7aB73e2237A02",
