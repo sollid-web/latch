@@ -41,12 +41,17 @@ ALLOW=$(cast call "$PROCESSOR" "eval(uint256,bytes)(bytes)" "$CIRCUIT_ID" 0x7e -
 BOTGAS=$(cast balance "$BOT" --rpc-url "$RPC"); echo "hosted bot $BOT has $(cast from-wei "$BOTGAS") OKB for gas"
 printf '\nADMIN (you)   %s  (can only revoke bots / change the default bot)\nTREASURY      %s  (receives the 1%% fees)\nHOSTED BOT    %s\nPool %s (0.05%%) · TWAP %ss · slippage %s bps · min buy 1 USDT0 · circuit #%s\n' \
   "$OWNER" "$TREASURY" "$BOT" "$POOL" "$TWAP" "$SLIPPAGE_BPS" "$CIRCUIT_ID"
+if [ -n "${FACTORY:-}" ]; then
+  FAC="$FACTORY"; step "Resuming with the already-deployed factory $FAC"
+  [ "$(cast code "$FAC" --rpc-url "$RPC")" != "0x" ] || fail "no contract at $FAC"
+else
 if [ "${YES:-}" != "1" ]; then printf '\nType YES to deploy the factory: '; read -r ans; [ "$ans" = "YES" ] || fail "aborted"; fi
 
 step "Deploying LatchFactory"
 OUT=$(forge create contracts/LatchFactory.sol:LatchFactory --rpc-url "$RPC" --chain "$CHAIN_ID" --private-key "$OWNER_PRIVATE_KEY" --broadcast \
   --constructor-args "$PROCESSOR" "$CIRCUIT_ID" "$USDT" "$WOKB" "$ROUTER" "$POOL" "$TREASURY" "$BOT" "$TWAP" "$SLIPPAGE_BPS" "$MIN_AMOUNT")
 echo "$OUT"; FAC=$(echo "$OUT" | awk '/Deployed to/{print $3}'); [ -n "$FAC" ] || fail "deploy failed"
+fi
 
 step "Verifying"
 check(){ local got; got=$(cast call "$FAC" "$1" --rpc-url "$RPC" | first); echo "$1 = $got"; [ "$(lc "$got")" = "$(lc "$2")" ] || fail "$1 is $got, expected $2"; }
@@ -54,9 +59,9 @@ check "admin()(address)" "$OWNER"; check "hostedKeeper()(address)" "$BOT"; check
 check "processor()(address)" "$PROCESSOR"; check "circuitId()(uint256)" "$CIRCUIT_ID"
 check "tokenIn()(address)" "$USDT"; check "tokenOut()(address)" "$WOKB"; check "router()(address)" "$ROUTER"; check "pool()(address)" "$POOL"
 check "twapWindow()(uint32)" "$TWAP"; check "slippageBps()(uint256)" "$SLIPPAGE_BPS"; check "minAmount()(uint256)" "$MIN_AMOUNT"
-check "vaultCount()(uint256)" 0
-# A vault creation must succeed against the live pool (simulated, nothing sent).
-cast call "$FAC" "createVault(address,uint256,uint256,uint256,uint256,address)(address)" "$OWNER" 1000000 3000000 48000000 0 0x0000000000000000000000000000000000000000 --from "$OWNER" --rpc-url "$RPC" >/dev/null \
+# A vault creation must succeed against the live pool (simulated, nothing sent). The savings
+# address must not be the treasury (the factory refuses that), so use a neutral test address.
+cast call "$FAC" "createVault(address,uint256,uint256,uint256,uint256,address)(address)" 0x00000000000000000000000000000000CafE0001 1000000 3000000 48000000 0 0x0000000000000000000000000000000000000000 --from "$OWNER" --rpc-url "$RPC" >/dev/null \
   || fail "simulated createVault fails on mainnet — send this to Claude"
 echo "simulated createVault: OK"
 
