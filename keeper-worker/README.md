@@ -1,6 +1,6 @@
 # Latch helper bot — Cloudflare cron Worker
 
-Runs the helper bot 24/7 on Cloudflare (free plan), every 2 minutes. No server, and it keeps
+Runs the helper bot 24/7 on Cloudflare (free plan), every minute. No server, and it keeps
 running when your computer is off.
 
 Each run: reads the OKB price from OKX, Binance, CoinGecko, Gate and KuCoin → ignores the run if

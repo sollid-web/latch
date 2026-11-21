@@ -4,8 +4,8 @@
   "main": "src/index.js",
   "compatibility_date": "2026-11-04",
   "observability": { "enabled": true },
-  // Every 2 minutes. The vault's own limits (2 per transfer, 6 per day) cap what can move.
-  "triggers": { "crons": ["*/2 * * * *"] },
+  // Every minute. The vault's own limits (2 per transfer, 6 per day) cap what can move.
+  "triggers": { "crons": ["* * * * *"] },
   "vars": {
     "RELAY_ADDRESS": "0x7952C9B53347518b29016d2EAed8690A9808a2A0",
     "RPC_URL": "https://rpc.xlayer.tech",

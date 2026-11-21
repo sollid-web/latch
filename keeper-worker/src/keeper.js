@@ -1,7 +1,7 @@
 /**
  * Latch helper bot (keeper) — one check per call.
  *
- * Runs on a Cloudflare cron every 2 minutes. Each run:
+ * Runs on a Cloudflare cron every minute. Each run:
  *   1. reads the OKB price from several exchanges,
  *   2. ignores single-exchange wicks (spread breaker),
  *   3. needs at least 2 exchanges AND a majority to be at or below THRESHOLD,
