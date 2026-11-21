@@ -13,6 +13,12 @@
  * The strategy (buy the dip vs. daily/weekly DCA) lives in each vault's own on-chain settings
  * (maxPrice, minInterval), so the bot needs no per-user configuration and cannot override it.
  * No state is kept between runs.
+ *
+ * Fairness and cost (review v3 H-1): all vaults are paged through; each run checks a rotating
+ * window of MAX_CHECKS_PER_RUN vaults (so early vaults cannot hog the bot), reads are batched
+ * into single JSON-RPC requests (Cloudflare counts subrequests), at most MAX_SENDS_PER_RUN buys
+ * are sent per run with explicit nonces, and a run that finds its own earlier transaction still
+ * pending sends nothing (no overlapping runs). Vaults also enforce a minimum buy on chain.
  */
 import { createPublicClient, createWalletClient, http, parseAbi, encodeFunctionData } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -22,6 +28,7 @@ export const VAULT_ABI = parseAbi([
   'function tick(uint256 amount)',
   'function preview(uint256 amount) view returns (uint8 bits, bool allow)',
   'function quote(uint256 amount) view returns (uint256 twapPrice, uint256 expectedOut, uint256 minOut)',
+  'function minAmount() view returns (uint256)',
   'function status() view returns (address token_, bool armed_, bool paused_, uint256 balance_, uint256 perTxCap_, uint256 dailyCap_, uint256 spentToday_, address keeper_, address savings_, address treasury_)'
 ]);
 export const FACTORY_ABI = parseAbi([
@@ -92,8 +99,8 @@ export function readConfig(env) {
     factory: String(env.FACTORY_ADDRESS || ''),
     chainId: Number(env.CHAIN_ID || 196),
     maxDivergencePct: Number(env.MAX_DIVERGENCE_PCT || 2),
-    maxSends: Number(env.MAX_SENDS_PER_RUN || 5),
-    maxVaults: Number(env.MAX_VAULTS || 200),
+    maxSends: Number(env.MAX_SENDS_PER_RUN || 3),
+    maxChecks: Number(env.MAX_CHECKS_PER_RUN || 25),
     maxGasGwei: BigInt(env.MAX_GAS_GWEI || 50)
   };
   const errors = [];
@@ -107,7 +114,7 @@ function clients(cfg) {
   const account = privateKeyToAccount(cfg.key);
   return {
     account,
-    pub: createPublicClient({ chain, transport: http(cfg.rpc) }),
+    pub: createPublicClient({ chain, transport: http(cfg.rpc, { batch: { batchSize: 100, wait: 10 } }) }),
     wallet: createWalletClient({ account, chain, transport: http(cfg.rpc) })
   };
 }
@@ -127,16 +134,23 @@ export async function runOnce(env, opts = {}) {
   const { account, pub, wallet } = clients(cfg);
   const report = { at, keeper: account.address, factory: cfg.factory, vaults: [] };
 
-  let list = [];
+  // All vaults, paged; then a rotating window so every vault gets its turn.
+  let all = [];
   try {
-    list = await pub.readContract({ address: cfg.factory, abi: FACTORY_ABI, functionName: 'vaultsPage', args: [0n, BigInt(cfg.maxVaults)] });
+    const n = Number(await pub.readContract({ address: cfg.factory, abi: FACTORY_ABI, functionName: 'vaultCount' }));
+    const pages = [];
+    for (let i = 0; i < n; i += 500) pages.push(pub.readContract({ address: cfg.factory, abi: FACTORY_ABI, functionName: 'vaultsPage', args: [BigInt(i), 500n] }));
+    all = (await Promise.all(pages)).flat();
   } catch (err) {
     return { ...report, action: 'skip', why: 'could not read the factory: ' + short(err) };
   }
-  report.vaultCount = list.length;
-  if (!list.length) return { ...report, action: 'idle', why: 'no vaults yet' };
+  report.vaultCount = all.length;
+  if (!all.length) return { ...report, action: 'idle', why: 'no vaults yet' };
+  const start = all.length > cfg.maxChecks ? (opts.offset ?? Math.floor(Date.now() / 60000) * cfg.maxChecks) % all.length : 0;
+  const list = [];
+  for (let i = 0; i < Math.min(cfg.maxChecks, all.length); i++) list.push(all[(start + i) % all.length]);
 
-  // Pool 30-min average, via the first vault's quote() (all vaults share the pinned pool).
+  // Pool 30-min average, via a vault's quote() (all vaults share the pinned pool).
   let poolPrice = null;
   for (const v of list) {
     try {
@@ -156,52 +170,81 @@ export async function runOnce(env, opts = {}) {
   report.market = market;
   if (!market.safe) return { ...report, action: 'hold', why: market.reason };
 
-  let sends = 0;
-  for (const v of list) {
-    const row = { vault: v };
-    report.vaults.push(row);
+  // Batched reads for the whole window.
+  const me = account.address.toLowerCase();
+  const rows = list.map((v) => ({ vault: v }));
+  report.vaults = rows;
+  const reads = await Promise.all(list.map((v) => Promise.all([
+    pub.readContract({ address: v, abi: VAULT_ABI, functionName: 'status' }),
+    pub.readContract({ address: v, abi: VAULT_ABI, functionName: 'feeBpsNow' }),
+    pub.readContract({ address: v, abi: VAULT_ABI, functionName: 'minAmount' })
+  ]).catch((err) => ({ err }))));
+  const candidates = [];
+  rows.forEach((row, i) => {
+    const r = reads[i];
+    if (r.err) { row.action = 'error'; row.why = short(r.err); return; }
+    const [s, bps, minAmt] = r;
+    const st = { armed: s[1], paused: s[2], balance: s[3], perTxCap: s[4], dailyCap: s[5], spentToday: s[6], keeper: s[7] };
+    if (st.keeper.toLowerCase() !== me) { row.action = 'skip'; row.why = 'uses its own bot'; return; }
+    if (!st.armed || st.paused) { row.action = 'hold'; row.why = st.paused ? 'paused by owner' : 'not switched on'; return; }
+    let amount = st.perTxCap;
+    const left = st.dailyCap > st.spentToday ? st.dailyCap - st.spentToday : 0n;
+    if (amount > left) amount = left;
+    const affordable = (st.balance * 10000n) / (10000n + bps);
+    if (amount > affordable) amount = affordable;
+    if (amount < minAmt) { row.action = 'hold'; row.why = left < minAmt ? 'daily limit reached' : 'not enough USDT0 in the vault'; return; }
+    row.amount = amount.toString();
+    candidates.push({ row, amount });
+  });
+  const previews = await Promise.all(candidates.map(({ row, amount }) =>
+    pub.readContract({ address: row.vault, abi: VAULT_ABI, functionName: 'preview', args: [amount], account: account.address }).catch((err) => ({ err }))));
+  const ready = [];
+  candidates.forEach((c, i) => {
+    const p = previews[i];
+    if (p.err) { c.row.action = 'error'; c.row.why = short(p.err); return; }
+    const [bits, allow] = p;
+    c.row.bits = Number(bits);
+    if (!allow) {
+      c.row.action = 'hold';
+      c.row.why = (bits & 2) === 0 ? 'this bot is not allowed for this vault' : (bits & 8) === 0 ? 'price above your ceiling (or unstable)' : (bits & 32) === 0 ? 'waiting for the next buy time' : 'safety checks said no';
+      return;
+    }
+    c.row.action = opts.send ? 'ready' : 'would-buy';
+    ready.push(c);
+  });
+  if (!opts.send || !ready.length) { report.action = 'checked'; return report; }
+
+  // No overlapping runs: if our previous transaction is still pending, wait for the next minute.
+  const [latestNonce, pendingNonce] = await Promise.all([
+    pub.getTransactionCount({ address: account.address, blockTag: 'latest' }),
+    pub.getTransactionCount({ address: account.address, blockTag: 'pending' })
+  ]);
+  if (pendingNonce > latestNonce) {
+    for (const c of ready) { c.row.action = 'later'; c.row.why = 'previous buy still confirming'; }
+    report.action = 'checked'; return report;
+  }
+  const gasPrice = await pub.getGasPrice();
+  if (gasPrice > cfg.maxGasGwei * 1_000_000_000n) { report.action = 'hold'; report.why = 'gas price too high'; return report; }
+  let nonce = latestNonce, sends = 0;
+  for (const c of ready) {
+    if (sends >= cfg.maxSends) { c.row.action = 'later'; c.row.why = 'per-run send limit'; continue; }
+    const data = encodeFunctionData({ abi: VAULT_ABI, functionName: 'tick', args: [c.amount] });
     try {
-      const s = await pub.readContract({ address: v, abi: VAULT_ABI, functionName: 'status' });
-      const st = { armed: s[1], paused: s[2], balance: s[3], perTxCap: s[4], dailyCap: s[5], spentToday: s[6], keeper: s[7] };
-      if (st.keeper.toLowerCase() !== account.address.toLowerCase()) { row.action = 'skip'; row.why = 'uses its own bot'; continue; }
-      if (!st.armed || st.paused) { row.action = 'hold'; row.why = st.paused ? 'paused by owner' : 'not switched on'; continue; }
-      let amount = st.perTxCap;
-      const left = st.dailyCap > st.spentToday ? st.dailyCap - st.spentToday : 0n;
-      if (amount > left) amount = left;
-      const bps = await pub.readContract({ address: v, abi: VAULT_ABI, functionName: 'feeBpsNow' });
-      const affordable = (st.balance * 10000n) / (10000n + bps);
-      if (amount > affordable) amount = affordable;
-      if (amount <= 0n) { row.action = 'hold'; row.why = left === 0n ? 'daily limit reached' : 'vault empty'; continue; }
-      row.amount = amount.toString();
-
-      const [bits, allow] = await pub.readContract({ address: v, abi: VAULT_ABI, functionName: 'preview', args: [amount], account: account.address });
-      row.bits = Number(bits);
-      if (!allow) {
-        row.action = 'hold';
-        row.why = (bits & 8) === 0 ? 'price above your ceiling (or unstable)' : (bits & 32) === 0 ? 'waiting for the next buy time' : 'safety checks said no';
-        continue;
-      }
-      if (!opts.send) { row.action = 'would-buy'; continue; }
-      if (sends >= cfg.maxSends) { row.action = 'later'; row.why = 'per-run send limit'; continue; }
-
-      const data = encodeFunctionData({ abi: VAULT_ABI, functionName: 'tick', args: [amount] });
-      let gas;
-      try {
-        gas = await pub.estimateGas({ account: account.address, to: v, data }); // full simulation of the swap
-      } catch (err) {
-        row.action = 'hold'; row.why = 'swap would fail: ' + short(err); continue;
-      }
-      const gasPrice = await pub.getGasPrice();
-      if (gasPrice > cfg.maxGasGwei * 1_000_000_000n) { row.action = 'hold'; row.why = 'gas price too high'; continue; }
-      const hash = await wallet.sendTransaction({ to: v, data, gas: gas + gas / 2n, gasPrice });
-      sends++;
-      const receipt = await pub.waitForTransactionReceipt({ hash, timeout: 90_000 });
-      row.tx = hash;
-      row.action = receipt.status === 'success' ? 'bought' : 'reverted';
+      const gas = await pub.estimateGas({ account: account.address, to: c.row.vault, data }); // full simulation of the swap
+      const hash = await wallet.sendTransaction({ to: c.row.vault, data, gas: gas + gas / 2n, gasPrice, nonce });
+      nonce++; sends++;
+      c.row.tx = hash;
+      c.row.action = 'sent';
     } catch (err) {
-      row.action = 'error'; row.why = short(err);
+      c.row.action = 'hold'; c.row.why = 'swap would fail: ' + short(err);
     }
   }
-  report.action = sends ? 'bought' : 'checked';
+  if (opts.wait) {
+    for (const c of ready) if (c.row.tx) {
+      const r = await pub.waitForTransactionReceipt({ hash: c.row.tx, timeout: 90_000 });
+      c.row.action = r.status === 'success' ? 'bought' : 'reverted';
+    }
+  }
+  report.action = sends ? 'sent' : 'checked';
   return report;
 }

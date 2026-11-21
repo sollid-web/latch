@@ -14,6 +14,12 @@ interface IERC20S {
     function decimals() external view returns (uint8);
 }
 
+/// @dev The factory acts as a deny-only guardian: it can revoke a keeper address (e.g. a
+///      stolen hosted key) for every vault at once. It can never move funds or allow anything.
+interface IGuardian {
+    function revoked(address keeper) external view returns (bool);
+}
+
 interface IUniswapV3PoolS {
     function token0() external view returns (address);
     function token1() external view returns (address);
@@ -97,6 +103,10 @@ contract LatchSwap {
     address public immutable savings;
     address public immutable treasury;
     uint256 public immutable activationFee;
+    /// @notice Smallest buy allowed (stops dust buys that only burn the keeper's gas).
+    uint256 public immutable minAmount;
+    /// @notice Deny-only guardian (the factory), or address(0).
+    IGuardian public immutable guardian;
 
     address public keeper;
     bool public paused;
@@ -185,6 +195,8 @@ contract LatchSwap {
         uint256 maxSlippageBps;
         uint32 twapWindow;
         uint256 minInterval;
+        uint256 minAmount;
+        address guardian;
     }
 
     // slither-disable-next-line cyclomatic-complexity (flat list of input checks)
@@ -198,6 +210,7 @@ contract LatchSwap {
         if (c.maxPrice == 0 || c.maxPrice > type(uint128).max || c.maxSlippageBps == 0 || c.maxSlippageBps > MAX_SLIPPAGE_BPS) revert BadParam();
         if (c.twapWindow < 1800 || c.twapWindow > 7200) revert BadParam();
         if (c.minInterval > MAX_INTERVAL) revert BadParam();
+        if (c.minAmount == 0 || c.perTxCap < c.minAmount) revert OverCap();
         if (c.tokenIn == c.tokenOut) revert BadToken();
         // Output and fees must land somewhere they can come back from.
         if (
@@ -244,6 +257,8 @@ contract LatchSwap {
         maxPrice = c.maxPrice;
         maxSlippageBps = c.maxSlippageBps;
         minInterval = c.minInterval;
+        minAmount = c.minAmount;
+        guardian = IGuardian(c.guardian);
         // With no switch-on fee there is nothing to pay, so the vault starts switched on.
         if (c.activationFee == 0) {
             armed = true;
@@ -286,6 +301,7 @@ contract LatchSwap {
     function setCaps(uint256 perTxCap_, uint256 dailyCap_) external onlyOwner {
         if (perTxCap_ == 0 || dailyCap_ == 0 || perTxCap_ > dailyCap_) revert OverCap();
         if (perTxCap_ > perTxCap || dailyCap_ > dailyCap) revert CapRaised();
+        if (perTxCap_ < minAmount) revert OverCap();
         perTxCap = perTxCap_;
         dailyCap = dailyCap_;
         emit CapsTightened(perTxCap_, dailyCap_);
@@ -340,12 +356,12 @@ contract LatchSwap {
     /// @dev Balances are read before and compared after the external calls on purpose: the
     ///      vault trusts measured deltas, not return values. nonReentrant guards the whole call,
     ///      and every external target (tokenIn, tokenOut, router) is immutable and pinned.
-    // slither-disable-next-line reentrancy-balance,cyclomatic-complexity
+    // slither-disable-next-line reentrancy-balance,reentrancy-benign,cyclomatic-complexity
     function tick(uint256 amount) external nonReentrant {
-        if (msg.sender != keeper) revert NotKeeper();
+        if (msg.sender != keeper || _revoked(msg.sender)) revert NotKeeper();
         if (!armed) revert NotArmed();
         if (paused) revert Paused();
-        if (amount == 0 || amount > perTxCap) revert OverCap();
+        if (amount < minAmount || amount > perTxCap) revert OverCap();
         if (_spentToday() + amount > dailyCap) revert OverCap();
         if (!_spacedOk()) revert TooSoon(lastBuyAt + minInterval);
         uint256 bps = feeBpsFor(volumeSwept);
@@ -406,8 +422,10 @@ contract LatchSwap {
     /// @notice The byte `tick` would build for this caller, and the verdict.
     function preview(uint256 amount) external view returns (uint8 bits, bool allow) {
         int24 t = _twapTick();
-        bits = _bits(amount, msg.sender == keeper, _priceOk(t, _priceAt(t)));
-        if (!armed || paused || msg.sender != keeper) return (bits, false);
+        bool keeperOk = msg.sender == keeper && !_revoked(msg.sender);
+        bool priceOk = _priceOk(t, _priceAt(t)) && amount <= type(uint128).max && _fillOk(t, amount);
+        bits = _bits(amount, keeperOk, priceOk);
+        if (!armed || paused || !keeperOk) return (bits, false);
         if ((bits & 0x78) != 0x78) return (bits, false);
         allow = _policy(bits);
     }
@@ -508,7 +526,8 @@ contract LatchSwap {
     // slither-disable-next-line timestamp,incorrect-equality
     function nextBuyAt() external view returns (uint256) {
         if (lastBuyAt == 0) return 0;
-        return lastBuyAt + minInterval;
+        uint256 n = lastBuyAt + minInterval;
+        return n <= block.timestamp ? 0 : n;
     }
 
     // slither-disable-next-line unused-return (only the current tick is needed)
@@ -517,6 +536,16 @@ contract LatchSwap {
         int256 d = int256(spot) - int256(twapTick);
         if (d < 0) d = -d;
         return d <= int256(MAX_TICK_DEVIATION);
+    }
+
+    /// @dev Same worst-fill test tick() applies (review v3 M-2: keep preview == tick).
+    function _fillOk(int24 t, uint256 amount) internal view returns (bool) {
+        uint256 m = _minOut(t, amount);
+        return m > 0 && amount * outUnit <= maxPrice * m;
+    }
+
+    function _revoked(address k) internal view returns (bool) {
+        return address(guardian) != address(0) && guardian.revoked(k);
     }
 
     function _priceOk(int24 t, uint256 price) internal view returns (bool) {
@@ -530,7 +559,7 @@ contract LatchSwap {
         if (keeperOk) bits |= 2;
         bits |= 4;
         if (priceOk) bits |= 8;
-        if (amount > 0 && amount <= perTxCap) bits |= 16;
+        if (amount >= minAmount && amount <= perTxCap) bits |= 16;
         if (_spentToday() + amount <= dailyCap && _spacedOk()) bits |= 32;
         if (tokenIn.balanceOf(address(this)) >= amount + fee) bits |= 64;
     }

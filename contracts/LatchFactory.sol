@@ -22,6 +22,10 @@ contract LatchFactory {
     address public immutable treasury;
     uint32 public immutable twapWindow;
     uint256 public immutable slippageBps;
+    /// @notice Smallest buy any vault may make (anti-dust; protects the hosted bot's gas).
+    uint256 public immutable minAmount;
+    /// @notice Keeper addresses revoked for every vault (deny-only; e.g. a stolen hosted key).
+    mapping(address => bool) public revoked;
 
     address public admin;
     address public hostedKeeper;
@@ -33,9 +37,11 @@ contract LatchFactory {
     event VaultCreated(address indexed owner, address indexed vault, address keeper, uint256 perTxCap, uint256 dailyCap, uint256 maxPrice, uint256 minInterval);
     event HostedKeeperSet(address indexed keeper);
     event AdminSet(address indexed admin);
+    event KeeperRevoked(address indexed keeper, bool revoked);
 
     error NotAdmin();
     error ZeroAddress();
+    error BadSavings();
 
     constructor(
         address processor_,
@@ -47,7 +53,8 @@ contract LatchFactory {
         address treasury_,
         address hostedKeeper_,
         uint32 twapWindow_,
-        uint256 slippageBps_
+        uint256 slippageBps_,
+        uint256 minAmount_
     ) {
         if (
             processor_ == address(0) || tokenIn_ == address(0) || tokenOut_ == address(0) || router_ == address(0)
@@ -62,6 +69,7 @@ contract LatchFactory {
         treasury = treasury_;
         twapWindow = twapWindow_;
         slippageBps = slippageBps_;
+        minAmount = minAmount_;
         admin = msg.sender;
         hostedKeeper = hostedKeeper_;
         emit AdminSet(msg.sender);
@@ -83,6 +91,10 @@ contract LatchFactory {
         address keeper
     ) external returns (address vault) {
         address k = keeper == address(0) ? hostedKeeper : keeper;
+        if (
+            savings == address(this) || savings == hostedKeeper || savings == k || savings == treasury
+                || isVault[savings]
+        ) revert BadSavings();
         vault = address(
             new LatchSwap(
                 LatchSwap.Config({
@@ -102,7 +114,9 @@ contract LatchFactory {
                     maxPrice: maxPrice,
                     maxSlippageBps: slippageBps,
                     twapWindow: twapWindow,
-                    minInterval: minInterval
+                    minInterval: minInterval,
+                    minAmount: minAmount,
+                    guardian: address(this)
                 })
             )
         );
@@ -130,6 +144,14 @@ contract LatchFactory {
         for (uint256 i = start; i < end; i++) {
             out[i - start] = vaults[i];
         }
+    }
+
+    /// @notice Deny-only: block (or unblock) a keeper address in every vault that uses this
+    ///         factory as guardian. Cannot move funds or loosen any vault rule.
+    function setRevoked(address keeper, bool on) external {
+        if (msg.sender != admin) revert NotAdmin();
+        revoked[keeper] = on;
+        emit KeeperRevoked(keeper, on);
     }
 
     function setHostedKeeper(address next) external {

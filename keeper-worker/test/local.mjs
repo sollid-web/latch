@@ -76,7 +76,7 @@ try {
   await tx(aw, proc, Proc.abi, 'tape', [1n, '0x' + G.map(([a, b]) => '00' + a.toString(16).padStart(6, '0') + b.toString(16).padStart(6, '0')).join(''), 7, 1]);
   await wait(2100);
 
-  const fac = await dep(Fac, [proc, 1n, usdt, wokb, router, pool, admin.address, bot.address, 1800, 100n]);
+  const fac = await dep(Fac, [proc, 1n, usdt, wokb, router, pool, admin.address, bot.address, 1800, 100n, 1_000_000n]);
   const U = 10n ** 6n, Z = '0x0000000000000000000000000000000000000000';
   const env = { KEEPER_PRIVATE_KEY: KEYS[1], RPC_URL: RPC, FACTORY_ADDRESS: fac, CHAIN_ID: '196' };
   const P = (x) => [{ venue: 'A', ok: true, price: x }, { venue: 'B', ok: true, price: x + 0.1 }, { venue: 'C', ok: true, price: x - 0.1 }];
@@ -85,14 +85,14 @@ try {
   check('market check: pool 77 vs exchanges 70 → refuse', marketCheck(P(70), 77, 2).safe === false);
   check('market check: one exchange only → refuse', marketCheck([{ venue: 'A', ok: true, price: 77 }], 77, 2).safe === false);
 
-  let r = await runOnce(env, { send: true, prices: P(77) });
+  let r = await runOnce(env, { send: true, wait: true, prices: P(77) });
   check('no vaults yet: idle', r.action === 'idle', r);
 
   // Alice: daily DCA, ceiling 200. Bob: buy the dip at 48. Carol (=admin acct): own bot.
   const fund = async (who, v, amt) => { await tx(aw, usdt, ERC.abi, 'transfer', [who.address, amt]); await tx(W(who), usdt, ERC.abi, 'transfer', [v, amt]); };
   await tx(W(alice), fac, Fac.abi, 'createVault', [alice.address, 1n * U, 3n * U, 200n * U, 86400n, Z]);
   await tx(W(bob), fac, Fac.abi, 'createVault', [bob.address, 2n * U, 6n * U, 48n * U, 0n, Z]);
-  await tx(aw, fac, Fac.abi, 'createVault', [admin.address, 1n * U, 3n * U, 200n * U, 0n, admin.address]);
+  await tx(aw, fac, Fac.abi, 'createVault', ['0x1111111111111111111111111111111111111111', 1n * U, 3n * U, 200n * U, 0n, '0x000000000000000000000000000000000000dEaD']);
   const [va] = await rd(fac, Fac.abi, 'vaultsOf', [alice.address]);
   const [vb] = await rd(fac, Fac.abi, 'vaultsOf', [bob.address]);
   const [vc] = await rd(fac, Fac.abi, 'vaultsOf', [admin.address]);
@@ -106,24 +106,33 @@ try {
   check('dry run: Carol uses her own bot → skipped', row(r, vc).action === 'skip', row(r, vc));
   check('dry run sends nothing', (await okb(alice.address)) === 0n);
 
-  r = await runOnce(env, { send: true, prices: P(70) });
+  r = await runOnce(env, { send: true, wait: true, prices: P(70) });
   check('pool 77 vs exchanges 70: nobody buys', r.action === 'hold' && (await okb(alice.address)) === 0n, r);
 
-  r = await runOnce(env, { send: true, prices: P(77) });
+  r = await runOnce(env, { send: true, wait: true, prices: P(77) });
   check('Alice: DCA buy lands in her wallet', row(r, va).action === 'bought' && (await okb(alice.address)) > 0n, row(r, va));
   check('Bob: still waiting for his price', row(r, vb).action === 'hold' && (await okb(bob.address)) === 0n);
   const a1 = await okb(alice.address);
-  r = await runOnce(env, { send: true, prices: P(77) });
+  r = await runOnce(env, { send: true, wait: true, prices: P(77) });
   check('Alice: next minute → waits for tomorrow', row(r, va).action === 'hold' && /next buy time/.test(row(r, va).why) && (await okb(alice.address)) === a1, row(r, va));
 
   // OKB dips to ~45 and stays 35 min
   await tx(aw, driver, Driver.abi, 'push', [pool, !usdtIs0, 10n ** 30n, BigInt(Math.floor(Math.sqrt(usdtIs0 ? 1e12 / 45 : 45 / 1e12) * 2 ** 48)) * 2n ** 48n]);
   await wait(2100);
-  r = await runOnce(env, { send: true, prices: P(45) });
+  r = await runOnce(env, { send: true, wait: true, prices: P(45) });
   check('dip to 45: Bob buys', row(r, vb).action === 'bought' && (await okb(bob.address)) > 0n, row(r, vb));
   await tx(W(bob), vb, Swap.abi, 'setPaused', [true]);
-  r = await runOnce(env, { send: true, prices: P(45) });
+  r = await runOnce(env, { send: true, wait: true, prices: P(45) });
   check('Bob pauses: bot respects it', row(r, vb).action === 'hold' && /paused/.test(row(r, vb).why), row(r, vb));
+
+  // Fairness: 30 vaults, window of 25 → rotation reaches every vault
+  const many = [];
+  for (let i = 0; i < 27; i++) { await tx(aw, fac, Fac.abi, 'createVault', ['0x2222222222222222222222222222222222222222', 1n * U, 3n * U, 200n * U, 0n, Z]); }
+  const env2 = { ...env, MAX_CHECKS_PER_RUN: '25' };
+  const seen = new Set();
+  for (const off of [0, 25]) { const rr = await runOnce(env2, { send: false, prices: P(45), offset: off }); rr.vaults.forEach((x) => seen.add(x.vault.toLowerCase())); }
+  check('rotation: every one of 30 vaults gets checked within 2 runs', seen.size === 30, seen.size);
+  void many;
 
   // Bot key cannot touch funds even if stolen
   let stolen = 'OK';

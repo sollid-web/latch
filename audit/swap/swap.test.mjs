@@ -131,7 +131,7 @@ try {
   await tx(ow, proc, Proc.abi, 'tape', [1n, net, 7, 1]);
   await tx(ow, proc, Proc.abi, 'tape', [3n, '0x00000001000001', 7, 1]); // one gate NAND(1,1)=0 → always deny
   const cfg = (over = {}) => ({
-    owner: '0x0000000000000000000000000000000000000000', minInterval: 0n,
+    owner: '0x0000000000000000000000000000000000000000', minInterval: 0n, minAmount: 100_000n, guardian: '0x0000000000000000000000000000000000000000',
     processor: proc, circuitId: 1n, tokenIn: usdt, tokenOut: wokb, router, pool,
     savings: savings.address, treasury: treasury.address, keeper: keeper.address,
     perTxCap: 2n * U, dailyCap: 6n * U, activationFee: 1n * U, maxPrice: 48n * U, maxSlippageBps: 100n, twapWindow: 1800,
@@ -201,6 +201,8 @@ try {
   // ---- attacker / limits
   check('stranger calling tick: NotKeeper', (await why(aw, vault, Swap.abi, 'tick', [2n * U])) === 'NotKeeper');
   check('rogue 500 USDT0: OverCap', (await why(kw, vault, Swap.abi, 'tick', [500n * U])) === 'OverCap');
+  check('dust buy below the minimum: OverCap', (await why(kw, vault, Swap.abi, 'tick', [99_999n])) === 'OverCap');
+  check('caps cannot go below the minimum buy', (await why(ow, vault, Swap.abi, 'setCaps', [99_999n, 6n * U])) === 'OverCap');
   await tx(kw, vault, Swap.abi, 'tick', [2n * U]);
   await tx(kw, vault, Swap.abi, 'tick', [2n * U]);
   check('4th buy same day: OverCap (daily 6)', (await why(kw, vault, Swap.abi, 'tick', [1n * U])) === 'OverCap');
@@ -246,6 +248,8 @@ try {
   await tx(ow, vault, Swap.abi, 'setMaxPrice', [44_200_000n]);
   const rL1 = await why(kw, vault, Swap.abi, 'tick', [1n * U]);
   check('TWAP under max but worst fill above max: refused', rL1 === 'PriceTooHigh', rL1);
+  [bits, allow] = await read(vault, Swap.abi, 'preview', [1n * U], keeper.address);
+  check('preview agrees with tick on worst fill (bit 3 off)', (bits & 8) === 0 && allow === false, bits);
   // ---- slippage below the pool fee still trades now (L-2): fee netted out of minOut
   await tx(ow, vault, Swap.abi, 'setMaxPrice', [60n * U]);
   await tx(ow, vault, Swap.abi, 'setMaxSlippage', [25n]);
@@ -268,7 +272,7 @@ try {
   check('DCA: a day later the next buy is allowed', (await why(kw, dca, Swap.abi, 'tick', [1n * U])) === 'OK');
 
   // ---- factory: anyone creates a vault they own, risky settings pinned
-  const fac = await deploy(Fac, [proc, 1n, usdt, wokb, router, pool, treasury.address, keeper.address, 1800, 100n]);
+  const fac = await deploy(Fac, [proc, 1n, usdt, wokb, router, pool, treasury.address, keeper.address, 1800, 100n, 1_000_000n]);
   const userW = aw; // the "attacker" account doubles as an ordinary user here
   const r0 = await tx(userW, fac, Fac.abi, 'createVault', [attacker.address, 2n * U, 6n * U, 1000n * U, 0n, '0x0000000000000000000000000000000000000000']);
   const [uv] = await read(fac, Fac.abi, 'vaultsOf', [attacker.address]);
@@ -294,6 +298,24 @@ try {
   const badSav = await why(userW, fac, Fac.abi, 'createVault', [pool, 1n * U, 3n * U, 60n * U, 0n, '0x0000000000000000000000000000000000000000']);
   check('factory: savings = pool refused', badSav === 'BadRecipient', badSav);
   void r0;
+  const Zr = '0x0000000000000000000000000000000000000000';
+  for (const [label, sav] of [['factory', fac], ['hosted bot', keeper.address], ['treasury', treasury.address], ['another vault', uv]]) {
+    const rr = await why(userW, fac, Fac.abi, 'createVault', [sav, 1n * U, 3n * U, 60n * U, 0n, Zr]);
+    check('factory: savings = ' + label + ' refused', rr === 'BadSavings', rr);
+  }
+  check('factory: per-buy below the 1 USDT0 minimum refused', (await why(userW, fac, Fac.abi, 'createVault', [attacker.address, 500_000n, 3n * U, 60n * U, 0n, Zr])) === 'OverCap');
+  // stolen hosted key: admin revokes it for every factory vault at once
+  await tx(userW, usdt, ERC.abi, 'transfer', [uv, 3n * U]);
+  await wait(86400);
+  check('before revoke: hosted bot could buy', (await why(kw, uv, Swap.abi, 'tick', [1n * U])) === 'OK');
+  check('only admin can revoke', (await why(aw, fac, Fac.abi, 'setRevoked', [keeper.address, true])) === 'NotAdmin');
+  await tx(ow, fac, Fac.abi, 'setRevoked', [keeper.address, true]);
+  check('after revoke: hosted bot refused in every vault', (await why(kw, uv, Swap.abi, 'tick', [1n * U])) === 'NotKeeper');
+  [bits, allow] = await read(uv, Swap.abi, 'preview', [1n * U], keeper.address);
+  check('after revoke: preview says no', allow === false && (bits & 2) === 0, bits);
+  await tx(userW, uv, Swap.abi, 'setKeeper', [savings.address]);
+  check('owner can move to a new bot after a revoke', (await why(W(savings), uv, Swap.abi, 'tick', [1n * U])) === 'OK');
+  check('revoke cannot touch funds: owner still withdraws', (await why(userW, uv, Swap.abi, 'withdraw', [usdt, attacker.address, 1n])) === 'OK');
 
   // ---- circuit denial path
   const vaultDeny = await deployVault({ circuitId: 3n, maxPrice: 1000n * U });
