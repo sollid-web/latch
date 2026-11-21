@@ -106,6 +106,9 @@ contract LatchSwap {
     uint256 public spentToday;
     uint256 public dayStart;
     uint256 public volumeSwept;
+    /// @notice Total tokenOut delivered to savings by this vault (for the dashboard's average price).
+    uint256 public totalBought;
+    uint256 public buys;
     uint256 public maxPrice;
     uint256 public maxSlippageBps;
     /// @notice Minimum seconds between two buys. 0 = no spacing ("buy the dip"); 1 day or
@@ -390,6 +393,8 @@ contract LatchSwap {
         if (tokenIn.balanceOf(address(this)) != balBefore - fee - amount) revert SwapAccounting();
         uint256 got = tokenOut.balanceOf(savings) - outBefore;
         if (got < minOut) revert SwapShort(got, minOut);
+        totalBought += got;
+        buys += 1;
 
         emit Bought(msg.sender, amount, got, fee, price, bits);
         uint256 nextBps = feeBpsFor(volumeSwept);

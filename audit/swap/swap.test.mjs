@@ -195,6 +195,7 @@ try {
   check('swap: vault paid exactly 2 + 0.02 fee', vBefore - (await read(usdt, ERC.abi, 'balanceOf', [vault])) === 2_020_000n);
   check('swap: treasury got the 0.02 fee', (await read(usdt, ERC.abi, 'balanceOf', [treasury.address])) === 1_020_000n);
   check('swap: router allowance reset to 0', (await read(usdt, ERC.abi, 'allowance', [vault, router])) === 0n);
+  check('swap: totalBought and buys counters', (await read(vault, Swap.abi, 'totalBought')) === gotOkb && (await read(vault, Swap.abi, 'buys')) === 1n);
   check('swap: vault holds no WOKB (output went to savings)', (await read(wokb, ERC.abi, 'balanceOf', [vault])) === 0n);
 
   // ---- attacker / limits
