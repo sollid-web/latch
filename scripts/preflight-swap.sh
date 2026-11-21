@@ -46,8 +46,20 @@ fi
 
 bal(){ cast call "$1" "balanceOf(address)(uint256)" "$2" --rpc-url "$F" | first; }
 tx(){ local from="$1"; shift
-  local st; st=$(cast send --unlocked --from "$from" "$@" --rpc-url "$F" --json 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status",""))' || true)
-  [ "$st" = "0x1" ] || fail "transaction from $from failed: $*"; }
+  local out st h
+  out=$(cast send --unlocked --from "$from" "$@" --rpc-url "$F" --json 2>&1) || true
+  st=$(printf '%s' "$out" | python3 -c 'import sys,json
+try: d=json.loads(sys.stdin.read()); print(d.get("status",""), d.get("transactionHash",""))
+except Exception: print("")' )
+  [ "${st%% *}" = "0x1" ] && return 0
+  echo "---- what the chain said ----"; printf '%s\n' "$out" | tail -n 15
+  h="${st#* }"
+  if [ -n "$h" ] && [ "$h" != "$st" ]; then
+    echo "---- trace of the failed transaction ----"; cast run "$h" --rpc-url "$F" 2>&1 | tail -n 40 || true
+  else
+    echo "---- simulation ----"; cast call --from "$from" "$@" --rpc-url "$F" 2>&1 | tail -n 15 || true
+  fi
+  fail "transaction from $from failed: $*"; }
 mustrevert(){ local label="$1" from="$2"; shift 2
   if cast call --from "$from" "$@" --rpc-url "$F" >/dev/null 2>&1; then fail "$label: expected the chain to refuse, but it allowed it"; fi
   ok "$label (refused, as it should be)"; }
@@ -100,7 +112,7 @@ mustrevert "helper bot tries to raise max price" "$KEEPER" "$VAULT" "setMaxPrice
 echo "== One real swap on the copy (real Uniswap pool)"
 W0=$(bal "$WOKB" "$SAVINGS"); V0=$(bal "$USDT" "$VAULT")
 GAS=$(cast estimate --from "$KEEPER" "$VAULT" "tick(uint256)" "$PT" --rpc-url "$F") || fail "the swap would fail (gas estimate reverted)"
-tx "$KEEPER" "$VAULT" "tick(uint256)" "$PT"
+tx "$KEEPER" "$VAULT" "tick(uint256)" "$PT" --gas-limit "$((GAS * 3 / 2))"
 GOT=$(python3 -c "print($(bal "$WOKB" "$SAVINGS") - $W0)")
 SPENT=$(python3 -c "print($V0 - $(bal "$USDT" "$VAULT"))")
 ge "$GOT" "$MINOUT" || fail "savings got $GOT WOKB units, less than the minimum $MINOUT"
