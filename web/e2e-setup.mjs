@@ -40,6 +40,6 @@ const proc = await dep(Proc); const G = [[2,2],[3,9],[10,10],[11,4],[12,12],[13,
 await tx(proc, Proc.abi, 'tape', [1n, '0x' + G.map(([a, b]) => '00' + a.toString(16).padStart(6, '0') + b.toString(16).padStart(6, '0')).join(''), 7, 1]);
 const fac = await dep(Fac, [proc, 1n, usdt, wokb, router, pool, admin.address, bot.address, 1800, 100n, 1_000_000n]);
 await pub.request({ method: 'evm_increaseTime', params: [2100] }); await pub.request({ method: 'evm_mine', params: [] });
-fs.writeFileSync('/tmp/ui/web-local.json', JSON.stringify({ chainId: 196, rpc: [RPC], explorer: 'https://www.oklink.com/xlayer', factory: fac, usdt, wokb, pool, processor: proc, circuitId: 1, repo: 'https://github.com/sollid-web/latch', user }));
+fs.writeFileSync('/tmp/ui/web-local.json', JSON.stringify({ chainId: 196, rpc: [RPC], explorer: 'https://www.oklink.com/xlayer', factory: fac, usdt, wokb, pool, processor: proc, circuitId: 1, router, uniFactory: uf, repo: 'https://github.com/sollid-web/latch', user }));
 console.log('READY', fac);
 await new Promise(() => {});

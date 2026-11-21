@@ -17,3 +17,4 @@ audit/swap/node_modules/
 keeper-worker/node_modules/
 .preflight-swap-ok
 public/
+.preflight-factory-ok
