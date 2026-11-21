@@ -1,113 +1,173 @@
-# Latch
+# Latch — stack OKB on autopilot, without trusting a bot
 
-> **Status:** working MVP console; X Layer mainnet deployment in progress (TapeOut Accelerate, Dec 2026).
+**Live app:** https://latch.tapeguard.workers.dev · **Chain:** X Layer mainnet (196) · **Built for:** X Layer TapeOut Accelerate
 
-**At a glance**
-- On-chain policy as hardware-style logic: a 13-gate NAND circuit returns a single allow bit for every sweep.
-- Keyless custody: USDT sits in an ERC-6551 circuit container; the keeper only pays gas and cannot move funds outside the policy.
-- Restart-safe: per-tx and daily caps live in the `LatchRelay` contract, not the daemon.
-- Stack: Solidity + Foundry, React console, Cloudflare Workers, Node keeper daemon.
+Latch lets anyone put USDT0 into a vault that only they control and have OKB bought automatically:
+**buy the dip** (only when OKB falls to your price) or **auto-DCA** (a fixed amount every day or week,
+never above your ceiling). A hosted helper bot sends the buys, but it **cannot misbehave**: every buy must
+pass seven rules enforced by the vault contract *and* a TapeOut circuit on chain. The bought OKB goes
+straight to the user's own wallet.
 
-Autonomous savings agent for the X Layer TapeOut Accelerate program.
+---
 
-When OKB trades at or below a threshold, Latch sweeps a capped amount of USDT from a TapeOut **circuit container** to one savings address. A TapeOut **NAND circuit** is the rule. The daemon does not hold a key that can move funds.
+## 1. The problem
 
-This repository’s console is the working MVP. It evaluates the same 13-gate netlist you tape out. Chain deployment is the checklist below — the preview does not broadcast mainnet transactions.
+Automation in crypto today means handing a program power over your money:
 
-## Use case
+- **Trading bots and bot services** hold your keys or exchange API keys. When they are hacked or leak keys,
+  accounts get emptied (Telegram trading bots such as Unibot in 2023 and Banana Gun in 2024; leaked API
+  keys at 3Commas in 2022).
+- **AI agents with wallets** are arriving fast. An agent that is tricked (prompt injection) or simply wrong
+  can send everything to the wrong place.
+- **Ordinary users** who want to build an OKB position either watch charts all day, or keep coins on an
+  exchange to use its recurring-buy feature (custody risk).
 
-OKB dip sweep.
+## 2. Who it is for (target users)
 
-- Trigger: OKB/USDT at or below the threshold (default 48).
-- Action: transfer `sweepAmount` USDT (default 50) to the savings whitelist.
-- Policy rejects: pause, unknown target, any call that is not the sweep, per-tx cap, daily cap (default 150), or an underfunded container.
-- Fee: 5 USDT (or 100 BEM) to arm, then 1% of each sweep to the treasury.
+| User | Need | What Latch gives them |
+|---|---|---|
+| OKX Wallet users on X Layer who want to accumulate OKB | Recurring or dip buying without watching charts, without leaving coins on an exchange | A self-custody vault + hosted bot; set up in ~2 minutes from the browser or the OKX Wallet app |
+| People who would use a trading bot but fear giving it keys | Automation with a hard, provable limit on what can go wrong | The bot's worst case is "buy your chosen amount, at your price or better, into your own wallet" |
+| Builders of bots and AI agents on X Layer | Spending limits an agent cannot talk its way around | Plug your own bot/agent in as the vault's keeper; it gets exactly the same on-chain limits |
 
-## How the three layers map
+## 3. The product (complete user journey)
 
-| Layer | What it is |
-| --- | --- |
-| Policy | TapeOut circuit. 7 inputs, 1 allow bit, 13 NAND gates, 0 latches. `eval(circuitId, inputs)`. |
-| Body | ERC-6551 container of that circuit. Holds the USDT. Opening cost on X Layer is 0.08 OKB. |
-| Daemon | Off-chain listener. Pays gas by calling `LatchRelay.tick`. Restart-safe because caps live on the relay. |
+1. **Connect** OKX Wallet (extension on desktop; on a phone the page opens itself in the OKX Wallet app).
+2. **Choose a strategy:** *Buy the dip* or *Auto-DCA*.
+3. **Set it in plain words:** amount per buy, your price (dip) or ceiling (DCA), how often, where the OKB goes.
+4. **Review** a one-sentence summary ("Latch buys 5 USDT0 of OKB every week, never above 120…") and create
+   the vault — **one transaction**, no terminal, no keys to manage.
+5. **Add USDT0.**
+6. **Dashboard:** USDT0 left, OKB bought, average price paid, number of buys, when the next buy happens,
+   the 7 safety checks for the next buy (✓/✗ in plain words), **"TapeOut rule chip #1 says YES (0x7e)"**
+   with a link to the circuit, recent buys with transaction links, and one-click **Pause**, **Change price**,
+   **Change spacing**, **Withdraw all**.
 
-The circuit is pure: it cannot read balances. `contracts/LatchRelay.sol` derives the seven bits from its own storage and the container balance, then requires `processor.eval` to allow before `container.execute`.
+The hosted bot checks every vault every minute and buys when that vault's own rules say yes.
 
-Input byte, bit 0 = least significant:
+## 4. Why you don't have to trust the bot (security design)
 
-1. `paused`
-2. `keeper`
-3. `whitelisted`
-4. `actionOk` (the call is the sweep)
-5. `txCap`
-6. `dailyOk`
-7. `funded`
+Before **every** buy the vault computes seven facts and packs them into one byte:
 
-`allow = !paused ∧ keeper ∧ whitelisted ∧ actionOk ∧ txCap ∧ dailyOk ∧ funded`
+| Bit | Rule (plain words) |
+|---|---|
+| 0 | Not paused by you |
+| 1 | Request comes from your helper bot (and that bot has not been revoked) |
+| 2 | OKB goes only to your wallet (structural: the destination is fixed at creation) |
+| 3 | OKB's 30-minute average price is at or below your limit, the current price is within ~1% of that average (anti-manipulation), and the worst accepted fill price is also within your limit |
+| 4 | Amount is within your per-buy limit (and at least the 1 USDT0 minimum) |
+| 5 | Within today's limit and the minimum time between buys |
+| 6 | Enough USDT0 in the vault for the buy plus the fee |
 
-Netlist records follow TAP-02: opcode `0x00`, then operand A and B as uint24 big-endian. The hex is on the Circuit tab.
+Two locks must both agree, in the same transaction:
 
-Tape name on X Layer: `#<circuitId>@2.<processorNumber>` (area code 2, chain id 196).
+1. **Solidity** enforces every rule above.
+2. **The TapeOut circuit** (processor `0x3728…6813`, circuit **#1**, 13 NAND gates, 7 inputs) is called with
+   `eval(circuitId, byte)` via STATICCALL. It allows exactly `0x7e` (all rules pass, not paused) and denies
+   everything else. It can only deny, never move funds.
 
-## Try the console
+On top of that:
 
-Once a relay is configured, the **Live relay** card at the top of Operate reads it from X Layer: balances, caps, the next sweep's policy byte and verdict, the processor's answer for `0x7e`/`0x7f`, and recent `Sweep` events with explorer links. Connect the owner wallet to arm or pause; connect the keeper wallet to sweep or send the rogue 500 (it reverts on chain). **Dry-run rogue 500** asks the chain for the revert reason without gas. The Circuit tab can query the deployed processor for any policy byte. To look at a relay before editing the config: `?relay=0x…` (add `&chain=1952` for testnet).
+- Swaps go through the **official Uniswap V3 SwapRouter02** on X Layer, only on the **deepest USDT0/WOKB pool
+  (0.05%, `0xe3BE…5082`)**, verified against the Uniswap factory at deploy.
+- `minOut` = 30-minute TWAP quote, minus the pool fee, minus 1% slippage. A swap worse than that reverts.
+- The **hosted bot** refuses to buy if the Uniswap price differs from the median of OKX/Binance/CoinGecko/
+  Gate/KuCoin by more than 2%, and simulates every swap before sending it.
+- **Owner-only:** withdraw (any time, even paused or with a broken pool), pause, change price/spacing,
+  lower limits. **Limits can only go down.** The bot can never withdraw, raise limits or change where OKB goes.
+- **Stolen-bot drill:** the factory is a *deny-only guardian*. Its admin can revoke a bot address for every
+  vault at once; it cannot move funds or loosen any rule. Owners then point their vault at a new bot.
+- **Worst case if the hosted bot key were stolen:** it could buy each vault's chosen amount, within its
+  limits and price ceiling, into the owner's own wallet — until revoked.
 
-The practice simulator below the live card works without a wallet:
+## 5. Revenue model
 
-1. Connect (practice session — it does not sign).
-2. Arm · 5 USDT.
-3. Start.
-4. Inject dip. A 50 USDT sweep should execute.
-5. Rogue 500 USDT. The circuit denies it.
-6. Pause rule, inject another dip. Denied because `paused = 1`.
-7. Open Status for the wallet-free DeWEB view.
-8. Circuit tab: paste the real processor contract and circuit ID after tape-out. Copy the form text from Brief.
+- **Fee per buy:** 1% of the USDT0 spent, paid to the Latch treasury. It falls to 0.75% after 1,000 USDT0 of
+  volume per vault, 0.5% after 5,000 and 0.25% after 20,000 (a loyalty ladder, enforced on chain).
+- **No sign-up fee, no withdrawal fee.** The hosted bot pays gas; on X Layer a buy costs well under a cent
+  of gas (~430k gas), so the fee covers it even for small buys.
+- **Why users pay and stay:** recurring and dip buying without custody risk and without trusting a bot;
+  the fee is comparable to or below exchange recurring-buy spreads, and falls with use.
 
-Reload the page while the daemon is running. The feed should say it resumed.
+## 6. TapeOut and ecosystem integration
 
-## Deploy on X Layer
+| Piece | Address / detail |
+|---|---|
+| TapeOut processor | `0x3728a5dfE596F6bF7309cA911e61ecaC9b0b6813` |
+| Circuit | **#1** — 13 NAND gates, 7 inputs, 1 output; `eval(0x7e)=allow`, `eval(0x7f)=deny` (checked at every deploy) |
+| How it is used | Called on **every buy** (`tick`) and in `preview` (shown in the dashboard) |
+| Uniswap V3 (X Layer) | SwapRouter02 `0x4f0c28f5926afda16bf2506d5d9e57ea190f9bca`, factory `0x4B2ab38DBF28D31D467aA8993f6c2585981D6804` |
+| Pool | USDT0/WOKB 0.05% `0xe3BE6A0137f1b0602Fc1a4841686f43B340a5082` (deepest; 2,048 price observations) |
+| Tokens | USDT0 `0x779Ded0c9e1022225f8E0630b35a9b54bE713736`, WOKB `0xe538905cf8410324e03A5A23C1c177a474D59b2b` |
+| LatchFactory | see `deployments/xlayer-latch.json` |
 
-Confirm current addresses in the TapeOut docs before you send anything. Factory, opener, and processor numbers move; do not trust a hardcoded processor from a different chain. BNB Chain processor numbers are not X Layer processor numbers.
+**New use case for TapeOut:** circuits as *programmable spending policies* for bots and AI agents. The same
+pattern (vault computes facts → circuit decides) works for payroll, allowances, treasury top-ups and agent
+budgets; only the circuit and the action change.
 
-1–2. Create your processor, mint 13 NAND transistors, tape out the policy and open the container — one resumable command (about 0.1 OKB total):
+## 7. Audit and testing
 
-```bash
-cd keeper && npm install
-echo "OWNER_PRIVATE_KEY=0x…" > .env
-node tapeout.mjs            # dry run: fees, balance, simulated first step
-SEND=1 node tapeout.mjs     # really send; re-run the same command if anything stops
+| What | Result |
+|---|---|
+| Slither (102 detectors) on LatchSwap, LatchFactory, UniMath | **0 findings** (remaining annotations are justified inline) |
+| Contract test suite (`audit/swap/swap.test.mjs`) against the **real Uniswap V3 factory, pool and SwapRouter02 bytecode** | **76 tests pass** — price guard, sandwich, dip buy, DCA spacing, caps, pause, withdraw, factory, revoke, dust, unsafe savings |
+| Uniswap math port (`UniMath.sol`) | Byte-identical constants; matches the original 0.7.6 libraries on 1,200 ticks, 2,400 quotes, 157 mulDiv cases (`audit/swap/extra.v1.test.mjs`) |
+| Independent review #1 (LatchSwap v1) | 0 Critical/High; 1 Medium + 4 Low — all fixed or documented: `audit/swap/INDEPENDENT_REVIEW.md` |
+| Independent review #2 (factory + DCA) | 0 Critical; 1 High, 2 Medium, Lows — all fixed: `audit/swap/INDEPENDENT_REVIEW_V3.md` |
+| Hosted bot (`keeper-worker/test/local.mjs`) | 16 end-to-end tests on real contracts: DCA, dip, divergence guard, pause, rotation, stolen key |
+| Website (`web/e2e.mjs`) | Browser test with a wallet: connect → create → fund → bot buys → dashboard → pause → withdraw |
+| Mainnet-fork rehearsal (`scripts/preflight-factory.sh`) | Full lifecycle against the real pool, tokens and circuit before any mainnet deploy |
+
+**Known limits (honest):** the pool is the price source; a pool held at a manipulated but steady price for
+30+ minutes is not detectable on chain (bounded by each user's ceiling and limits, and by the bot's
+exchange cross-check). The daily limit is per UTC day. USDT0 is issuer-freezable. Contracts are reviewed
+but not professionally audited — start small.
+
+## 8. Architecture
+
+```
+Browser (web/app.js, viem, OKX Wallet)
+   │ createVault / transfer USDT0 / pause / withdraw
+   ▼
+LatchFactory ──creates──► LatchSwap vault (one per user)
+                              │ tick(amount)  ◄── hosted bot (Cloudflare cron, keeper-worker/)
+                              ├─ 7 rule checks (Solidity)
+                              ├─ TapeOut processor.eval(#1, byte) must allow
+                              └─ Uniswap V3 SwapRouter02 → OKB to the user's wallet
 ```
 
-   It refuses to send if its own TAP-02 evaluation of the netlist allows anything but `0x7e`, simulates each transaction before sending, and ends by checking `eval(0x7e)` = allow and `eval(0x7f)` = deny on the live processor. Results are saved to `keeper/tapeout-state.json`.
+| Folder | What |
+|---|---|
+| `contracts/` | `LatchSwap.sol` (vault), `LatchFactory.sol`, `UniMath.sol`; earlier `LatchRelay.sol` (v2 savings relay) |
+| `keeper-worker/` | Hosted helper bot (Cloudflare Worker, cron every minute) |
+| `web/` | Website source; built into `public/` by `scripts/build-web.mjs` |
+| `audit/` | Test suites and independent reviews |
+| `scripts/` | Fork rehearsals and mainnet deploy scripts with built-in checks |
 
-   **TAP-02 wire numbering:** signal 0 is constant 0, signal 1 is constant 1, inputs start at signal 2, gate outputs follow. The netlist uses that numbering (allow is signal 21).
-
-3. Deploy, check and wire the console in one step (needs Foundry):
-
-```bash
-OWNER_KEY=0x… PROCESSOR=0x… CIRCUIT_ID=… CONTAINER=0x… \
-USDT=0x… SAVINGS=0x… TREASURY=0x… KEEPER=0x… \
-./scripts/golive.sh
-```
-
-   It refuses to deploy unless the processor's `eval` allows `0x7e` and denies `0x7f` for your circuit, deploys `LatchRelay` with caps in USDT's 6-decimal units (50 / 150 / 5 by default), re-checks the circuit through the relay, and writes the relay address into `index.html` so the console goes live.
-
-4. Transfer the circuit NFT to the relay so `container.execute` is authorized. This is one-way; `withdraw(to, amount)` is the owner's way to get funds back out.
-5. Fund the container with USDT, then call `arm()` from the owner key (pulls the 5 USDT activation fee to treasury).
-6. Run the keeper with a key that holds a little OKB for gas only:
+## 9. Run it yourself
 
 ```bash
-cd keeper && cp env.example .env   # set KEEPER_PRIVATE_KEY, RPC_URL, RELAY_ADDRESS
-npm install && node daemon.mjs
+# tests (need Foundry's anvil on PATH)
+cd audit/swap && npm install && npm test
+cd keeper-worker && npm install && npm test
+# free mainnet-fork rehearsal, then deploy (reads keeper/.env)
+./scripts/preflight-factory.sh
+./scripts/golive-factory.sh
+# website + bot
+npm install && npm run deploy
+cd keeper-worker && npx wrangler secret put KEEPER_PRIVATE_KEY && npx wrangler deploy
 ```
 
-   For the demo video, set `THRESHOLD` just above the live OKB price so a real sweep fires on camera, then call `tick` with 500 USDT from the keeper to record the on-chain rejection.
+## 10. Roadmap
 
-7. Publish the status page as the container’s DeWEB site (`tape://<id>.2.<cpu>.tape` once the name is live).
+- More actions with the same safety pattern: recurring payouts (payroll/allowances), treasury top-ups, agent budgets.
+- More pairs (WETH, WBTC on X Layer) and user-chosen circuits from a vetted list.
+- Agent SDK: let AI agents propose buys that the vault and circuit approve or deny.
+- Professional audit before raising the per-vault limits.
 
-## Submission
+## 11. History (what changed during the event)
 
-The Brief tab copies a description with processor, circuit ID, users, revenue, and the netlist hex. Deadline for TapeOut Accelerate: 7 December 2026, 23:59 UTC.
-
-Demo video: follow the timestamps on the Brief tab. Keep it under three minutes.
+- **Oct–Nov:** TapeOut circuit #1 taped out on mainnet; LatchRelay (savings sweep) v1 lost 15 USDT0 to a
+  container fee we had not tested against (lesson: rehearse on a mainnet fork — every deploy now does).
+- **Relay v2** (self-custody, audited) live; then the product was rebuilt into **LatchSwap + LatchFactory**:
+  real OKB buying on Uniswap, dip + DCA strategies, hosted bot, self-serve website, two independent reviews.
