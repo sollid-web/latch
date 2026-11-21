@@ -1,0 +1,15 @@
+{
+  "chainId": 196,
+  "rpc": [
+    "https://rpc.xlayer.tech",
+    "https://xlayerrpc.okx.com"
+  ],
+  "explorer": "https://www.oklink.com/xlayer",
+  "factory": "0xc700C9865f237612b0bA86408BB4C182D41ABD11",
+  "usdt": "0x779Ded0c9e1022225f8E0630b35a9b54bE713736",
+  "wokb": "0xe538905cf8410324e03A5A23C1c177a474D59b2b",
+  "pool": "0xe3BE6A0137f1b0602Fc1a4841686f43B340a5082",
+  "processor": "0x3728a5dfE596F6bF7309cA911e61ecaC9b0b6813",
+  "circuitId": 1,
+  "repo": "https://github.com/sollid-web/latch"
+}

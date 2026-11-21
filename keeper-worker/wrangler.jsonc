@@ -7,7 +7,7 @@
   // Every minute. Each vault's own on-chain rules decide whether a buy is allowed.
   "triggers": { "crons": ["* * * * *"] },
   "vars": {
-    "FACTORY_ADDRESS": "",
+    "FACTORY_ADDRESS": "0xc700C9865f237612b0bA86408BB4C182D41ABD11",
     "RPC_URL": "https://rpc.xlayer.tech",
     "CHAIN_ID": "196",
     "MAX_DIVERGENCE_PCT": "2",
