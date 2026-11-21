@@ -188,7 +188,7 @@ footer{max-width:64rem;margin:0 auto;padding:0 1.15rem 2.5rem}
 .fact dd{font-size:.76rem;overflow-wrap:anywhere;line-height:1.55}
 </style>
 <!-- tapecode:contracts -->
-<script>window.APP_CONFIG={"api":"https://tc-2a904b75.tapeguard.workers.dev","chainId":196,"contracts":{"LatchRelay":{"address":"0x7952C9B53347518b29016d2EAed8690A9808a2A0"}}};</script>
+<script>window.APP_CONFIG={"chainId":196,"contracts":{"LatchRelay":{"address":"0x7952C9B53347518b29016d2EAed8690A9808a2A0"}}};</script>
 <!-- /tapecode:contracts -->
 </head>
 <body>
@@ -1965,8 +1965,10 @@ function rpcOnce(url, method, params){
     headers: {'content-type': 'application/json'},
     body: JSON.stringify({jsonrpc: '2.0', id: 1, method: method, params: params})
   }).then(function(res){
-    if (!res.ok) throw new Error('RPC ' + url.replace(/^https?:\/\//, '') + ' answered HTTP ' + res.status);
-    return res.json();
+    // Some RPCs answer a revert or a too-wide log query with HTTP 400 plus a JSON error body.
+    return res.json().catch(function(){
+      throw new Error('RPC ' + url.replace(/^https?:\/\//, '') + ' answered HTTP ' + res.status);
+    });
   }).then(function(body){
     if (body.error){
       var e = new Error(body.error.message || 'rpc error');
@@ -2059,7 +2061,7 @@ function loadLive(force){
     d.previewAllow = wBool(w[1]);
     return rpcCall('eth_blockNumber', []).then(function(bn){
       var to = BigInt(bn);
-      var from = to > 9000n ? to - 9000n : 0n;
+      var from = to > 900n ? to - 900n : 0n;
       return rpcCall('eth_getLogs', [{address: liveRelay(), topics: [TOPIC_SWEEP], fromBlock: '0x' + from.toString(16), toBlock: '0x' + to.toString(16)}]);
     }).then(function(logs){
       d.sweeps = (logs || []).slice(-6).reverse().map(function(l){
@@ -2109,6 +2111,7 @@ function connectWallet(retry){
     live.walletChain = Number(id);
     if (live.walletChain !== liveChainId()) return switchChain();
   }).catch(function(err){
+    if (typeof console !== 'undefined') console.warn('[latch] wallet error', err && err.code, err && err.message, err);
     live.walletError = (err && err.code === -32002)
       ? 'Your wallet already has a connection request waiting. Open the wallet and approve or reject it, then try again.'
       : (err && err.code === 4001) ? 'Connection was rejected in the wallet.'
