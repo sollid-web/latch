@@ -13,3 +13,5 @@ keeper/tapeout-state.json
 .env
 see-out/
 node_modules/
+audit/swap/node_modules/
+keeper-worker/node_modules/
