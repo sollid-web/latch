@@ -22,4 +22,5 @@ const html = fs.readFileSync(path.join(root, 'web/index.html'), 'utf8')
   .replace('__APP__', () => js);
 fs.mkdirSync(path.join(root, 'public'), { recursive: true });
 fs.writeFileSync(path.join(root, 'public/index.html'), html);
+fs.copyFileSync(path.join(root, 'web/v1.html'), path.join(root, 'public/v1.html')); // the earlier relay console
 console.log(`public/index.html written (${(html.length / 1024).toFixed(0)} KiB) for factory ${config.factory}`);

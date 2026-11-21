@@ -1,0 +1,74 @@
+// UI end-to-end test (dev only): needs a local chain from a setup script that writes /tmp/ui/web-local.json,
+// a site built with WEB_CONFIG=/tmp/ui/web-local.json, and Playwright at /tmp/ui/node_modules.
+// Drives the real page with a mock OKX wallet: connect → create DCA vault → deposit → hosted bot buys →
+// dashboard shows the buy, rule chip, spacing → pause → withdraw all → mobile layout.
+import pw from '/tmp/ui/node_modules/playwright/index.js'; const { chromium } = pw;
+import fs from 'node:fs';
+const cfg = JSON.parse(fs.readFileSync('/tmp/ui/web-local.json', 'utf8'));
+const { runOnce } = await import('../keeper-worker/src/keeper.js');
+const shots = '/tmp/ui/shots'; fs.mkdirSync(shots, { recursive: true });
+const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1243/chrome-linux64/chrome' });
+const ctx = await b.newContext({ viewport: { width: 1280, height: 900 } });
+// Mock OKX wallet: forwards every request to the local chain, which signs as the user (auto-impersonate).
+await ctx.addInitScript(({ rpc, user }) => {
+  const call = async (method, params) => {
+    const r = await fetch(rpc, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
+    const j = await r.json(); if (j.error) { const e = new Error(j.error.message); e.code = j.error.code; e.data = j.error.data; throw e; } return j.result;
+  };
+  window.okxwallet = {
+    isOkxWallet: true,
+    request: async ({ method, params }) => {
+      if (method === 'eth_requestAccounts' || method === 'eth_accounts') return [user];
+      if (method === 'eth_chainId') return '0xc4';
+      if (method === 'wallet_switchEthereumChain') return null;
+      if (method === 'eth_sendTransaction') { params[0].from = user; }
+      return call(method, params || []);
+    },
+    on() {}
+  };
+  window.confirm = () => true;
+  window.prompt = (q, d) => (/How much/.test(q) ? '5' : /hours/.test(q) ? '24' : d);
+}, { rpc: cfg.rpc[0], user: cfg.user });
+const page = await ctx.newPage();
+const errs = []; page.on('pageerror', (e) => errs.push(String(e)));
+await page.goto('file:///home/claude/latch/public/index.html'); await page.waitForTimeout(1500);
+await page.screenshot({ path: shots + '/1-landing.png', fullPage: true });
+const ok = (n, c) => { console.log((c ? 'PASS ' : 'FAIL ') + n); if (!c) process.exitCode = 1; };
+const txt = () => page.evaluate(() => document.body.innerText);
+await page.click('text=Connect wallet'); await page.waitForTimeout(1500);
+ok('connected and sees empty dashboard', /You don't have a vault yet/.test(await txt()));
+await page.click('[data-a=wizard] >> nth=0'); await page.waitForTimeout(300);
+await page.click('.sheet [data-v=dca]'); await page.click('.sheet [data-a=next]');
+await page.fill('#f-perBuy', '2'); await page.selectOption('#f-every', '86400'); await page.fill('#f-price', '150');
+await page.screenshot({ path: shots + '/2-settings.png' });
+await page.click('.sheet [data-a=next]'); await page.waitForTimeout(200);
+ok('review sentence in plain words', /buys 2 USDT0 of OKB every day/.test(await txt()));
+await page.screenshot({ path: shots + '/3-review.png' });
+await page.click('[data-a=create]'); await page.waitForTimeout(4000);
+ok('vault created, deposit step shown', /Vault created/.test(await txt()));
+await page.fill('#f-deposit', '10'); await page.click('[data-a=deposit]'); await page.waitForTimeout(5000);
+const t1 = await txt();
+ok('dashboard shows the vault with 10 USDT0', /Auto-DCA/.test(t1) && /10\.00/.test(t1));
+ok('ready to buy (all checks pass)', /Ready to buy/.test(t1));
+await page.screenshot({ path: shots + '/4-dashboard-ready.png', fullPage: true });
+// hosted bot runs
+const r = await runOnce({ KEEPER_PRIVATE_KEY: '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d', RPC_URL: cfg.rpc[0], FACTORY_ADDRESS: cfg.factory }, { send: true, wait: true, prices: [{ venue: 'a', ok: true, price: 78.5 }, { venue: 'b', ok: true, price: 78.4 }] });
+ok('hosted bot bought', (r.vaults || []).some((v) => v.action === 'bought'));
+await page.click('[data-a=refresh] >> nth=0'); await page.waitForTimeout(4000);
+await page.evaluate(() => document.querySelectorAll('details').forEach((d) => d.open = true));
+const t2 = await txt();
+ok('dashboard: 1 buy, OKB bought, avg price ~78', /Average price paid\s*7[89]\./.test(t2) || /7[89]\.\d\d/.test(t2));
+ok('next buy is tomorrow (spacing)', /Next buy in/.test(t2));
+ok('rule chip line shown', /TapeOut rule chip #1 says/.test(t2));
+ok('recent buys table shows YES', /YES 0x/.test(t2));
+await page.screenshot({ path: shots + '/5-after-buy.png', fullPage: true });
+await page.click('[data-a=pause]'); await page.waitForTimeout(4000);
+ok('pause works', /Paused/.test(await txt()));
+await page.click('[data-a=withdraw]'); await page.waitForTimeout(4000);
+const t3 = await txt();
+ok('withdraw all works (0.00 left)', /USDT0 left to spend\s*0\.00/i.test(t3));
+await page.screenshot({ path: shots + '/6-withdrawn.png', fullPage: true });
+await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(300);
+await page.screenshot({ path: shots + '/7-mobile.png', fullPage: true });
+ok('no page errors', errs.length === 0); if (errs.length) console.log(errs);
+await b.close();
