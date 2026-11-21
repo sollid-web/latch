@@ -41,8 +41,21 @@ import {
   formatUnits
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /* ---------------------------------------------------------------- config */
+
+// Load keeper/.env (next to this file) without overriding real env vars.
+(function loadEnv(){
+  const file = path.join(path.dirname(fileURLToPath(import.meta.url)), '.env');
+  if (!fs.existsSync(file)) return;
+  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)){
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
+    if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+  }
+})();
 
 function env(name, fallback) {
   const v = process.env[name];
@@ -57,7 +70,7 @@ const KEEPER_TOKEN = env('KEEPER_TOKEN', '');
 
 const CHAIN_ID = Number(env('CHAIN_ID', '196'));
 const THRESHOLD = Number(env('THRESHOLD', '48'));
-const SWEEP_USDT = Number(env('SWEEP_USDT', '50'));
+const SWEEP_USDT = Number(env('SWEEP_USDT', '2'));
 
 const PRICE_INTERVAL_MS = Number(env('PRICE_INTERVAL_MS', '45000'));
 const HEARTBEAT_INTERVAL_MS = Number(env('HEARTBEAT_INTERVAL_MS', '200000'));
