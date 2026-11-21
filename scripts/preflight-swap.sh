@@ -5,8 +5,8 @@
 #
 # Reads keeper/.env for OWNER_PRIVATE_KEY (only to derive the owner address) and
 # KEEPER_PRIVATE_KEY (only to derive the keeper address). Optional env overrides:
-#   POOL_FEE (default 3000)  PER_TX / DAILY (whole USDT0, default 1 / 3)  ACTIVATION (default 0)
-#   SLIPPAGE_BPS (default 150)  TWAP (seconds, default 600)  SAVINGS / TREASURY
+#   POOL_FEE (default 500 = the deep 0.05% pool)  PER_TX / DAILY (whole USDT0, default 1 / 3)  ACTIVATION (default 0)
+#   SLIPPAGE_BPS (default 100)  TWAP (seconds, default 1800)  SAVINGS / TREASURY
 #   LOCAL_RPC=http://…  use an already-running unlocked test chain instead of forking (for CI)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -22,8 +22,8 @@ ROUTER="${ROUTER:-0x4f0c28f5926afda16bf2506d5d9e57ea190f9bca}"
 FACTORY="${FACTORY:-0x4B2ab38DBF28D31D467aA8993f6c2585981D6804}"
 SAVINGS="${SAVINGS:-0x9005cb6847903AFC626eB4Dee5137606C567FeE7}"
 TREASURY="${TREASURY:-0xb4bDEAc86CBdd0C148BB98504e1c35d8451A23a4}"
-POOL_FEE="${POOL_FEE:-3000}"; PER_TX="${PER_TX:-1}"; DAILY="${DAILY:-3}"; ACTIVATION="${ACTIVATION:-0}"
-SLIPPAGE_BPS="${SLIPPAGE_BPS:-150}"; TWAP="${TWAP:-600}"
+POOL_FEE="${POOL_FEE:-500}"; PER_TX="${PER_TX:-1}"; DAILY="${DAILY:-3}"; ACTIVATION="${ACTIVATION:-0}"
+SLIPPAGE_BPS="${SLIPPAGE_BPS:-100}"; TWAP="${TWAP:-1800}"; MIN_CARDINALITY="${MIN_CARDINALITY:-100}"
 
 fail(){ printf '\nSTOP: %s\n' "$*" >&2; exit 1; }
 ok(){ printf '  ok  %s\n' "$*"; }
@@ -58,7 +58,9 @@ echo "== Pool"
 POOL=$(cast call "$FACTORY" "getPool(address,address,uint24)(address)" "$USDT" "$WOKB" "$POOL_FEE" --rpc-url "$F")
 [ "$POOL" != "0x0000000000000000000000000000000000000000" ] || fail "no Uniswap V3 USDT0/WOKB pool with fee $POOL_FEE — run keeper/poolprobe.mjs and set POOL_FEE"
 S0=$(cast call "$POOL" "slot0()(uint160,int24,uint16,uint16,uint16,uint8,bool)" --rpc-url "$F" | tr '\n' ' ')
-ok "pool $POOL · slot0: $S0"
+CARD=$(echo "$S0" | awk '{for(i=1;i<=NF;i++) if($i!~/^\[/) a[++n]=$i; print a[4]}')
+python3 -c "import sys; sys.exit(0 if int('$CARD') >= int('$MIN_CARDINALITY') else 1)" || fail "pool keeps only $CARD price records; it can be blocked by anyone (review L-3). Use the 0.05% pool (POOL_FEE=500)"
+ok "pool $POOL · price records kept: $CARD"
 
 DEC=$(cast call "$USDT" "decimals()(uint8)" --rpc-url "$F" | first); UNIT=$(python3 -c "print(10**$DEC)")
 PT=$(python3 -c "print(int(round($PER_TX*$UNIT)))"); DC=$(python3 -c "print(int(round($DAILY*$UNIT)))"); AF=$(python3 -c "print(int(round($ACTIVATION*$UNIT)))")
@@ -73,7 +75,7 @@ ok "vault $VAULT"
 Q=$(cast call "$VAULT" "quote(uint256)(uint256,uint256,uint256)" "$PT" --rpc-url "$F" 2>&1) \
   || fail "the pool cannot give a ${TWAP}s average price (too little history?). Output: $Q"
 PRICE=$(echo "$Q" | sed -n 1p | first); EXP=$(echo "$Q" | sed -n 2p | first); MINOUT=$(echo "$Q" | sed -n 3p | first)
-ok "10-min average OKB price: $(python3 -c "print($PRICE/$UNIT)") USDT0 · $PER_TX USDT0 → expect $(python3 -c "print($EXP/1e18)") WOKB (accept ≥ $(python3 -c "print($MINOUT/1e18)"))"
+ok "$((TWAP/60))-min average OKB price: $(python3 -c "print($PRICE/$UNIT)") USDT0 · $PER_TX USDT0 → expect $(python3 -c "print($EXP/1e18)") WOKB (accept ≥ $(python3 -c "print($MINOUT/1e18)"))"
 
 echo "== Fund and switch on"
 NEED=$(python3 -c "print($AF + $PT + $PT*100//10000)")
@@ -115,5 +117,6 @@ if [ "$REST" != "0" ]; then tx "$OWNER" "$VAULT" "withdraw(address,address,uint2
 ok "paused and withdrew everything"
 
 echo
+[ -n "${LOCAL_RPC:-}" ] || date -u > .preflight-swap-ok
 echo "REHEARSAL OK: deploy, switch on, price guard, attacks refused, real Uniswap swap, pause, withdraw-all."
 echo "Nothing was sent to mainnet. Pool fee tier used: $POOL_FEE"

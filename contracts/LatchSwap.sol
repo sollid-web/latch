@@ -18,6 +18,10 @@ interface IUniswapV3PoolS {
     function token0() external view returns (address);
     function token1() external view returns (address);
     function fee() external view returns (uint24);
+    function slot0()
+        external
+        view
+        returns (uint160 sqrtPriceX96, int24 tick, uint16, uint16, uint16, uint8, bool);
     function observe(uint32[] calldata secondsAgos)
         external
         view
@@ -59,14 +63,23 @@ interface ISwapRouter02 {
 ///           2. The TapeOut circuit must allow the policy byte (STATICCALL; it can only deny).
 ///
 ///         Policy byte (same layout as LatchRelay, so circuit #1 = allow only 0x7e is reused):
-///         bit 0 paused, 1 keeper, 2 recipient is savings (structural), 3 TWAP price at or
-///         below maxPrice, 4 per-tx cap, 5 daily cap, 6 vault covers amount + fee.
+///         bit 0 paused, 1 keeper, 2 recipient is savings (structural), 3 price ok (TWAP at or
+///         below maxPrice AND spot within MAX_TICK_DEVIATION of the TWAP), 4 per-tx cap,
+///         5 daily cap, 6 vault covers amount + fee.
+///
+///         Price protection (see audit/swap/INDEPENDENT_REVIEW.md): TWAP over >= 30 min, spot
+///         within ~1% of it, worst accepted fill price <= maxPrice, and minOut = TWAP quote net of
+///         the pool fee, minus maxSlippageBps. The daily cap is per UTC calendar day, so up to
+///         2x dailyCap can pass within seconds around midnight (accepted, documented).
 ///
 ///         Units: caps, fee, maxPrice are in tokenIn base units. maxPrice is tokenIn units
 ///         per one whole tokenOut (10 ** tokenOut.decimals()).
 contract LatchSwap {
     uint256 public constant FEE_BPS = 100;
     uint256 public constant MAX_SLIPPAGE_BPS = 500; // hard ceiling on what the owner may allow
+    /// @notice Spot may differ from the TWAP by at most this many ticks (~1%) for a buy.
+    ///         Stops "inflate the TWAP, then pump spot" manipulation (review M-1).
+    int24 public constant MAX_TICK_DEVIATION = 100;
     uint256 private constant DAY = 1 days;
 
     address public owner;
@@ -130,6 +143,7 @@ contract LatchSwap {
     error PriceTooHigh(uint256 twapPrice, uint256 maxPrice);
     error SwapShort(uint256 got, uint256 minOut);
     error SwapAccounting();
+    error PriceUnstable();
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
@@ -168,13 +182,13 @@ contract LatchSwap {
                 || c.treasury == address(0) || c.keeper == address(0)
         ) revert ZeroAddress();
         if (c.perTxCap == 0 || c.dailyCap == 0 || c.perTxCap > c.dailyCap || c.dailyCap > type(uint128).max) revert OverCap();
-        if (c.maxPrice == 0 || c.maxSlippageBps == 0 || c.maxSlippageBps > MAX_SLIPPAGE_BPS) revert BadParam();
-        if (c.twapWindow < 60 || c.twapWindow > 3600) revert BadParam();
+        if (c.maxPrice == 0 || c.maxPrice > type(uint128).max || c.maxSlippageBps == 0 || c.maxSlippageBps > MAX_SLIPPAGE_BPS) revert BadParam();
+        if (c.twapWindow < 1800 || c.twapWindow > 7200) revert BadParam();
         if (c.tokenIn == c.tokenOut) revert BadToken();
         // Output and fees must land somewhere they can come back from.
         if (
             _isSystem(c.savings, c) || _isSystem(c.treasury, c) || c.savings == address(this)
-                || c.treasury == address(this)
+                || c.treasury == address(this) || uint160(c.savings) <= 0xff || uint160(c.treasury) <= 0xff
         ) revert BadRecipient();
         if (
             c.processor.code.length == 0 || c.tokenIn.code.length == 0 || c.tokenOut.code.length == 0
@@ -258,7 +272,7 @@ contract LatchSwap {
     /// @notice The highest TWAP price at which the vault will buy. Owner-only; the keeper
     ///         can never change it.
     function setMaxPrice(uint256 next) external onlyOwner {
-        if (next == 0) revert BadParam();
+        if (next == 0 || next > type(uint128).max) revert BadParam();
         maxPrice = next;
         emit MaxPriceSet(next);
     }
@@ -313,13 +327,15 @@ contract LatchSwap {
         int24 twapTick = _twapTick();
         uint256 price = _priceAt(twapTick);
         if (price > maxPrice) revert PriceTooHigh(price, maxPrice);
+        if (!_stable(twapTick)) revert PriceUnstable();
 
-        uint8 bits = _bits(amount, true, price);
+        uint8 bits = _bits(amount, true, _priceOk(twapTick, price));
         if (!_policy(bits)) revert CircuitDenied(bits);
 
-        uint256 expectedOut = UniMath.getQuoteAtTick(twapTick, uint128(amount), address(tokenIn), address(tokenOut));
-        uint256 minOut = (expectedOut * (10_000 - maxSlippageBps)) / 10_000;
+        uint256 minOut = _minOut(twapTick, amount);
         if (minOut == 0) revert SwapShort(0, 0);
+        // Worst accepted fill price must also respect maxPrice (review L-1).
+        if (amount * outUnit > maxPrice * minOut) revert PriceTooHigh(amount * outUnit / minOut, maxPrice);
 
         _rollDay();
         spentToday += amount;
@@ -357,8 +373,8 @@ contract LatchSwap {
 
     /// @notice The byte `tick` would build for this caller, and the verdict.
     function preview(uint256 amount) external view returns (uint8 bits, bool allow) {
-        uint256 price = _priceAt(_twapTick());
-        bits = _bits(amount, msg.sender == keeper, price);
+        int24 t = _twapTick();
+        bits = _bits(amount, msg.sender == keeper, _priceOk(t, _priceAt(t)));
         if (!armed || paused || msg.sender != keeper) return (bits, false);
         if ((bits & 0x78) != 0x78) return (bits, false);
         allow = _policy(bits);
@@ -371,7 +387,14 @@ contract LatchSwap {
         twapPrice = _priceAt(t);
         if (amount > type(uint128).max) revert BadParam();
         expectedOut = UniMath.getQuoteAtTick(t, uint128(amount), address(tokenIn), address(tokenOut));
-        minOut = (expectedOut * (10_000 - maxSlippageBps)) / 10_000;
+        minOut = _minOut(t, amount);
+    }
+
+    /// @notice Current pool tick and TWAP tick, so consoles can show the stability check.
+    // slither-disable-next-line unused-return (only the current tick is needed)
+    function ticks() external view returns (int24 spotTick, int24 twapTick_) {
+        (, spotTick,,,,,) = IUniswapV3PoolS(pool).slot0();
+        twapTick_ = _twapTick();
     }
 
     function circuitAllows(uint8 bits) external view returns (bool) {
@@ -438,12 +461,30 @@ contract LatchSwap {
         return UniMath.getQuoteAtTick(t, outUnit, address(tokenOut), address(tokenIn));
     }
 
-    function _bits(uint256 amount, bool keeperOk, uint256 price) internal view returns (uint8 bits) {
+    /// @dev TWAP quote net of the pool's LP fee, minus the owner's slippage budget (review L-2).
+    function _minOut(int24 t, uint256 amount) internal view returns (uint256) {
+        uint256 q = UniMath.getQuoteAtTick(t, uint128(amount), address(tokenIn), address(tokenOut));
+        return (q * (1_000_000 - uint256(poolFee)) * (10_000 - maxSlippageBps)) / 10_000_000_000;
+    }
+
+    // slither-disable-next-line unused-return (only the current tick is needed)
+    function _stable(int24 twapTick) internal view returns (bool) {
+        (, int24 spot,,,,,) = IUniswapV3PoolS(pool).slot0();
+        int256 d = int256(spot) - int256(twapTick);
+        if (d < 0) d = -d;
+        return d <= int256(MAX_TICK_DEVIATION);
+    }
+
+    function _priceOk(int24 t, uint256 price) internal view returns (bool) {
+        return price <= maxPrice && _stable(t);
+    }
+
+    function _bits(uint256 amount, bool keeperOk, bool priceOk) internal view returns (uint8 bits) {
         uint256 fee = (amount * feeBpsFor(volumeSwept)) / 10_000;
         if (paused) bits |= 1;
         if (keeperOk) bits |= 2;
         bits |= 4;
-        if (price <= maxPrice) bits |= 8;
+        if (priceOk) bits |= 8;
         if (amount > 0 && amount <= perTxCap) bits |= 16;
         if (_spentToday() + amount <= dailyCap) bits |= 32;
         if (tokenIn.balanceOf(address(this)) >= amount + fee) bits |= 64;

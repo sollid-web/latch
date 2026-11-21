@@ -118,7 +118,7 @@ try {
     await tx(aw, t, ERC.abi, 'approve', [driver, 2n ** 256n - 1n]);
   }
   await tx(ow, driver, Driver.abi, 'addLiquidity', [pool, -887220, 887220, 10n ** 15n]);
-  await wait(900);
+  await wait(2000);
 
   /* ---------------------------------------------------- latch setup */
   const proc = await deploy(Proc);
@@ -129,7 +129,7 @@ try {
   const cfg = (over = {}) => ({
     processor: proc, circuitId: 1n, tokenIn: usdt, tokenOut: wokb, router, pool,
     savings: savings.address, treasury: treasury.address, keeper: keeper.address,
-    perTxCap: 2n * U, dailyCap: 6n * U, activationFee: 1n * U, maxPrice: 48n * U, maxSlippageBps: 100n, twapWindow: 600,
+    perTxCap: 2n * U, dailyCap: 6n * U, activationFee: 1n * U, maxPrice: 48n * U, maxSlippageBps: 100n, twapWindow: 1800,
     ...over
   });
   const deployVault = (over) => deploy(Swap, [cfg(over)]);
@@ -157,7 +157,8 @@ try {
   check('deploy: a non-pool contract is refused', (await deployErr({ pool: fakePool })) !== 'OK');
   check('deploy: a pool for other tokens is refused', (await deployErr({ tokenOut: fakePool })) === 'BadPool', await deployErr({ tokenOut: fakePool }));
   check('deploy: slippage above 5% is refused', (await deployErr({ maxSlippageBps: 501n })) === 'BadParam');
-  check('deploy: TWAP window under 60s is refused', (await deployErr({ twapWindow: 30 })) === 'BadParam');
+  check('deploy: TWAP window under 30 min is refused', (await deployErr({ twapWindow: 600 })) === 'BadParam');
+  check('deploy: savings = address(1) is refused', (await deployErr({ savings: '0x0000000000000000000000000000000000000001' })) === 'BadRecipient');
   check('deploy: per-tx above daily is refused', (await deployErr({ perTxCap: 7n * U })) === 'OverCap');
   void pool500;
 
@@ -212,20 +213,39 @@ try {
   check('sandwich (spot pumped, TWAP not): buy refused', r1 !== 'OK', r1);
   // attacker dumps back; let TWAP settle
   await tx(aw, driver, Driver.abi, 'push', [pool, !pumpZeroForOne, 39n * O, !pumpZeroForOne ? MIN_SQRT : MAX_SQRT]);
-  await wait(900);
+  await wait(2000);
 
   // ---- a real dip: price falls to ~40 and stays 10 min → buys under max 48
   await tx(ow, vault, Swap.abi, 'setMaxPrice', [48n * U]);
   check('back near 77 with max 48: refused', (await why(kw, vault, Swap.abi, 'tick', [1n * U])) === 'PriceTooHigh');
   // sell OKB to push price down to ~40
   await tx(aw, driver, Driver.abi, 'push', [pool, !pumpZeroForOne, 10n ** 30n, sqrtX96(40)]);
-  await wait(700);
+  await wait(1900);
   const [twapDip] = await read(vault, Swap.abi, 'quote', [1n * U]);
   check('TWAP after the dip ~40', twapDip > 38n * U && twapDip < 42n * U, twapDip);
   const before2 = await read(wokb, ERC.abi, 'balanceOf', [savings.address]);
   await tx(kw, vault, Swap.abi, 'tick', [1n * U]);
   const bought = (await read(wokb, ERC.abi, 'balanceOf', [savings.address])) - before2;
   check('dip buy: ~1/40 OKB bought into savings', bought > (O / 41n) && bought < (O / 39n), bought);
+
+  // ---- spot far from TWAP (pump just before the buy, TWAP still cheap) → PriceUnstable
+  await tx(ow, vault, Swap.abi, 'setMaxPrice', [60n * U]);
+  await tx(aw, driver, Driver.abi, 'push', [pool, pumpZeroForOne, 10n ** 30n, sqrtX96(44)]);
+  const rU = await why(kw, vault, Swap.abi, 'tick', [1n * U]);
+  check('spot 10% above TWAP: refused (PriceUnstable)', rU === 'PriceUnstable', rU);
+  [bits, allow] = await read(vault, Swap.abi, 'preview', [1n * U], keeper.address);
+  check('preview agrees: bit 3 off while unstable', (bits & 8) === 0 && allow === false, bits);
+  await wait(2000);
+  // ---- worst fill price must respect maxPrice (L-1): TWAP ~44, maxPrice 44.2 → minOut implies > 44.2
+  await tx(ow, vault, Swap.abi, 'setMaxPrice', [44_200_000n]);
+  const rL1 = await why(kw, vault, Swap.abi, 'tick', [1n * U]);
+  check('TWAP under max but worst fill above max: refused', rL1 === 'PriceTooHigh', rL1);
+  // ---- slippage below the pool fee still trades now (L-2): fee netted out of minOut
+  await tx(ow, vault, Swap.abi, 'setMaxPrice', [60n * U]);
+  await tx(ow, vault, Swap.abi, 'setMaxSlippage', [25n]);
+  const rL2 = await why(kw, vault, Swap.abi, 'tick', [1n * U]);
+  check('slippage 0.25% on a 0.3% pool: buy works (fee netted)', rL2 === 'OK', rL2);
+  await tx(ow, vault, Swap.abi, 'setMaxSlippage', [100n]);
 
   // ---- circuit denial path
   const vaultDeny = await deployVault({ circuitId: 3n, maxPrice: 1000n * U });
