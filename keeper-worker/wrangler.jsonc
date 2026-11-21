@@ -4,15 +4,14 @@
   "main": "src/index.js",
   "compatibility_date": "2026-11-04",
   "observability": { "enabled": true },
-  // Every minute. The vault's own limits (2 per transfer, 6 per day) cap what can move.
+  // Every minute. Each vault's own on-chain rules decide whether a buy is allowed.
   "triggers": { "crons": ["* * * * *"] },
   "vars": {
-    "RELAY_ADDRESS": "0x7952C9B53347518b29016d2EAed8690A9808a2A0",
+    "FACTORY_ADDRESS": "",
     "RPC_URL": "https://rpc.xlayer.tech",
     "CHAIN_ID": "196",
-    "THRESHOLD": "48",
-    "SWEEP_USDT": "2",
-    "MAX_SPREAD_PCT": "6",
+    "MAX_DIVERGENCE_PCT": "2",
+    "MAX_SENDS_PER_RUN": "5",
     "MAX_GAS_GWEI": "50"
   }
   // KEEPER_PRIVATE_KEY is a secret: npx wrangler secret put KEEPER_PRIVATE_KEY

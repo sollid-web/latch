@@ -8,7 +8,7 @@ export default {
   async scheduled(event, env, ctx) {
     try {
       const r = await runOnce(env, { send: true });
-      console.log(JSON.stringify({ action: r.action, why: r.why || r.verdict?.reason, tx: r.tx, errors: r.errors }));
+      console.log(JSON.stringify({ action: r.action, why: r.why, errors: r.errors, market: r.market, vaults: (r.vaults || []).map((v) => ({ v: v.vault, a: v.action, why: v.why, tx: v.tx })) }));
     } catch (err) {
       console.error('keeper run failed:', (err && (err.shortMessage || err.message)) || err);
     }
