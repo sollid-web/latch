@@ -2050,10 +2050,25 @@ function loadLive(force){
 }
 
 /* ---- wallet ---- */
-function connectWallet(){
-  var w = wallet();
+var eip6963 = [];
+if (typeof window !== 'undefined'){
+  window.addEventListener('eip6963:announceProvider', function(ev){
+    if (ev && ev.detail && ev.detail.provider) eip6963.push(ev.detail.provider);
+  });
+  try { window.dispatchEvent(new Event('eip6963:requestProvider')); } catch (e) {}
+}
+function connectWallet(retry){
+  var w = wallet() || eip6963[0] || null;
+  if (!w && retry !== 'retried'){
+    // Wallet extensions often inject a moment after the page loads.
+    live.walletError = 'Looking for a wallet…';
+    render();
+    try { window.dispatchEvent(new Event('eip6963:requestProvider')); } catch (e) {}
+    setTimeout(function(){ connectWallet('retried'); }, 1200);
+    return;
+  }
   if (!w){
-    live.walletError = 'No wallet found. Install OKX Wallet or MetaMask, then reload.';
+    live.walletError = 'No wallet found in this browser. Open this page in the OKX Wallet app browser, or install OKX Wallet or MetaMask and reload.';
     render();
     return;
   }
@@ -2180,7 +2195,10 @@ function liveCard(){
   );
   if (!d){
     return h('div', {class: 'card pad0'}, bar,
-      h('div', {class: 'body'}, h('p', {class: 'tiny', text: live.error || 'Reading ' + shortAddr(liveRelay()) + ' on chain…'})));
+      h('div', {class: 'body'},
+        h('p', {class: 'tiny', text: live.error || 'Reading ' + shortAddr(liveRelay()) + ' on chain…'}),
+        live.walletError ? h('p', {class: 'tiny no', text: live.walletError}) : null,
+        live.account ? null : h('div', {class: 'actions'}, btn('Connect wallet', function(){ connectWallet(); }, {amber: true, small: true}))));
   }
   var u = d.unit;
   var role = liveRole();

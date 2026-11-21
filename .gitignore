@@ -11,3 +11,5 @@ lib
 keeper/.env
 keeper/tapeout-state.json
 .env
+see-out/
+node_modules/
