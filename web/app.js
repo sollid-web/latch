@@ -48,7 +48,7 @@ const VAULT = parseAbi([
   'function withdraw(address token, address to, uint256 amount)',
   'error NotOwner()', 'error NotKeeper()', 'error Paused()', 'error OverCap()', 'error Underfunded()',
   'error BadParam()', 'error CapRaised()', 'error BadRecipient()', 'error ZeroAddress()', 'error TooSoon(uint256)',
-  'error PriceTooHigh(uint256,uint256)', 'error PriceUnstable()', 'error CircuitDenied(uint8)', 'error NotArmed()'
+  'error PriceTooHigh(uint256,uint256)', 'error PriceUnstable()', 'error CircuitDenied(uint8)', 'error NotArmed()', 'error BadSavings()'
 ]);
 const ERC20 = parseAbi([
   'function balanceOf(address) view returns (uint256)',
@@ -64,7 +64,8 @@ const ERRORS_PLAIN = {
   CapRaised: 'Limits can only be lowered, never raised. That is a safety rule.',
   BadRecipient: 'That wallet cannot receive OKB from a vault (it is a system contract). Use your own wallet address.',
   ZeroAddress: 'An address is missing.',
-  OverCap: 'Per-buy amount must be above 0 and not more than the daily limit.'
+  OverCap: 'Amount per buy must be at least 1 USDT0 and not more than the daily limit.',
+  BadSavings: 'That wallet cannot receive the OKB (it is Latch\u2019s fee wallet, a bot, or another vault). Choose another wallet address.'
 };
 
 /* ---------------------------------------------------------------- state */
