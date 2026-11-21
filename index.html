@@ -1948,8 +1948,9 @@ function scanAddr(addr){ return liveMeta().scan + '/address/' + addr; }
 
 /* ---- JSON-RPC + ABI, by hand: one contract, a dozen calls ---- */
 function rpcCall(method, params){
+  // Reads go to the public RPC first, so a wallet's own (sometimes flaky) X Layer endpoint
+  // can never break the page. The wallet is only the fallback and the signer.
   var w = wallet();
-  if (walletOnChain() && w && method !== 'eth_getLogs') return w.request({method: method, params: params});
   return fetch(liveRpcUrl(), {
     method: 'POST',
     headers: {'content-type': 'application/json'},
@@ -1961,6 +1962,9 @@ function rpcCall(method, params){
       throw e;
     }
     return body.result;
+  }, function(netErr){
+    if (walletOnChain() && w && method !== 'eth_getLogs') return w.request({method: method, params: params});
+    throw netErr;
   });
 }
 function word(hex){ return String(hex).replace(/^0x/, '').padStart(64, '0'); }
