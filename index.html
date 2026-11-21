@@ -2099,7 +2099,18 @@ function connectWallet(retry){
     return;
   }
   if (!w){
-    live.walletError = 'No wallet found in this browser. Open this page in the OKX Wallet app browser, or install OKX Wallet or MetaMask and reload.';
+    if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '')){
+      // Phone browsers have no wallet: hand the page to the OKX Wallet app's built-in browser.
+      live.walletError = 'Opening this page in the OKX Wallet app…';
+      render();
+      window.location.href = 'okx://wallet/dapp/url?dappUrl=' + encodeURIComponent(window.location.href);
+      setTimeout(function(){
+        live.walletError = 'No wallet in this browser. Install OKX Wallet, then open this page from its Discover tab.';
+        render();
+      }, 2500);
+      return;
+    }
+    live.walletError = 'No wallet found in this browser. Install the OKX Wallet extension and reload.';
     render();
     return;
   }
