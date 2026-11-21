@@ -22,6 +22,7 @@ const out = JSON.parse(solc.compile(JSON.stringify({
   sources: {
     'LatchSwap.sol': { content: src(path.join(root, 'contracts/LatchSwap.sol')) },
     'UniMath.sol': { content: src(path.join(root, 'contracts/UniMath.sol')) },
+    'LatchFactory.sol': { content: src(path.join(root, 'contracts/LatchFactory.sol')) },
     'Helpers.sol': { content: src(path.join(here, 'Helpers.sol')) }
   },
   settings: { optimizer: { enabled: true, runs: 200 }, evmVersion: 'cancun', outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object'] } } }
@@ -29,6 +30,9 @@ const out = JSON.parse(solc.compile(JSON.stringify({
 for (const e of out.errors || []) if (e.severity === 'error') { console.error(e.formattedMessage); process.exit(1); }
 const art = (f, c) => ({ abi: out.contracts[f][c].abi, bytecode: '0x' + out.contracts[f][c].evm.bytecode.object });
 const Swap = art('LatchSwap.sol', 'LatchSwap');
+const Fac = art('LatchFactory.sol', 'LatchFactory');
+console.log('sizes (bytes, runtime limit 24576): LatchSwap', (out.contracts['LatchSwap.sol'].LatchSwap.evm.bytecode.object.length / 2) | 0,
+  '· LatchFactory', (out.contracts['LatchFactory.sol'].LatchFactory.evm.bytecode.object.length / 2) | 0);
 const ERC = art('Helpers.sol', 'TestERC20');
 const Proc = art('Helpers.sol', 'NetlistProcessor');
 const Driver = art('Helpers.sol', 'PoolDriver');
@@ -127,6 +131,7 @@ try {
   await tx(ow, proc, Proc.abi, 'tape', [1n, net, 7, 1]);
   await tx(ow, proc, Proc.abi, 'tape', [3n, '0x00000001000001', 7, 1]); // one gate NAND(1,1)=0 → always deny
   const cfg = (over = {}) => ({
+    owner: '0x0000000000000000000000000000000000000000', minInterval: 0n,
     processor: proc, circuitId: 1n, tokenIn: usdt, tokenOut: wokb, router, pool,
     savings: savings.address, treasury: treasury.address, keeper: keeper.address,
     perTxCap: 2n * U, dailyCap: 6n * U, activationFee: 1n * U, maxPrice: 48n * U, maxSlippageBps: 100n, twapWindow: 1800,
@@ -246,6 +251,48 @@ try {
   const rL2 = await why(kw, vault, Swap.abi, 'tick', [1n * U]);
   check('slippage 0.25% on a 0.3% pool: buy works (fee netted)', rL2 === 'OK', rL2);
   await tx(ow, vault, Swap.abi, 'setMaxSlippage', [100n]);
+
+  // ---- spacing between buys (auto-DCA)
+  const dca = await deployVault({ maxPrice: 1000n * U, minInterval: 86400n, activationFee: 0n });
+  check('no switch-on fee: vault starts switched on', (await read(dca, Swap.abi, 'armed')) === true);
+  await tx(ow, usdt, ERC.abi, 'transfer', [dca, 5n * U]);
+  await tx(kw, dca, Swap.abi, 'tick', [1n * U]);
+  check('DCA: first buy goes through', (await read(wokb, ERC.abi, 'balanceOf', [savings.address])) > 0n);
+  check('DCA: second buy same day refused (TooSoon)', (await why(kw, dca, Swap.abi, 'tick', [1n * U])) === 'TooSoon');
+  [bits, allow] = await read(dca, Swap.abi, 'preview', [1n * U], keeper.address);
+  check('DCA: preview bit 5 off while too soon', (bits & 32) === 0 && allow === false, bits);
+  check('keeper cannot shorten the spacing', (await why(kw, dca, Swap.abi, 'setMinInterval', [0n])) === 'NotOwner');
+  check('spacing over 30 days refused', (await why(ow, dca, Swap.abi, 'setMinInterval', [31n * 86400n])) === 'BadParam');
+  await wait(86400);
+  check('DCA: a day later the next buy is allowed', (await why(kw, dca, Swap.abi, 'tick', [1n * U])) === 'OK');
+
+  // ---- factory: anyone creates a vault they own, risky settings pinned
+  const fac = await deploy(Fac, [proc, 1n, usdt, wokb, router, pool, treasury.address, keeper.address, 1800, 100n]);
+  const userW = aw; // the "attacker" account doubles as an ordinary user here
+  const r0 = await tx(userW, fac, Fac.abi, 'createVault', [attacker.address, 2n * U, 6n * U, 1000n * U, 0n, '0x0000000000000000000000000000000000000000']);
+  const [uv] = await read(fac, Fac.abi, 'vaultsOf', [attacker.address]);
+  check('factory: creator owns the vault', (await read(uv, Swap.abi, 'owner')).toLowerCase() === attacker.address.toLowerCase());
+  check('factory: hosted bot is the default keeper', (await read(uv, Swap.abi, 'keeper')).toLowerCase() === keeper.address.toLowerCase());
+  check('factory: vault starts switched on', (await read(uv, Swap.abi, 'armed')) === true);
+  check('factory: pool, circuit, treasury pinned', (await read(uv, Swap.abi, 'pool')).toLowerCase() === pool.toLowerCase()
+    && (await read(uv, Swap.abi, 'circuitId')) === 1n && (await read(uv, Swap.abi, 'treasury')).toLowerCase() === treasury.address.toLowerCase());
+  check('factory: isVault + count', (await read(fac, Fac.abi, 'isVault', [uv])) === true && (await read(fac, Fac.abi, 'vaultCount')) === 1n);
+  await tx(userW, usdt, ERC.abi, 'transfer', [uv, 3n * U]);
+  const ub0 = await read(wokb, ERC.abi, 'balanceOf', [attacker.address]);
+  await tx(kw, uv, Swap.abi, 'tick', [2n * U]);
+  check('factory vault: hosted bot buys into the user wallet', (await read(wokb, ERC.abi, 'balanceOf', [attacker.address])) > ub0);
+  check('factory vault: factory admin cannot withdraw user funds', (await why(ow, uv, Swap.abi, 'withdraw', [usdt, owner.address, 1n])) === 'NotOwner');
+  await tx(userW, uv, Swap.abi, 'withdraw', [usdt, attacker.address, 2n ** 256n - 1n]);
+  check('factory vault: user withdraws everything', (await read(usdt, ERC.abi, 'balanceOf', [uv])) === 0n);
+  await tx(userW, fac, Fac.abi, 'createVault', [attacker.address, 1n * U, 3n * U, 60n * U, 86400n, savings.address]);
+  const [, uv2] = await read(fac, Fac.abi, 'vaultsOf', [attacker.address]);
+  check('factory: user can pick their own bot / AI agent', (await read(uv2, Swap.abi, 'keeper')).toLowerCase() === savings.address.toLowerCase());
+  const page = await read(fac, Fac.abi, 'vaultsPage', [0n, 10n]);
+  check('factory: vaultsPage lists both', page.length === 2);
+  check('factory: only admin sets hosted bot', (await why(aw, fac, Fac.abi, 'setHostedKeeper', [attacker.address])) === 'NotAdmin');
+  const badSav = await why(userW, fac, Fac.abi, 'createVault', [pool, 1n * U, 3n * U, 60n * U, 0n, '0x0000000000000000000000000000000000000000']);
+  check('factory: savings = pool refused', badSav === 'BadRecipient', badSav);
+  void r0;
 
   // ---- circuit denial path
   const vaultDeny = await deployVault({ circuitId: 3n, maxPrice: 1000n * U });

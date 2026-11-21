@@ -65,7 +65,7 @@ interface ISwapRouter02 {
 ///         Policy byte (same layout as LatchRelay, so circuit #1 = allow only 0x7e is reused):
 ///         bit 0 paused, 1 keeper, 2 recipient is savings (structural), 3 price ok (TWAP at or
 ///         below maxPrice AND spot within MAX_TICK_DEVIATION of the TWAP), 4 per-tx cap,
-///         5 daily cap, 6 vault covers amount + fee.
+///         5 daily cap AND minInterval since the last buy, 6 vault covers amount + fee.
 ///
 ///         Price protection (see audit/swap/INDEPENDENT_REVIEW.md): TWAP over >= 30 min, spot
 ///         within ~1% of it, worst accepted fill price <= maxPrice, and minOut = TWAP quote net of
@@ -108,6 +108,11 @@ contract LatchSwap {
     uint256 public volumeSwept;
     uint256 public maxPrice;
     uint256 public maxSlippageBps;
+    /// @notice Minimum seconds between two buys. 0 = no spacing ("buy the dip"); 1 day or
+    ///         1 week = "auto-DCA". Also limits how fast a stolen keeper key can spend.
+    uint256 public minInterval;
+    uint256 public lastBuyAt;
+    uint256 public constant MAX_INTERVAL = 30 days;
     uint256 private locked;
 
     event Armed(address indexed payer, uint256 fee);
@@ -118,6 +123,7 @@ contract LatchSwap {
     event PausedSet(bool paused);
     event MaxPriceSet(uint256 maxPrice);
     event SlippageSet(uint256 bps);
+    event MinIntervalSet(uint256 secs);
     event Withdrawn(address indexed token, address indexed to, uint256 amount);
     event OwnershipTransferStarted(address indexed from, address indexed to);
     event OwnershipTransferred(address indexed from, address indexed to);
@@ -144,6 +150,7 @@ contract LatchSwap {
     error SwapShort(uint256 got, uint256 minOut);
     error SwapAccounting();
     error PriceUnstable();
+    error TooSoon(uint256 nextBuyAt);
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
@@ -158,6 +165,7 @@ contract LatchSwap {
     }
 
     struct Config {
+        address owner; // address(0) = deployer
         address processor;
         uint256 circuitId;
         address tokenIn;
@@ -173,8 +181,10 @@ contract LatchSwap {
         uint256 maxPrice;
         uint256 maxSlippageBps;
         uint32 twapWindow;
+        uint256 minInterval;
     }
 
+    // slither-disable-next-line cyclomatic-complexity (flat list of input checks)
     constructor(Config memory c) {
         if (
             c.processor == address(0) || c.tokenIn == address(0) || c.tokenOut == address(0)
@@ -184,6 +194,7 @@ contract LatchSwap {
         if (c.perTxCap == 0 || c.dailyCap == 0 || c.perTxCap > c.dailyCap || c.dailyCap > type(uint128).max) revert OverCap();
         if (c.maxPrice == 0 || c.maxPrice > type(uint128).max || c.maxSlippageBps == 0 || c.maxSlippageBps > MAX_SLIPPAGE_BPS) revert BadParam();
         if (c.twapWindow < 1800 || c.twapWindow > 7200) revert BadParam();
+        if (c.minInterval > MAX_INTERVAL) revert BadParam();
         if (c.tokenIn == c.tokenOut) revert BadToken();
         // Output and fees must land somewhere they can come back from.
         if (
@@ -208,7 +219,9 @@ contract LatchSwap {
         uint8 decOut = IERC20S(c.tokenOut).decimals();
         if (decIn > 30 || decOut > 30) revert BadToken();
 
-        owner = msg.sender;
+        // slither-disable-next-line missing-zero-check (zero falls back to the deployer)
+        address owner_ = c.owner == address(0) ? msg.sender : c.owner;
+        owner = owner_;
         processor = IProcessorS(c.processor);
         circuitId = c.circuitId;
         tokenIn = IERC20S(c.tokenIn);
@@ -227,7 +240,13 @@ contract LatchSwap {
         activationFee = c.activationFee;
         maxPrice = c.maxPrice;
         maxSlippageBps = c.maxSlippageBps;
-        emit OwnershipTransferred(address(0), msg.sender);
+        minInterval = c.minInterval;
+        // With no switch-on fee there is nothing to pay, so the vault starts switched on.
+        if (c.activationFee == 0) {
+            armed = true;
+            emit Armed(owner_, 0);
+        }
+        emit OwnershipTransferred(address(0), owner_);
     }
 
     function _isSystem(address a, Config memory c) private pure returns (bool) {
@@ -283,6 +302,12 @@ contract LatchSwap {
         emit SlippageSet(bps);
     }
 
+    function setMinInterval(uint256 secs) external onlyOwner {
+        if (secs > MAX_INTERVAL) revert BadParam();
+        minInterval = secs;
+        emit MinIntervalSet(secs);
+    }
+
     function arm() external onlyOwner nonReentrant {
         if (armed) revert AlreadyArmed();
         uint256 fee = activationFee;
@@ -319,6 +344,7 @@ contract LatchSwap {
         if (paused) revert Paused();
         if (amount == 0 || amount > perTxCap) revert OverCap();
         if (_spentToday() + amount > dailyCap) revert OverCap();
+        if (!_spacedOk()) revert TooSoon(lastBuyAt + minInterval);
         uint256 bps = feeBpsFor(volumeSwept);
         uint256 fee = (amount * bps) / 10_000;
         uint256 balBefore = tokenIn.balanceOf(address(this));
@@ -340,6 +366,7 @@ contract LatchSwap {
         _rollDay();
         spentToday += amount;
         volumeSwept += amount;
+        lastBuyAt = block.timestamp;
 
         if (fee > 0) _call(address(tokenIn), abi.encodeWithSelector(IERC20S.transfer.selector, treasury, fee));
 
@@ -467,6 +494,18 @@ contract LatchSwap {
         return (q * (1_000_000 - uint256(poolFee)) * (10_000 - maxSlippageBps)) / 10_000_000_000;
     }
 
+    // slither-disable-next-line timestamp,incorrect-equality (0 = never bought; spacing is minutes-to-days)
+    function _spacedOk() internal view returns (bool) {
+        return lastBuyAt == 0 || block.timestamp >= lastBuyAt + minInterval;
+    }
+
+    /// @notice When the next buy is allowed by the spacing rule (0 = now).
+    // slither-disable-next-line timestamp,incorrect-equality
+    function nextBuyAt() external view returns (uint256) {
+        if (lastBuyAt == 0) return 0;
+        return lastBuyAt + minInterval;
+    }
+
     // slither-disable-next-line unused-return (only the current tick is needed)
     function _stable(int24 twapTick) internal view returns (bool) {
         (, int24 spot,,,,,) = IUniswapV3PoolS(pool).slot0();
@@ -479,6 +518,7 @@ contract LatchSwap {
         return price <= maxPrice && _stable(t);
     }
 
+    // slither-disable-next-line timestamp (UTC-day and spacing rules, documented)
     function _bits(uint256 amount, bool keeperOk, bool priceOk) internal view returns (uint8 bits) {
         uint256 fee = (amount * feeBpsFor(volumeSwept)) / 10_000;
         if (paused) bits |= 1;
@@ -486,7 +526,7 @@ contract LatchSwap {
         bits |= 4;
         if (priceOk) bits |= 8;
         if (amount > 0 && amount <= perTxCap) bits |= 16;
-        if (_spentToday() + amount <= dailyCap) bits |= 32;
+        if (_spentToday() + amount <= dailyCap && _spacedOk()) bits |= 32;
         if (tokenIn.balanceOf(address(this)) >= amount + fee) bits |= 64;
     }
 
