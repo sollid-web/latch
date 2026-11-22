@@ -1,13 +1,26 @@
-// UI end-to-end test (dev only): needs a local chain from a setup script that writes /tmp/ui/web-local.json,
-// a site built with WEB_CONFIG=/tmp/ui/web-local.json, and Playwright at /tmp/ui/node_modules.
+// UI end-to-end test (dev only). Three terminals' worth of steps, from the repo root:
+//   1. node web/e2e-setup.mjs                                   (local chain; prints READY, keep it running)
+//   2. WEB_CONFIG=<tmp>/latch-ui/web-local.json node scripts/build-web.mjs
+//   3. node web/e2e.mjs                                         (needs Playwright: npm i -g playwright, or PLAYWRIGHT=/path/to/playwright)
+// UI_DIR overrides <tmp>/latch-ui; CHROME=/path/to/chrome picks a browser binary.
 // Drives the real page with a mock OKX wallet: connect → create DCA vault → deposit → hosted bot buys →
 // dashboard shows the buy, rule chip, spacing → pause → withdraw all → mobile layout.
-import pw from '/tmp/ui/node_modules/playwright/index.js'; const { chromium } = pw;
 import fs from 'node:fs';
-const cfg = JSON.parse(fs.readFileSync('/tmp/ui/web-local.json', 'utf8'));
+import os from 'node:os';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+const R = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const UI = process.env.UI_DIR || path.join(os.tmpdir(), 'latch-ui');
+const pwPath = process.env.PLAYWRIGHT || (() => {
+  try { return createRequire(import.meta.url).resolve('playwright'); } catch { /* not local */ }
+  try { return createRequire(path.join(process.execPath, '..', '..', 'lib', 'node_modules', 'x.js')).resolve('playwright'); } catch { return 'playwright'; }
+})();
+const { chromium } = (await import(pwPath.startsWith('/') ? pathToFileURL(pwPath).href : pwPath)).default;
+const cfg = JSON.parse(fs.readFileSync(path.join(UI, 'web-local.json'), 'utf8'));
 const { runOnce } = await import('../keeper-worker/src/keeper.js');
-const shots = '/tmp/ui/shots'; fs.mkdirSync(shots, { recursive: true });
-const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1243/chrome-linux64/chrome' });
+const shots = path.join(UI, 'shots'); fs.mkdirSync(shots, { recursive: true });
+const b = await chromium.launch(process.env.CHROME ? { executablePath: process.env.CHROME } : {});
 const ctx = await b.newContext({ viewport: { width: 1280, height: 900 } });
 // Mock OKX wallet: forwards every request to the local chain, which signs as the user (auto-impersonate).
 await ctx.addInitScript(({ rpc, user }) => {
@@ -32,7 +45,7 @@ await ctx.addInitScript(({ rpc, user }) => {
 const page = await ctx.newPage();
 const ok = (n, c) => { console.log((c ? 'PASS ' : 'FAIL ') + n); if (!c) process.exitCode = 1; };
 const errs = []; page.on('pageerror', (e) => errs.push(String(e)));
-await page.goto('file:///home/claude/latch/public/index.html'); await page.waitForTimeout(1500);
+await page.goto(pathToFileURL(path.join(R, 'public/index.html')).href); await page.waitForTimeout(1500);
 await page.screenshot({ path: shots + '/1-landing.png' });
 await page.click('.pin >> nth=3'); await page.waitForTimeout(200);
 ok('flipping a rule makes the chip block', /Blocked/.test(await page.evaluate(() => document.querySelector('.verdict').innerText)));
@@ -63,10 +76,12 @@ ok('hosted bot bought', (r.vaults || []).some((v) => v.action === 'bought'));
 await page.click('[data-a=refresh] >> nth=0'); await page.waitForTimeout(4000);
 await page.evaluate(() => document.querySelectorAll('details').forEach((d) => d.open = true));
 const t2 = await txt();
-ok('dashboard: 1 buy, OKB bought, avg price ~78', /Average price\s*7[89]\./.test(t2));
+ok('dashboard: 1 buy, OKB bought, avg price ~78', /Average price \(before fee\)\s*7[89]\./.test(t2));
 ok('next buy is tomorrow (spacing)', /Next buy in/.test(t2));
 ok('rule chip line shown', /TapeOut circuit #1 says/.test(t2));
-ok('recent buys table shows the buy', /Received/.test(t2) && /OKB/.test(t2));
+ok('recent buys table shows the buy', /Received/.test(t2) && /WOKB/.test(t2) && !/could not be loaded/.test(t2));
+ok('latest-buys feed shows the buy', /Latest buys on X Layer/.test(t2));
+ok('chip line explains why it says no', /today\u2019s buy is done/.test(t2));
 await page.screenshot({ path: shots + '/5-after-buy.png', fullPage: true });
 await page.click('[data-a=pause]'); await page.waitForTimeout(4000);
 ok('pause works', /Paused/.test(await txt()));

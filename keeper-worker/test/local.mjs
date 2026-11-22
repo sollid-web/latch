@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createPublicClient, createWalletClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { runOnce, marketCheck } from '../src/keeper.js';
+import { runOnce, marketCheck, priceFrom } from '../src/keeper.js';
 
 const require = createRequire(import.meta.url);
 const solc = require('solc');
@@ -84,6 +84,10 @@ try {
   check('market check: pool 77 vs exchanges 77 → safe', marketCheck(P(77), 77, 2).safe === true);
   check('market check: pool 77 vs exchanges 70 → refuse', marketCheck(P(70), 77, 2).safe === false);
   check('market check: one exchange only → refuse', marketCheck([{ venue: 'A', ok: true, price: 77 }], 77, 2).safe === false);
+  const reason = (j, pick) => { try { priceFrom(j, pick); return ''; } catch (e) { return e.message; } };
+  check('price source: pair not listed (KuCoin data:null) → plain reason', /pair not listed/.test(reason({ code: '200000', data: null }, (j) => j.data.price)));
+  check('price source: exchange error text is shown (HTX)', /invalid symbol/.test(reason({ status: 'error', 'err-msg': 'invalid symbol' }, (j) => j.tick.close)));
+  check('price source: good answer → number', priceFrom({ data: [{ last: '83.1' }] }, (j) => j.data[0].last) === 83.1);
 
   let r = await runOnce(env, { send: true, wait: true, prices: P(77) });
   check('no vaults yet: idle', r.action === 'idle', r);

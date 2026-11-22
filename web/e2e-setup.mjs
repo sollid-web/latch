@@ -1,7 +1,15 @@
+// Local chain for the UI test (web/e2e.mjs): real Uniswap V3 + LatchFactory on anvil, then waits.
+//   needs: anvil on PATH (or ANVIL=...), and `cd keeper-worker && npm install` (solc, viem, Uniswap).
+//   writes: $UI_DIR/web-local.json (default: <tmp>/latch-ui). Stop it with Ctrl+C when the test is done.
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
-const R = '/home/claude/latch/';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const R = path.join(path.dirname(fileURLToPath(import.meta.url)), '..') + '/';
+const UI = process.env.UI_DIR || path.join(os.tmpdir(), 'latch-ui');
+fs.mkdirSync(UI, { recursive: true });
 const require = createRequire(R + 'keeper-worker/x.js');
 const solc = require('solc');
 const { createPublicClient, createWalletClient, http } = await import(R + 'keeper-worker/node_modules/viem/_esm/index.js');
@@ -17,7 +25,7 @@ const Fac = art('LatchFactory.sol', 'LatchFactory'), ERC = art('Helpers.sol', 'T
 const U = (p) => require(R + 'keeper-worker/node_modules/@uniswap/' + p);
 const Factory = U('v3-core/artifacts/contracts/UniswapV3Factory.sol/UniswapV3Factory.json'), Pool = U('v3-core/artifacts/contracts/UniswapV3Pool.sol/UniswapV3Pool.json'), Router = U('swap-router-contracts/artifacts/contracts/SwapRouter02.sol/SwapRouter02.json');
 const RPC = 'http://127.0.0.1:8651';
-spawn('/tmp/fdry/anvil', ['--port', '8651', '--chain-id', '196', '--silent', '--auto-impersonate', '--code-size-limit', '100000'], { stdio: 'ignore' });
+spawn(process.env.ANVIL || 'anvil', ['--port', '8651', '--chain-id', '196', '--silent', '--auto-impersonate', '--code-size-limit', '100000'], { stdio: 'ignore' });
 await new Promise((r) => setTimeout(r, 1500));
 const admin = privateKeyToAccount('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80');
 const bot = privateKeyToAccount('0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d');
@@ -40,6 +48,6 @@ const proc = await dep(Proc); const G = [[2,2],[3,9],[10,10],[11,4],[12,12],[13,
 await tx(proc, Proc.abi, 'tape', [1n, '0x' + G.map(([a, b]) => '00' + a.toString(16).padStart(6, '0') + b.toString(16).padStart(6, '0')).join(''), 7, 1]);
 const fac = await dep(Fac, [proc, 1n, usdt, wokb, router, pool, admin.address, bot.address, 1800, 100n, 1_000_000n]);
 await pub.request({ method: 'evm_increaseTime', params: [2100] }); await pub.request({ method: 'evm_mine', params: [] });
-fs.writeFileSync('/tmp/ui/web-local.json', JSON.stringify({ chainId: 196, rpc: [RPC], explorer: 'https://www.oklink.com/xlayer', factory: fac, usdt, wokb, pool, processor: proc, circuitId: 1, router, uniFactory: uf, repo: 'https://github.com/sollid-web/latch', user }));
+fs.writeFileSync(path.join(UI, 'web-local.json'), JSON.stringify({ chainId: 196, rpc: [RPC], explorer: 'https://www.oklink.com/xlayer', factory: fac, usdt, wokb, pool, processor: proc, circuitId: 1, router, uniFactory: uf, repo: 'https://github.com/sollid-web/latch', user }));
 console.log('READY', fac);
 await new Promise(() => {});

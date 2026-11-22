@@ -1,8 +1,9 @@
 // NOTE: written by the independent reviewer against LatchSwap v1 (60s+ TWAP window, no spot check).
-// Kept as evidence for INDEPENDENT_REVIEW.md. v2 rejects twapWindow < 1800, so this file no longer
-// deploys against the current contract; the fixes are covered by swap.test.mjs.
+// Kept as evidence for INDEPENDENT_REVIEW.md. Part A (UniMath vs the original Uniswap libraries) runs
+// against the current contracts. Part B deploys v1-style vaults (twapWindow < 1800), which the current
+// contract rejects, so it is skipped unless LATCH_V1_PART_B=1; the fixes are covered by swap.test.mjs.
 // Independent-review tests for LatchSwap (does not modify contracts/).
-//   run: cd audit/swap && ANVIL=/tmp/fdry/anvil SOLC076=/tmp/solc076/node_modules/solc node extra.test.mjs
+//   run: cd audit/swap && npm install && npm run test:math      (needs anvil on PATH, or ANVIL=/path/to/anvil)
 // Part A: differential fuzz of contracts/UniMath.sol against the ORIGINAL Uniswap libraries
 //         compiled with solc 0.7.6.
 // Part B: scenario tests on real Uniswap V3 bytecode (factory, pool, SwapRouter02).
@@ -17,7 +18,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 
 const require = createRequire(import.meta.url);
 const solc = require('solc');
-const solc076 = require(process.env.SOLC076 || '/tmp/solc076/node_modules/solc');
+const solc076 = require(process.env.SOLC076 || 'solc076'); // devDependency alias for solc@0.7.6
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..', '..');
 const uni = (p) => require(path.join(here, 'node_modules/@uniswap', p));
@@ -166,6 +167,11 @@ try {
   check(`mulDiv: ${mdN} cases identical to FullMath 0.7.6 and to exact floor(a*b/d); same reverts`, mdOk);
 
   /* ================================================ Part B: pools */
+  partB: {
+  if (process.env.LATCH_V1_PART_B !== '1') {
+    console.log('SKIP Part B: v1 scenarios (twapWindow < 1800) no longer deploy; see the NOTE at the top and swap.test.mjs');
+    break partB;
+  }
   const usdt = await deploy(ERC, ['USDT0', 6]);
   // Get one WOKB-like token that sorts ABOVE usdt (usdt = token0, like mainnet: 0x779D < 0xe538)
   // and one that sorts BELOW (usdt = token1, negative ticks), to cover both orderings.
@@ -380,6 +386,7 @@ try {
     const r = await why(kw, v, Swap.abi, 'tick', [99n]);
     check(`B12 dust tick(99 base units): ${r} (fee rounds to 0; output may round to 0 -> SwapShort)`, true);
   }
+  } // partB
 } catch (err) {
   console.error('TEST CRASHED:', err);
   failures++;

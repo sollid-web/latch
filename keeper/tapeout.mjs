@@ -37,7 +37,7 @@ const TAPEOUT = {
 const NAND = 0n;
 
 // TAP-02 numbering: s0 = 0, s1 = 1, s2..s8 = the 7 policy inputs, s9.. = gates.
-// Same list as src/lib/latch/circuit.ts. allow = !paused & keeper & ... & funded.
+// Same list as GATES in web/app.js. allow = !paused & keeper & ... & funded.
 const GATES = [[2, 2], [3, 9], [10, 10], [11, 4], [12, 12], [13, 5], [14, 14], [15, 6], [16, 16], [17, 7], [18, 18], [19, 8], [20, 20]];
 const N_IN = 7, N_OUT = 1;
 const NETLIST = '0x' + GATES.map(([a, b]) => '00' + a.toString(16).padStart(6, '0') + b.toString(16).padStart(6, '0')).join('');

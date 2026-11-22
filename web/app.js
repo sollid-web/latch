@@ -34,6 +34,7 @@ const VAULT = parseAbi([
   'function maxPrice() view returns (uint256)',
   'function minInterval() view returns (uint256)',
   'function nextBuyAt() view returns (uint256)',
+  'function lastBuyAt() view returns (uint256)',
   'function volumeSwept() view returns (uint256)',
   'function totalBought() view returns (uint256)',
   'function buys() view returns (uint256)',
@@ -74,6 +75,8 @@ const S = {
   account: null, walletChain: null, provider: null, walletName: '',
   price: null, vaultCount: null, hostedKeeper: null, circuitOk: null,
   vaults: [], loading: false, error: '', note: '',
+  hist: {}, open: {}, netVaults: [], // buy history per vault, open <details>, vaults + last buy time
+  blocks: new Map(), logsBusy: false, refreshing: false, // timestamp → block cache
   wizard: null, // {step, strategy, perBuy, price, perDay, every, savings, ownBot, botAddr, created, deposit}
   busy: '', txs: [], net: null, feed: null, dialog: null,
   chip: { bits: 0x7e, live: false } // hero circuit demo: the 7 inputs, editable
@@ -189,41 +192,106 @@ async function readMarket() {
   } catch { /* factory not reachable */ }
 }
 
-/** Network totals and the latest buys across every vault (social proof, read from chain). */
+/** Network totals across every vault (social proof, read from chain). The latest-buys feed is
+ *  loaded afterwards by loadLogs(), so these numbers never wait for log searches. */
 async function readNetwork() {
   try {
     const all = await pub.readContract({ address: C.factory, abi: FACTORY, functionName: 'vaultsPage', args: [0n, 300n] });
     const per = await Promise.all(all.map((v) => Promise.all([
       pub.readContract({ address: v, abi: VAULT, functionName: 'totalBought' }),
       pub.readContract({ address: v, abi: VAULT, functionName: 'volumeSwept' }),
-      pub.readContract({ address: v, abi: VAULT, functionName: 'buys' })
-    ]).catch(() => [0n, 0n, 0n])));
+      pub.readContract({ address: v, abi: VAULT, functionName: 'buys' }),
+      pub.readContract({ address: v, abi: VAULT, functionName: 'lastBuyAt' })
+    ]).catch(() => [0n, 0n, 0n, 0n])));
     S.net = per.reduce((a, [o, i, b]) => ({ okb: a.okb + o, usdt: a.usdt + i, buys: a.buys + b }), { okb: 0n, usdt: 0n, buys: 0n });
-    if (all.length) {
-      const latest = await pub.getBlockNumber();
-      const feed = [];
-      const STEP = 900n;
-      for (let i = 0; i < 8 && feed.length < 6; i++) {
-        const to = latest - STEP * BigInt(i);
-        const from = to > STEP ? to - STEP + 1n : 0n;
-        const logs = await pub.getLogs({ address: all, event: BOUGHT, fromBlock: from, toBlock: to }).catch(() => []);
-        for (const l of logs.reverse()) feed.push({ vault: l.address, hash: l.transactionHash, inn: l.args.amountIn, out: l.args.amountOut, bits: Number(l.args.bits), block: l.blockNumber });
-        if (from === 0n) break;
-      }
-      S.feed = feed.slice(0, 6);
-    } else S.feed = [];
+    S.netVaults = all.map((v, i) => ({ vault: v, last: per[i][3] }));
   } catch { /* keep the last values */ }
+}
+
+/* ---------------------------------------------------------------- buy history (event logs)
+ * The public X Layer RPC refuses eth_getLogs over more than 100 blocks, so every search is split
+ * into 100-block pieces. Instead of scanning backwards blindly, each vault's own lastBuyAt tells
+ * us when its latest buy happened; we find that block by its timestamp and search around it. */
+const LOG_SPAN = 100n;
+
+async function logsIn(address, from, to) {
+  const ranges = [];
+  for (let a = from; a <= to; a += LOG_SPAN) ranges.push([a, a + LOG_SPAN - 1n < to ? a + LOG_SPAN - 1n : to]);
+  const out = [];
+  for (let i = 0; i < ranges.length; i += 4) { // at most 4 requests at a time
+    const parts = await Promise.all(ranges.slice(i, i + 4).map(([a, b]) => pub.getLogs({ address, event: BOUGHT, fromBlock: a, toBlock: b })));
+    for (const p of parts) out.push(...p);
+  }
+  return out;
+}
+
+/** First block whose timestamp is >= ts (cached). Interpolation search, bisection as a fallback. */
+async function blockAt(ts, head) {
+  const key = ts.toString();
+  if (S.blocks.has(key)) return S.blocks.get(key);
+  if (ts >= head.timestamp) return head.number;
+  let hi = { n: head.number, t: head.timestamp };
+  let lo = null;
+  for (let step = 1000n; ; step *= 4n) {
+    const n = hi.n > step ? hi.n - step : 0n;
+    const b = await pub.getBlock({ blockNumber: n });
+    if (b.timestamp < ts) { lo = { n, t: b.timestamp }; break; }
+    hi = { n, t: b.timestamp };
+    if (n === 0n) { S.blocks.set(key, 0n); return 0n; }
+  }
+  for (let i = 0; i < 48 && hi.n - lo.n > 1n; i++) {
+    let m = i % 2 === 0 && hi.t > lo.t
+      ? lo.n + ((hi.n - lo.n) * (ts - lo.t)) / (hi.t - lo.t)
+      : lo.n + (hi.n - lo.n) / 2n;
+    if (m <= lo.n) m = lo.n + 1n;
+    if (m >= hi.n) m = hi.n - 1n;
+    const b = await pub.getBlock({ blockNumber: m });
+    if (b.timestamp < ts) lo = { n: m, t: b.timestamp }; else hi = { n: m, t: b.timestamp };
+  }
+  S.blocks.set(key, hi.n);
+  return hi.n;
+}
+
+/** Buys of one vault around its latest buy (newest first). `back` = how many blocks before it to include. */
+async function buysOf(v, lastBuyAt, head, back = 1200n) {
+  if (!lastBuyAt) return [];
+  const b = await blockAt(lastBuyAt, head);
+  const to = b + LOG_SPAN - 1n < head.number ? b + LOG_SPAN - 1n : head.number;
+  const logs = await logsIn(v, b > back ? b - back : 0n, to);
+  return logs.reverse().slice(0, 8).map((l) => ({ vault: l.address, hash: l.transactionHash, inn: l.args.amountIn, out: l.args.amountOut, fee: l.args.fee, bits: Number(l.args.bits), block: l.blockNumber }));
+}
+
+/** Runs after the page has its numbers: your vaults' recent buys, then the network feed. */
+async function loadLogs() {
+  if (S.logsBusy) return;
+  S.logsBusy = true;
+  try {
+    const head = await pub.getBlock();
+    for (const d of S.vaults) {
+      try { S.hist[d.address] = await buysOf(d.address, d.lastBuyAt, head); }
+      catch { if (S.hist[d.address] === undefined) S.hist[d.address] = null; }
+      render();
+    }
+    const recent = S.netVaults.filter((x) => x.last > 0n).sort((a, b) => (b.last > a.last ? 1 : -1)).slice(0, 6);
+    const feed = [];
+    for (const x of recent) {
+      try { const [latest] = await buysOf(x.vault, x.last, head, 0n); if (latest) feed.push(latest); } catch { /* skip this vault */ }
+    }
+    S.feed = feed.sort((a, b) => (b.block > a.block ? 1 : -1));
+    render();
+  } catch { /* keep the last values */ }
+  finally { S.logsBusy = false; }
 }
 
 async function readVault(v) {
   const r = (fn, args = [], account) => pub.readContract({ address: v, abi: VAULT, functionName: fn, args, account });
-  const [st, maxPrice, minInterval, nextBuyAt, spent, bought, buys, bps, usdtBal] = await Promise.all([
-    r('status'), r('maxPrice'), r('minInterval'), r('nextBuyAt'), r('volumeSwept'), r('totalBought'), r('buys'), r('feeBpsNow'),
+  const [st, maxPrice, minInterval, nextBuyAt, lastBuyAt, spent, bought, buys, bps, usdtBal] = await Promise.all([
+    r('status'), r('maxPrice'), r('minInterval'), r('nextBuyAt'), r('lastBuyAt'), r('volumeSwept'), r('totalBought'), r('buys'), r('feeBpsNow'),
     pub.readContract({ address: C.usdt, abi: ERC20, functionName: 'balanceOf', args: [v] })
   ]);
   const d = {
     address: v, paused: st[2], armed: st[1], balance: st[3], perTxCap: st[4], dailyCap: st[5], spentToday: st[6],
-    keeper: st[7], savings: st[8], maxPrice, minInterval, nextBuyAt, spent, bought, buys, bps, usdtBal
+    keeper: st[7], savings: st[8], maxPrice, minInterval, nextBuyAt, lastBuyAt, spent, bought, buys, bps, usdtBal
   };
   let amount = d.perTxCap;
   const left = d.dailyCap > d.spentToday ? d.dailyCap - d.spentToday : 0n;
@@ -240,39 +308,33 @@ async function readVault(v) {
     const [twap] = await r('quote', [U6]);
     d.twap = Number(twap) / 1e6;
   } catch { /* pool history */ }
-  d.history = await recentBuys(v).catch(() => null);
   return d;
 }
 
-async function recentBuys(v) {
-  const latest = await pub.getBlockNumber();
-  const out = [];
-  const STEP = 900n;
-  for (let i = 0; i < 6 && out.length < 8; i++) {
-    const to = latest - STEP * BigInt(i);
-    const from = to > STEP ? to - STEP + 1n : 0n;
-    const logs = await pub.getLogs({ address: v, event: BOUGHT, fromBlock: from, toBlock: to });
-    for (const l of logs.reverse()) out.push({ hash: l.transactionHash, inn: l.args.amountIn, out: l.args.amountOut, fee: l.args.fee, bits: Number(l.args.bits), block: l.blockNumber });
-    if (from === 0n) break;
-  }
-  return out;
+async function readMine() {
+  if (!S.account) { S.vaults = []; return; }
+  try {
+    const list = await pub.readContract({ address: C.factory, abi: FACTORY, functionName: 'vaultsOf', args: [S.account] });
+    const owned = [];
+    for (const v of list) {
+      const o = await pub.readContract({ address: v, abi: VAULT, functionName: 'owner' });
+      if (o.toLowerCase() === S.account.toLowerCase()) owned.push(v);
+    }
+    S.vaults = await Promise.all(owned.map(readVault));
+  } catch (e) { S.error = 'Could not read your vaults: ' + plain(e); }
 }
 
 async function refresh() {
-  S.loading = true; render();
-  await Promise.all([readMarket(), readNetwork()]);
-  if (S.account) {
-    try {
-      const list = await pub.readContract({ address: C.factory, abi: FACTORY, functionName: 'vaultsOf', args: [S.account] });
-      const owned = [];
-      for (const v of list) {
-        const o = await pub.readContract({ address: v, abi: VAULT, functionName: 'owner' });
-        if (o.toLowerCase() === S.account.toLowerCase()) owned.push(v);
-      }
-      S.vaults = await Promise.all(owned.map(readVault));
-    } catch (e) { S.error = 'Could not read your vaults: ' + plain(e); }
-  } else S.vaults = [];
-  S.loading = false; render();
+  if (S.refreshing) { S.again = true; return; } // e.g. connect() during the first load: run once more after
+  S.refreshing = true; S.loading = true; render();
+  try {
+    await readMarket(); render();
+    await Promise.all([readNetwork().then(render), readMine()]);
+  } finally {
+    S.refreshing = false; S.loading = false; render();
+  }
+  if (S.again) { S.again = false; return refresh(); }
+  loadLogs(); // in the background; renders again when the buys arrive
 }
 
 /* ---------------------------------------------------------------- formatting */
@@ -307,6 +369,18 @@ const CHECKS = [
   ['Enough USDT0 in the vault', 6]
 ];
 const PROC = parseAbi(['function eval(uint256 id, bytes inputs) view returns (bytes)']);
+/** Plain reason for a "no" from the chip: the first rule that is not met. */
+function whyNo(bits) {
+  if (bits & 1) return 'you paused the vault';
+  if (!(bits & 2)) return 'this bot is not allowed for the vault';
+  if (!(bits & 8)) return 'OKB is above your price, or the price is moving too fast';
+  if (!(bits & 16)) return 'the amount is outside your per-buy limit';
+  if (!(bits & 32)) return 'today’s buy is done, or it is too soon since the last one';
+  if (!(bits & 64)) return 'not enough USDT0 in the vault';
+  return 'a rule is not met';
+}
+/** A normal wait (price or timing), not a problem with the vault. */
+const waiting = (bits) => (bits & 0x57) === 0x56;
 
 /* ---------------------------------------------------------------- views */
 function header() {
@@ -354,7 +428,7 @@ function hero() {
   return `<section class="hero wrap" id="top">
     <div class="hero-copy">
       <h1>Stack OKB on autopilot, without trusting a bot.</h1>
-      <p class="lead">Put USDT0 in a vault only you control. Latch buys OKB on the dip or on a schedule and sends it to your wallet. A chip on the blockchain checks every buy, so the bot can never buy too much, pay too much, or send your money anywhere else.</p>
+      <p class="lead">Put USDT0 in a vault only you control. Latch buys OKB on the dip or on a schedule and sends it to your wallet as WOKB (wrapped OKB, always worth 1 OKB). Your vault checks every buy against your rules, and a TapeOut chip on the blockchain must agree, so the bot can never buy too much, pay too much, or send your money anywhere else.</p>
       <div class="cta-row">
         <button class="btn primary lg" data-a="wizard">Create my vault</button>
         <a class="btn quiet lg" href="#safety">See how it stays safe</a>
@@ -416,7 +490,8 @@ function wizardView() {
         <li>Swaps use Uniswap's deepest USDT0/OKB pool and are refused if more than 1% worse than the average price.</li>
         <li>${w.ownBot ? 'Your bot' : 'Latch’s bot'} can only trigger buys. It can't withdraw, raise limits or redirect OKB.</li>
         <li>TapeOut circuit #${C.circuitId} must approve every buy on chain.</li>
-        <li>Pause or withdraw any time. Fee: 1% per buy, no other fees.</li>
+        <li>Pause or withdraw any time. Fee: 1% per buy on top of your price, no other Latch fees.</li>
+        <li>You receive WOKB (wrapped OKB, worth 1 OKB each).</li>
       </ul>
     <div class="row between"><button class="btn quiet" data-a="back">Back</button><button class="btn primary" data-a="create" ${S.busy ? 'disabled' : ''}>${S.busy ? esc(S.busy) + '…' : 'Create my vault'}</button></div>`;
   } else {
@@ -456,10 +531,12 @@ function vaultCard(d) {
       const on = (d.bits >> bit) & 1; const pass = inverse ? !on : !!on;
       return `<li class="${pass ? 'ok' : 'bad'}">${esc(inverse ? 'Not paused by you' : label)}</li>`;
     }).join('')}</ul>
-    <p class="chip-line ${d.chip ? 'ok' : 'bad'}">TapeOut circuit #${C.circuitId} says <b>${d.chip ? 'yes' : 'no'}</b> to input <span class="num">0x${d.bits.toString(16).padStart(2, '0')}</span>. ${link(C.processor, 'address', 'View the chip')}</p>`;
-  const hist = d.history == null ? '<p class="muted">Recent buys could not be loaded.</p>'
-    : d.history.length ? `<table class="hist"><thead><tr><th>Paid</th><th>Received</th><th>Chip</th><th>Transaction</th></tr></thead><tbody>${d.history.map((h) => `<tr><td class="num">${usd(h.inn)} USDT0</td><td class="num">${okb(h.out)} OKB</td><td class="num ok">yes</td><td>${link(h.hash, 'tx')}</td></tr>`).join('')}</tbody></table>`
-    : '<p class="muted">No buys in the last few hours.</p>';
+    <p class="chip-line ${d.chip ? 'ok' : waiting(d.bits) ? 'wait' : 'bad'}">TapeOut circuit #${C.circuitId} says <b>${d.chip ? 'yes' : 'no'}</b> to input <span class="num">0x${d.bits.toString(16).padStart(2, '0')}</span>${d.chip ? '' : ` (${esc(whyNo(d.bits))})`}. ${link(C.processor, 'address', 'View the chip')}</p>`;
+  const h = S.hist[d.address];
+  const hist = h === undefined ? '<p class="muted">Loading recent buys…</p>'
+    : h === null ? '<p class="muted">Recent buys could not be loaded.</p>'
+    : h.length ? `<table class="hist"><thead><tr><th>Paid</th><th>Received</th><th>Chip</th><th>Transaction</th></tr></thead><tbody>${h.map((x) => `<tr><td class="num">${usd(x.inn)} USDT0</td><td class="num">${okb(x.out)} WOKB</td><td class="num ok">yes</td><td>${link(x.hash, 'tx')}</td></tr>`).join('')}</tbody></table>`
+    : '<p class="muted">No buys yet.</p>';
   const busy = S.busy ? 'disabled' : '';
   return `<article class="vault" data-v="${d.address}">
     <header class="vault-head">
@@ -469,14 +546,14 @@ function vaultCard(d) {
     </header>
     <dl class="vault-stats">
       <div><dt>OKB bought</dt><dd class="num">${okb(d.bought)}</dd></div>
-      <div><dt>Average price</dt><dd class="num">${avg ? avg.toFixed(2) : '—'}</dd></div>
+      <div><dt>Average price (before fee)</dt><dd class="num">${avg ? avg.toFixed(2) : '—'}</dd></div>
       <div><dt>USDT0 left</dt><dd class="num">${usd(d.balance)}</dd></div>
       <div><dt>Buys</dt><dd class="num">${d.buys}</dd></div>
     </dl>
     <div class="meter" role="img" aria-label="${usedPct}% of today's limit used"><span style="width:${usedPct}%"></span></div>
     <p class="meter-label"><span>${usd(d.spentToday)} of ${usd(d.dailyCap)} USDT0 used today</span><span>${esc(nextLine)}</span></p>
-    <details><summary>Checks for the next buy</summary>${checks}</details>
-    <details><summary>Recent buys</summary>${hist}</details>
+    <details data-k="${d.address}:checks" ${S.open[d.address + ':checks'] ? 'open' : ''}><summary>Checks for the next buy</summary>${checks}</details>
+    <details data-k="${d.address}:buys" ${S.open[d.address + ':buys'] ? 'open' : ''}><summary>Recent buys</summary>${hist}</details>
     <div class="actions">
       <button class="btn primary sm" data-a="addFunds" ${busy}>Add USDT0</button>
       <button class="btn quiet sm" data-a="${d.paused ? 'resume' : 'pause'}" ${busy}>${d.paused ? 'Resume' : 'Pause'}</button>
@@ -484,7 +561,7 @@ function vaultCard(d) {
       <button class="btn quiet sm" data-a="setEvery" ${busy}>Change spacing</button>
       <button class="btn quiet sm" data-a="withdraw" ${busy}>Withdraw all</button>
     </div>
-    <p class="fine">Vault ${link(d.address)}. OKB goes to ${link(d.savings)}. Bot: ${d.keeper.toLowerCase() === (S.hostedKeeper || '').toLowerCase() ? 'Latch hosted' : link(d.keeper)}. Fee ${(Number(d.bps) / 100).toFixed(2)}%.</p>
+    <p class="fine">Vault ${link(d.address)}. WOKB (wrapped OKB) goes to ${link(d.savings)}. Bot: ${d.keeper.toLowerCase() === (S.hostedKeeper || '').toLowerCase() ? 'Latch hosted' : link(d.keeper)}. Fee ${(Number(d.bps) / 100).toFixed(2)}%.</p>
   </article>`;
 }
 
@@ -500,7 +577,7 @@ function dashboard() {
 function feedView() {
   if (!S.feed || !S.feed.length) return '';
   return `<section class="wrap block"><h2>Latest buys on X Layer</h2>
-    <ul class="feed">${S.feed.map((f) => `<li><span class="num">${okb(f.out)} OKB</span><span class="muted">for ${usd(f.inn)} USDT0</span><span class="ok">chip said yes</span>${link(f.hash, 'tx', 'transaction')}</li>`).join('')}</ul></section>`;
+    <ul class="feed">${S.feed.map((f) => `<li><span class="num">${okb(f.out)} WOKB</span><span class="muted">for ${usd(f.inn)} USDT0</span><span class="ok">chip said yes</span>${link(f.hash, 'tx', 'transaction')}</li>`).join('')}</ul></section>`;
 }
 
 function info() {
@@ -510,24 +587,25 @@ function info() {
       <li><b>Your vault checks 7 rules</b><span>Your price, your limits, your wallet, not paused, enough funds.</span></li>
       <li><b>The TapeOut chip decides</b><span>Circuit #${C.circuitId} on X Layer must say yes, or the buy stops.</span></li>
       <li><b>Uniswap swaps</b><span>USDT0 becomes OKB at the fair price, or the swap is refused.</span></li>
-      <li><b>OKB lands in your wallet</b><span>Never in the vault, never anywhere else.</span></li>
+      <li><b>OKB lands in your wallet</b><span>As WOKB (wrapped OKB). Never in the vault, never anywhere else.</span></li>
     </ol>
   </section>
   <section class="wrap block split" id="safety">
     <div><h2>What a stolen bot key could do</h2>
-      <p>Most trading bots hold your keys. If they are hacked, your account is emptied. With Latch, the worst a stolen bot key can do is buy your chosen amount of OKB, at your price or better, into your own wallet. Latch can also switch that key off for every vault at once.</p>
+      <p>Most trading bots hold your keys. If they are hacked, your account is emptied. With Latch, the worst a stolen bot key can do is buy your chosen amount of OKB, at your price or better, into your own wallet. Latch can also switch any bot key off for every vault at once (this can only stop buys, never move funds).</p>
       <p>The vault also refuses a buy if Uniswap's price jumped away from its 30-minute average, and the bot refuses if Uniswap disagrees with the major exchanges.</p></div>
     <div><h2>What only you can do</h2>
-      <ul class="plain"><li>Withdraw everything, any time, even while paused</li><li>Pause and resume buying</li><li>Change your price and spacing</li><li>Lower your limits (they can never be raised)</li><li>Switch to your own bot or AI agent</li></ul></div>
+      <ul class="plain"><li>Withdraw everything, any time, even while paused</li><li>Pause and resume buying</li><li>Change your price and spacing</li><li>Lower your limits or switch to your own bot or AI agent, directly on your vault contract (limits can never be raised)</li></ul></div>
   </section>
   <section class="wrap block split">
-    <div><h2>Fees</h2><p>1% of each buy, falling to 0.75%, 0.5% and 0.25% as your vault's volume grows. No sign-up or withdrawal fees. Latch's bot pays the gas.</p></div>
-    <div><h2>Checked and open</h2><p>Open-source contracts, Slither with zero findings, two independent reviews, and tests against Uniswap's real code. ${`<a href="${C.repo}" target="_blank" rel="noopener">Read the code and the reviews</a>`}.</p></div>
+    <div><h2>Fees</h2><p>1% of each buy, falling to 0.75%, 0.5% and 0.25% as your vault's volume grows. The fee comes on top of the price you set. Uniswap's pool also keeps its 0.05% trading fee. No sign-up or withdrawal fees. Latch's bot pays the gas.</p></div>
+    <div><h2>Checked and open</h2><p>Open-source contracts, Slither with zero findings, two independent reviews by separate AI agents (not a professional audit), and tests against Uniswap's real code. ${`<a href="${C.repo}" target="_blank" rel="noopener">Read the code and the reviews</a>`}.</p></div>
   </section>
   <section class="wrap block faq" id="faq"><h2>Questions</h2>
     <details><summary>Can Latch take my money?</summary><p>No. Only the wallet that created the vault can withdraw. Latch's bot can only trigger buys within your rules, into your wallet.</p></details>
     <details><summary>What if OKB never reaches my price?</summary><p>Nothing is bought and your USDT0 stays in the vault. Change the price or withdraw whenever you like.</p></details>
     <details><summary>Which wallet do I need?</summary><p>OKX Wallet: the browser extension on a computer, or open this page from the Discover tab in the OKX Wallet app.</p></details>
+    <details><summary>Why do I receive WOKB, not OKB?</summary><p>Uniswap trades the wrapped form of OKB. Each WOKB is worth exactly 1 OKB. Add the WOKB token in OKX Wallet to see it, and swap it back to OKB whenever you like.</p></details>
     <details><summary>What are the risks?</summary><p>OKB's price can fall after you buy. USDT0's issuer can freeze addresses. Smart contracts can have bugs; Latch's are reviewed and tested, but start small.</p></details>
   </section>`;
 }
@@ -646,6 +724,10 @@ document.addEventListener('click', (e) => {
 document.addEventListener('submit', (e) => {
   if (e.target.matches('[data-form=dialog]')) { e.preventDefault(); runDialog(); }
 });
+// Remember which sections are open, so re-rendering (refresh every minute, buys arriving) keeps them open.
+document.addEventListener('toggle', (e) => {
+  const k = e.target?.dataset?.k; if (k) S.open[k] = e.target.open;
+}, true);
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && (S.dialog || S.wizard) && !S.busy) { S.dialog = null; if (S.wizard) { S.wizard = null; refresh(); } else render(); }
 });

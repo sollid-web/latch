@@ -8,7 +8,7 @@ Inputs (16 bits, bit index in the input word):
   14-15 r0..r1  reserved, must be 0 (blocks garbage/future encodings)
 Outputs: allow, k1, k0  (multiplier k = 0..3 x base amount; k=0 whenever allow=0)
 """
-import itertools, json
+import itertools, json, os
 
 def spec(x):
     bit = lambda i: (x >> i) & 1
@@ -40,8 +40,12 @@ def spec(x):
 
 # ---------- NAND netlist builder ----------
 gates = []          # each gate: (a, b) wire ids; wire ids 0..15 are inputs, 16+ are gates
+_seen = {}          # structural hashing: the same NAND of the same two wires is built only once
 def nand(a, b):
-    gates.append((a, b)); return 15 + len(gates)
+    key = (min(a, b), max(a, b))
+    if key not in _seen:
+        gates.append((a, b)); _seen[key] = 15 + len(gates)
+    return _seen[key]
 def NOT(a):    return nand(a, a)
 def AND(a, b): return NOT(nand(a, b))
 def OR(a, b):  return nand(NOT(a), NOT(b))
@@ -51,17 +55,13 @@ s = list(range(7)); d0, d1, d2 = 7, 8, 9; v0, v1 = 10, 11; m0, m1 = 12, 13; r0, 
 
 # safe = s1..s6 all 1, s0 = 0, r0 = r1 = 0
 t = AND(s[1], s[2]); t = AND(t, s[3]); t = AND(t, s[4]); t = AND(t, s[5]); t = AND(t, s[6])
-nz = nand(NOT(s[0]), nand(NOT(r0), NOT(r1)))    # = s0 | r0 | r1 ... built below properly
-# (rewrite cleanly: zeros_ok = !s0 & !r0 & !r1)
-gates.pop()  # discard the line above
 ns0, nr0, nr1 = NOT(s[0]), NOT(r0), NOT(r1)
 zeros_ok = AND(AND(ns0, nr0), nr1)
 safe = AND(t, zeros_ok)
 
 # depth flags
 nd0, nd1, nd2 = NOT(d0), NOT(d1), NOT(d2)
-a  = nand(nand(nd0, nd1), nd2)          # d >= 1
-a  = NOT(AND(AND(nd0, nd1), nd2))
+a  = NOT(AND(AND(nd0, nd1), nd2))       # d >= 1
 d2p = OR(d2, d1)                        # d >= 2
 b  = OR(d2, AND(d1, d0))                # d >= 3
 c  = AND(d2, OR(d1, d0))                # d >= 5
@@ -86,6 +86,20 @@ three = OR(s_3, l_3)
 k1 = AND(allow, hi)
 k0 = AND(allow, OR(NOT(hi), three))
 
+OUT = {"allow": allow, "k1": k1, "k0": k0}
+
+# ---------- drop gates whose output is never used, renumber the rest ----------
+live, stack = set(), list(OUT.values())
+while stack:
+    w = stack.pop()
+    if w >= 16 and w not in live:
+        live.add(w); stack.extend(gates[w - 16])
+new_id, kept = {i: i for i in range(16)}, []
+for i, g in enumerate(gates):
+    if i + 16 in live:
+        kept.append((new_id[g[0]], new_id[g[1]])); new_id[i + 16] = 15 + len(kept)
+gates = kept
+allow, k1, k0 = new_id[allow], new_id[k1], new_id[k0]
 OUT = {"allow": allow, "k1": k1, "k0": k0}
 
 def run(x):
@@ -117,4 +131,6 @@ for vol in (0, 2, 3):
             row.append(f"{k}x" if al else "-")
         print(f"{names[m]:10}" + "".join(f"{x:>7}" for x in row))
 
-json.dump({"inputs": 16, "gates": gates, "outputs": OUT}, open("/home/claude/circuit2.json", "w"))
+out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "circuit2.json")
+json.dump({"inputs": 16, "gates": gates, "outputs": OUT}, open(out_path, "w"))
+print("wrote", out_path)

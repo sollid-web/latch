@@ -50,15 +50,27 @@ async function getJson(url) {
   }
 }
 
+/** The price from an exchange answer, or a plain reason why there is none (never a code crash). */
+export function priceFrom(json, pick) {
+  let v;
+  try { v = pick(json); } catch { v = undefined; }
+  if (v === undefined || v === null || v === '') {
+    const said = json && (json.msg || json.message || json['err-msg'] || json.label || json.error);
+    throw new Error(said ? `no OKB/USDT price: ${String(typeof said === 'string' ? said : JSON.stringify(said)).slice(0, 80)}`
+      : 'no OKB/USDT price in the answer (pair not listed there?)');
+  }
+  return Number(v);
+}
+
 export const SOURCES = [
-  { venue: 'OKX', get: async () => Number((await getJson('https://www.okx.com/api/v5/market/ticker?instId=OKB-USDT')).data[0].last) },
-  { venue: 'Binance', get: async () => Number((await getJson('https://api.binance.com/api/v3/ticker/price?symbol=OKBUSDT')).price) },
-  { venue: 'CoinGecko', get: async () => Number((await getJson('https://api.coingecko.com/api/v3/simple/price?ids=okb&vs_currencies=usd')).okb.usd) },
-  { venue: 'Gate', get: async () => Number((await getJson('https://api.gateio.ws/api/v4/spot/tickers?currency_pair=OKB_USDT'))[0].last) },
-  { venue: 'KuCoin', get: async () => Number((await getJson('https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=OKB-USDT')).data.price) },
-  { venue: 'Bitget', get: async () => Number((await getJson('https://api.bitget.com/api/v2/spot/market/tickers?symbol=OKBUSDT')).data[0].lastPr) },
-  { venue: 'MEXC', get: async () => Number((await getJson('https://api.mexc.com/api/v3/ticker/price?symbol=OKBUSDT')).price) },
-  { venue: 'HTX', get: async () => Number((await getJson('https://api.huobi.pro/market/detail/merged?symbol=okbusdt')).tick.close) }
+  { venue: 'OKX', get: async () => priceFrom(await getJson('https://www.okx.com/api/v5/market/ticker?instId=OKB-USDT'), (j) => j.data[0].last) },
+  { venue: 'Binance', get: async () => priceFrom(await getJson('https://api.binance.com/api/v3/ticker/price?symbol=OKBUSDT'), (j) => j.price) },
+  { venue: 'CoinGecko', get: async () => priceFrom(await getJson('https://api.coingecko.com/api/v3/simple/price?ids=okb&vs_currencies=usd'), (j) => j.okb.usd) },
+  { venue: 'Gate', get: async () => priceFrom(await getJson('https://api.gateio.ws/api/v4/spot/tickers?currency_pair=OKB_USDT'), (j) => j[0].last) },
+  { venue: 'KuCoin', get: async () => priceFrom(await getJson('https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=OKB-USDT'), (j) => j.data.price) },
+  { venue: 'Bitget', get: async () => priceFrom(await getJson('https://api.bitget.com/api/v2/spot/market/tickers?symbol=OKBUSDT'), (j) => j.data[0].lastPr) },
+  { venue: 'MEXC', get: async () => priceFrom(await getJson('https://api.mexc.com/api/v3/ticker/price?symbol=OKBUSDT'), (j) => j.price) },
+  { venue: 'HTX', get: async () => priceFrom(await getJson('https://api.huobi.pro/market/detail/merged?symbol=okbusdt'), (j) => j.tick.close) }
 ];
 
 export async function fetchPrices(sources = SOURCES) {

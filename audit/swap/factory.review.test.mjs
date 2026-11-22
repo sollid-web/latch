@@ -1,5 +1,7 @@
 // NOTE: written by the independent reviewer against LatchSwap v3 / LatchFactory before the v4 fixes.
 // Kept as evidence for INDEPENDENT_REVIEW_V3.md; constructor signatures changed in v4 (minAmount, guardian).
+// It does not run against the current contracts (by design: its checks record the pre-fix behaviour).
+// Every fix it led to is tested in swap.test.mjs (revoke, savings refusals, 1 USDT0 minimum, preview == tick).
 // Independent review of LatchSwap v3 + LatchFactory. Reuses the swap.test.mjs harness
 // (real UniswapV3Factory / Pool / SwapRouter02 bytecode on anvil).
 //   run: cd audit/swap && ANVIL=/tmp/fdry/anvil node factory.review.test.mjs
