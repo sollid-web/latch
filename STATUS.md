@@ -42,12 +42,37 @@ Config files: `deployments/web-config.json`, `deployments/xlayer-latch.json`, `k
 - Done: contracts + 2 reviews + tests; factory live; website v2 + bot live; first real buy; redesign pushed (commit afafb0d).
 - **Pending deploy by builder:** `cd ~/latch && git pull && npm run deploy` (site redesign) and `cd keeper-worker && npx wrangler deploy` (extra price sources).
 
-## Next steps
-1. Builder redeploys site + bot (above) and checks the live page.
-2. Optional: a second vault (*Buy the dip*, e.g. 5 USDT0/buy, 2/day, price 75) to show both strategies; 3–5 friends create small vaults (real-user evidence matters most for "user value").
-3. **Demo video script (≤3 min):** problem → create vault from the site → bot buy appears → hero chip: flip a rule, "Ask the real chip" → "Try to steal" impossibility → revenue + roadmap.
-4. **Submission text** (product, target users, revenue model, why users pay/stay, processor address + circuit ID) from README.
-5. Judging criteria (official page web3.okx.com/xlayer/build-x-series): user value & commercial potential; innovation (circuit, features, UX, new TapeOut use cases); ecosystem integration; product readiness & UX (complete journey, low barrier); demo video ≤3 min. Weakest today: evidence of real users.
+## Decision (Nov 22): fast-track Latch v2 for X Layer first; Binance entry is a separate, new project later
+Competition is strong (public repos): **Fusebox** (agent wallet "fuses": 108/79/46/10+LATCH NAND circuits, SDK/MCP, DeWEB-ready,
+unaudited), **Tape Pool** (44-NAND credit policy, on DeWEB), **Hashfront** (22-NAND policy, DeWEB + TapeSend alerts),
+**Lingxi** (17 rule circuits, DeWEB), Cusity, Evermo, Gatefold, TapeSynth. Latch's edge: real-money consumer product
+(live Uniswap buys, 2 reviews). Gaps: circuit is 13 NAND; no DeWEB/TapeSend/TapeKit; no users besides the builder.
+
+### Latch v2 plan ("the strategy is a chip") — approved direction, spend needs per-step approval
+1. **Strategy circuit #2** on processor 0x3728…6813 (~16 inputs, 3 outputs, ~60–120 NAND, exhaustively verified):
+   inputs = 7 safety bits + 3-bit dip depth vs owner's reference price (above, ~2.5, 5, 10, 15, 20, 30, deeper %)
+   + 2-bit volatility (spot vs TWAP) + 2-bit mode (plain DCA / dip-only / smart DCA / ladder);
+   outputs = allow + 2-bit size multiplier (0–3 × base amount). E.g. smart DCA: 1× normally, 2× at −10%, 3× at −20%, 1× if jumpy.
+2. **LatchSwap v2 + LatchFactory v2**: vault computes the inputs, reads the multiplier, amount = base × mult (capped by limits);
+   new tests, fork rehearsal, 3rd independent review. Old factory/vault keep running.
+3. **Bot + website**: show "chip chose 2× because OKB is 12% below your reference price"; interactive hero uses circuit #2.
+4. **DeWEB**: publish the site in circuit #2's container (open container 0.08 OKB; files via SiteRegistry putFile/appendChunk,
+   24,000-byte chunks; no off-chain references → self-host fonts, no Google Fonts; X Layer SiteRegistry/DomainBinding
+   addresses: find in TapeSynth/Lingxi/Hashfront repos). TapeSend buy alerts only if docs are found.
+5. Submission text (must include: product, target users + how to reach them, revenue model, why users pay/stay,
+   processor address + circuit IDs, access link, TapeOut features used, what was built during the event) + demo video ≤3 min.
+6. Remove `web/v1.html` (old practice simulator with made-up numbers → "fabricated data" rule risk).
+Cost estimate: ~0.1 OKB (container 0.08, tapeout ~0.0013, storage gas) + ~0.01 BEM (mint ~120 NAND) + gas.
+Every mainnet step: fork rehearsal first, then ask the builder before spending.
+
+### Binance Agent ID Hackathon (separate project, after X Layer)
+Official: binance.com/en-NG/support/announcement/detail/95f5dbe0ea674a48a739b59e046648bf. Submit by **2026-12-09 08:00 UTC**.
+Must deploy + verify on BNB Chain (BscScan, open source), integrate Agent ID (registry 0x60b9262456de011f7d15a54cdd8c48baaa8b022f,
+balanceOf>0 = holder). Innovation Award needs **≥30 Agent ID addresses interacting** (Depth 30 / Practicality 25 / Completion 25 /
+Innovation 20). Red lines: no QR/pairing login, no bypassing confirmations, no scheduled collection / automatic transfers to
+fixed addresses / bundled transfers / hidden unlimited approvals, owner powers documented, no "Binance"/"BNB" in name, no key
+collection, no promised returns, risk warnings on trading pages. Builder will build it from scratch (not the Latch template).
+Start outreach for 30 Agent ID users early.
 
 ## Rules learned the hard way
 - Always rehearse on a mainnet fork before any mainnet send; never test only against stand-ins.
