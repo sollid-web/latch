@@ -94,6 +94,13 @@ function findWallet() {
   if (announced[0]) return { p: announced[0].provider, name: announced[0].info?.name || 'Wallet' };
   return null;
 }
+/** OKX's App Universal Link: an https link the phone hands to the installed OKX app, which opens this page
+ *  in its DApp browser (where the wallet is injected); without the app it shows OKX's download page. Phone
+ *  browsers often ignore a bare okx:// link silently, so okx:// is only the inner part. */
+function okxAppLink(url = location.href) {
+  const inner = 'okx://wallet/dapp/url?dappUrl=' + encodeURIComponent(url);
+  return 'https://web3.okx.com/download?deeplink=' + encodeURIComponent(inner);
+}
 const isMobile = () => /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') || (navigator.maxTouchPoints > 1 && Math.min(screen.width, screen.height) < 900);
 
 async function connect() {
@@ -620,7 +627,7 @@ function render() {
   const focus = document.activeElement?.id;
   const mh = S.mobileHelp ? `<section class="wrap note" role="status"><p><b>Open Latch inside your wallet app.</b> Phone browsers can't connect to a wallet directly.</p>
     <ol class="terms" style="margin-top:8px"><li>Tap <b>Open in OKX app</b>. If the wrong OKX app opens, or nothing happens, tap <b>Copy link</b> instead.</li><li>Open the <b>OKX Wallet</b> app (or the OKX app, then switch to <b>Wallet</b>).</li><li>Go to <b>Discover</b> (the browser), paste the link and open it.</li><li>Tap <b>Connect wallet</b> there.</li></ol>
-    <div class="row gap" style="flex-wrap:wrap"><button class="btn primary sm" data-a="openOkx">Open in OKX app</button><button class="btn quiet sm" data-a="copyLink">${S.copied ? 'Link copied' : 'Copy link'}</button><button class="btn quiet sm" data-a="hideHelp">Close</button></div></section>` : '';
+    <div class="row gap" style="flex-wrap:wrap"><a class="btn primary sm" href="${esc(okxAppLink())}" rel="noopener">Open in OKX app</a><button class="btn quiet sm" data-a="copyLink">${S.copied ? 'Link copied' : 'Copy link'}</button><button class="btn quiet sm" data-a="hideHelp">Close</button></div></section>` : '';
   app.innerHTML = header() + `<main>${hero()}${mh}${S.note ? `<p class="wrap note" role="status">${esc(S.note)}</p>` : ''}${dashboard()}${feedView()}${info()}</main>
     <footer class="wrap foot"><span>Latch runs on X Layer and checks every buy with TapeOut circuit #${C.circuitId}.</span><span>${link(C.factory, 'address', 'Factory contract')} · <a href="${C.repo}" target="_blank" rel="noopener">GitHub</a></span></footer>` + wizardView() + dialogView();
   if (focus) document.getElementById(focus)?.focus();
@@ -663,7 +670,6 @@ async function act(a, el) {
   switch (a) {
     case 'connect': return connect();
     case 'refresh': return refresh();
-    case 'openOkx': location.href = 'okx://wallet/dapp/url?dappUrl=' + encodeURIComponent(location.href); return;
     case 'hideHelp': S.mobileHelp = false; return render();
     case 'copyLink': {
       try { await navigator.clipboard.writeText(location.href); S.copied = true; }
