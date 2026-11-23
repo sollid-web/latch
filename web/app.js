@@ -94,11 +94,16 @@ function findWallet() {
   if (announced[0]) return { p: announced[0].provider, name: announced[0].info?.name || 'Wallet' };
   return null;
 }
-const isMobile = () => /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+const isMobile = () => /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') || (navigator.maxTouchPoints > 1 && Math.min(screen.width, screen.height) < 900);
 
 async function connect() {
   let w = findWallet();
-  if (!w) { await new Promise((r) => setTimeout(r, 900)); w = findWallet(); }
+  // In-app wallet browsers can inject their provider a little late: ask again and wait up to ~3 s.
+  for (let i = 0; !w && i < 6; i++) {
+    try { window.dispatchEvent(new Event('eip6963:requestProvider')); } catch { /* old browsers */ }
+    await new Promise((r) => setTimeout(r, 500));
+    w = findWallet();
+  }
   if (!w) {
     if (isMobile()) {
       // No automatic app hand-off: the okx:// link opens the OKX *exchange* app, not the standalone
@@ -106,7 +111,7 @@ async function connect() {
       S.mobileHelp = true; S.note = '';
       render();
     } else {
-      S.note = 'No wallet found. Install the OKX Wallet browser extension, then reload this page.';
+      S.mobileHelp = true; S.note = 'No wallet found in this browser. On a computer, install the OKX Wallet extension and reload. On a phone, follow the steps below.';
       render();
     }
     return;
