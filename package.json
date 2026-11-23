@@ -10,5 +10,8 @@
     "esbuild": "^0.24.0",
     "viem": "^2.17.0",
     "wrangler": "^4.0.0"
+  },
+  "dependencies": {
+    "@okxconnect/universal-provider": "^1.9.1"
   }
 }

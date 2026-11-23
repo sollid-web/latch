@@ -22,6 +22,7 @@ const html = fs.readFileSync(path.join(root, 'web/index.html'), 'utf8')
   .replace('__APP__', () => js);
 fs.mkdirSync(path.join(root, 'public'), { recursive: true });
 fs.writeFileSync(path.join(root, 'public/index.html'), html);
+fs.copyFileSync(path.join(root, 'web/icon.png'), path.join(root, 'public/icon.png'));
 // The old relay console (v1.html) is retired; remove any copy left from earlier builds.
 fs.rmSync(path.join(root, 'public/v1.html'), { force: true });
 console.log(`public/index.html written (${(html.length / 1024).toFixed(0)} KiB) for factory ${config.factory}`);

@@ -95,13 +95,17 @@ ok('no page errors', errs.length === 0); if (errs.length) console.log(errs);
 // Phone browser with no wallet: Connect shows the phone steps, and "Open in OKX app" is OKX's https universal link.
 {
   const m = await b.newContext({ viewport: { width: 390, height: 844 }, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1' });
-  let opened = null;
+  let opened = null, walletApp = null;
   await m.route('https://web3.okx.com/**', (route) => { opened = route.request().url(); route.abort(); });
+  await m.route('https://web3link.okx.com/**', (route) => { walletApp = route.request().url(); route.abort(); });
   const mp = await m.newPage();
   await mp.goto(pathToFileURL(path.join(R, 'public/index.html')).href); await mp.waitForTimeout(1000);
   const pageUrl = mp.url();
   await mp.click('text=Connect wallet'); await mp.waitForTimeout(4000);
-  ok('phone: Connect shows the steps with Copy link', /Copy link/.test(await mp.evaluate(() => document.body.innerText)));
+  ok('phone: Connect asks the standalone OKX Wallet app (OKX Connect, web3link.okx.com)', !!walletApp && walletApp.startsWith('https://web3link.okx.com/ul/connect'));
+  await mp.goto(pathToFileURL(path.join(R, 'public/index.html')).href); await mp.waitForTimeout(800);
+  await mp.evaluate(() => { window.__latch.mobileHelp = true; window.__latchRender(); }); await mp.waitForTimeout(300);
+  ok('phone: fallback steps with Copy link are available', /Copy link/.test(await mp.evaluate(() => document.body.innerText)));
   await mp.click('a:has-text("Open in OKX app")'); await mp.waitForTimeout(1500);
   const inner = opened ? new URL(opened).searchParams.get('deeplink') : null; // okx://wallet/dapp/url?dappUrl=<encoded page>
   ok('phone: Open in OKX app uses the universal link to this page', !!opened && opened.startsWith('https://web3.okx.com/download?deeplink=')

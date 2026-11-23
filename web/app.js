@@ -1,5 +1,6 @@
 // Latch web app — create a vault, fund it, watch it buy OKB, pause or withdraw.
 // Bundled into public/index.html by scripts/build-web.mjs (esbuild). No server.
+import { OKXUniversalProvider, ConnectWalletType } from '@okxconnect/universal-provider';
 import {
   createPublicClient, createWalletClient, custom, fallback, http, parseAbi, parseAbiItem,
   formatUnits, parseUnits, getAddress, isAddress, decodeErrorResult
@@ -108,8 +109,63 @@ function okxWalletLink(url = location.href) {
 }
 const isMobile = () => /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') || (navigator.maxTouchPoints > 1 && Math.min(screen.width, screen.height) < 900);
 
+/* OKX Connect (OKX's official SDK): from a normal phone browser, asks the standalone OKX Wallet app
+   (ConnectWalletType.OKX_WALLET, not the exchange app) to approve, then you come back here connected. */
+let okxConnectP = null;
+function okxConnect() {
+  if (!okxConnectP) {
+    okxConnectP = OKXUniversalProvider.init({ dappMetaData: { name: 'Latch', icon: location.origin + '/icon.png' } });
+  }
+  return okxConnectP;
+}
+const XL = 'eip155:' + C.chainId;
+function okxAsEip1193(okx) {
+  return {
+    request: ({ method, params }) => {
+      if (method === 'eth_chainId') return Promise.resolve('0x' + C.chainId.toString(16));
+      if (method === 'wallet_switchEthereumChain') return Promise.resolve(null);
+      return okx.request({ method, params }, XL);
+    },
+    on() {}, removeListener() {}
+  };
+}
+async function connectOkxApp() {
+  const okx = await okxConnect();
+  if (okx.connected()) {
+    const accts = await okx.request({ method: 'eth_accounts' }, XL).catch(() => []);
+    if (accts?.[0]) return { p: okxAsEip1193(okx), name: 'OKX Wallet app', account: getAddress(accts[0]) };
+  }
+  let session = null;
+  {
+    session = await okx.connect({
+      namespaces: { eip155: { chains: [XL], defaultChain: String(C.chainId), rpcMap: { [String(C.chainId)]: C.rpc[0] } } },
+      sessionConfig: { redirect: 'none', connectWalletType: ConnectWalletType.OKX_WALLET }
+    });
+  }
+  const acct = session?.namespaces?.eip155?.accounts?.find((a) => a.startsWith(XL + ':')) || session?.namespaces?.eip155?.accounts?.[0];
+  if (!acct) throw new Error('The wallet app did not return an X Layer account.');
+  return { p: okxAsEip1193(okx), name: 'OKX Wallet app', account: getAddress(acct.split(':').pop()) };
+}
+if (typeof window !== 'undefined' && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') && !window.okxwallet && !window.ethereum) {
+  okxConnect().catch(() => {}); // warm up, so the tap opens the app without delay (iOS blocks slow hand-offs)
+}
+
 async function connect() {
   let w = findWallet();
+  if (!w && isMobile() && !window.okxwallet && !window.ethereum) {
+    // Normal phone browser: no wallet inside. Ask the OKX Wallet app to connect, then come back.
+    S.note = 'Approve the connection in the OKX Wallet app, then come back to this page. If the app does not open, use the options below.'; S.mobileHelp = true; render();
+    try {
+      const r = await connectOkxApp();
+      S.provider = r.p; S.walletName = r.name; S.account = r.account; S.walletChain = C.chainId; S.note = ''; S.mobileHelp = false;
+      await refresh();
+      return;
+    } catch (e) {
+      S.note = 'Could not connect through the OKX Wallet app (' + plain(e) + '). Use the steps below instead.';
+      S.mobileHelp = true; render();
+      return;
+    }
+  }
   // In-app wallet browsers can inject their provider a little late: ask again and wait up to ~3 s.
   for (let i = 0; !w && i < 6; i++) {
     try { window.dispatchEvent(new Event('eip6963:requestProvider')); } catch { /* old browsers */ }
@@ -117,15 +173,8 @@ async function connect() {
     w = findWallet();
   }
   if (!w) {
-    if (isMobile()) {
-      // No automatic app hand-off: the okx:// link opens the OKX *exchange* app, not the standalone
-      // OKX Wallet app, when both are installed. Show steps that work in either app instead.
-      S.mobileHelp = true; S.note = '';
-      render();
-    } else {
-      S.mobileHelp = true; S.note = 'No wallet found in this browser. On a computer, install the OKX Wallet extension and reload. On a phone, follow the steps below.';
-      render();
-    }
+    S.mobileHelp = true; S.note = isMobile() ? '' : 'No wallet found in this browser. On a computer, install the OKX Wallet extension and reload. On a phone, follow the steps below.';
+    render();
     return;
   }
   S.provider = w.p; S.walletName = w.name; S.note = '';
@@ -761,4 +810,4 @@ document.addEventListener('keydown', (e) => {
 render();
 refresh();
 setInterval(() => { if (!S.busy && !S.wizard && !S.dialog) refresh(); }, 60_000);
-window.__latch = S; // for tests and debugging
+window.__latch = S; window.__latchRender = render; // for tests and debugging
