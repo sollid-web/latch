@@ -451,7 +451,7 @@ const waiting = (bits) => (bits & 0x57) === 0x56;
 /* ---------------------------------------------------------------- views */
 function header() {
   const conn = S.account
-    ? `<button class="btn quiet" data-a="refresh" title="Refresh">${esc(short(S.account))}</button>`
+    ? `<span class="row gap"><button class="btn quiet" data-a="refresh" title="Refresh">${esc(short(S.account))}</button><button class="btn quiet sm" data-a="disconnect" title="Disconnect this wallet from Latch">Disconnect</button></span>`
     : `<button class="btn primary" data-a="connect">Connect wallet</button>`;
   return `<header class="hdr"><div class="wrap hdr-in">
     <a class="mark" href="#top" aria-label="Latch home">${LOGO}<span>Latch</span></a>
@@ -724,6 +724,14 @@ async function act(a, el) {
   switch (a) {
     case 'connect': return connect();
     case 'refresh': return refresh();
+    case 'disconnect': {
+      // OKX Connect sessions are ended for real; browser-extension wallets keep the site in their own
+      // "connected sites" list, which only the wallet can clear.
+      try { if (okxConnectP) { const okx = await okxConnectP; if (okx.connected()) await okx.disconnect(); } } catch { /* already gone */ }
+      S.account = null; S.provider = null; S.vaults = []; S.wizard = null; S.dialog = null;
+      S.note = 'Disconnected. To remove Latch completely, also remove it from the connected sites list in your wallet.';
+      return refresh();
+    }
     case 'hideHelp': S.mobileHelp = false; return render();
     case 'copyLink': {
       try { await navigator.clipboard.writeText(location.href); S.copied = true; }
