@@ -18,3 +18,5 @@ keeper-worker/node_modules/
 .preflight-swap-ok
 public/
 .preflight-factory-ok
+.preflight-v2-ok
+keeper/tapeout2-state.json

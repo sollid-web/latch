@@ -60,7 +60,7 @@ interface IGuardianV {
 ///           7-9   depth: how far the 30-min average has moved in the owner's favour vs `refPrice`
 ///                 (BUY: below it, SELL: above it): 0 none, 1 <5%, 2 5-10%, 3 10-15%, 4 15-20%,
 ///                 5 20-30%, 6 30-40%, 7 >=40%
-///           10-11 volatility: |spot - TWAP| 0 <25 ticks, 1 <60, 2 <120, 3 >=120
+///           10-11 volatility: |spot - TWAP| 0 <15 ticks, 1 <35, 2 <60, 3 >=60 (hard stop at 100)
 ///           12-13 mode: 0 plain (every time), 1 dip/rise-only, 2 smart, 3 ladder
 ///           14-15 reserved, 0
 ///         Output byte: bit0 allow, bit1 k0, bit2 k1.
@@ -68,13 +68,15 @@ interface IGuardianV {
 ///         Hard rules enforced in Solidity regardless of the circuit: only the keeper (not revoked by
 ///         the guardian), never above per-trade/daily caps, never more often than `minInterval`,
 ///         only on the pinned pool, TWAP at/inside `limitPrice`, spot within MAX_TICK_DEVIATION of
-///         the TWAP, worst accepted fill inside `limitPrice`, output only to `savings`.
+///         the TWAP, worst accepted fill inside `limitPrice` (re-checked in tick), the current pool price
+///         good enough for the worst accepted fill (so a 'yes' from preview is a trade that can succeed),
+///         output only to `savings`.
 ///         Prices are always USDT0 base units per 1 whole OKB.
 contract LatchVault {
     uint8 public constant BUY = 0;
     uint8 public constant SELL = 1;
     uint256 public constant MAX_SLIPPAGE_BPS = 500;
-    int24 public constant MAX_TICK_DEVIATION = 200; // ~2%: beyond this nobody trades
+    int24 public constant MAX_TICK_DEVIATION = 100; // ~1%: beyond this nobody trades
     uint256 public constant MAX_INTERVAL = 30 days;
     uint256 private constant DAY = 1 days;
 
@@ -351,6 +353,9 @@ contract LatchVault {
         if (msg.sender != keeper || _revoked(msg.sender)) revert NotKeeper();
         if (paused) revert Paused();
         if (!_spacedOk()) revert TooSoon(lastTradeAt + minInterval);
+        // cheap checks first, so an emptied or maxed-out vault costs the bot as little as possible
+        if (IERC20V(tokenIn).balanceOf(address(this)) < minAmount) revert Underfunded();
+        if (_spentToday() + minAmount > dailyCap) revert OverCap();
 
         int24 t = _twapTick();
         uint256 price = _priceAt(t);
@@ -362,6 +367,9 @@ contract LatchVault {
         // slither-disable-next-line incorrect-equality (0 = the chip said no)
         if (amount == 0) revert ChipSaysNo(inputs);
         if (amount < minAmount || amount > perTxCap || _spentToday() + amount > dailyCap) revert OverCap();
+        // hard rule, independent of the circuit: the worst accepted fill respects the owner's limit
+        // slither-disable-next-line incorrect-equality (0 = no quote)
+        if (minOut == 0 || !_fillOk(amount, minOut)) revert PriceOutside(price, limitPrice);
 
         uint256 balBefore = IERC20V(tokenIn).balanceOf(address(this));
         if (balBefore < amount + fee) revert Underfunded();
@@ -454,12 +462,12 @@ contract LatchVault {
         uint256 price = _priceAt(t);
         uint256 vol = _absDiff(spot, t);
         uint16 depth = _depth(price);
-        uint16 volBucket = vol < 25 ? 0 : vol < 60 ? 1 : vol < 120 ? 2 : 3;
+        uint16 volBucket = vol < 15 ? 0 : vol < 35 ? 1 : vol < 60 ? 2 : 3;
 
         // First pass: the chip's multiplier with the facts that do not depend on the size.
         uint16 base = (depth << 7) | (volBucket << 10) | (uint16(mode) << 12);
         // Candidate size: try k from the chip assuming the size-dependent facts pass, then verify.
-        (, uint8 kGuess) = _chip(base | 0x7e);
+        (bool allowGuess, uint8 kGuess) = _chip(base | 0x7e);
         uint256 want = baseAmount * kGuess;
         if (want > perTxCap) want = perTxCap;
         uint256 left = dailyCap > _spentToday() ? dailyCap - _spentToday() : 0;
@@ -471,7 +479,7 @@ contract LatchVault {
         uint256 f = (want * bps) / 10_000;
         uint256 mo = want == 0 ? 0 : _minOut(t, want);
         bool priceOk = (direction == BUY ? price <= limitPrice : price >= limitPrice)
-            && vol <= uint256(int256(MAX_TICK_DEVIATION)) && mo > 0 && _fillOk(want, mo);
+            && vol <= uint256(int256(MAX_TICK_DEVIATION)) && mo > 0 && _fillOk(want, mo) && _spotOk(spot, want, mo);
 
         uint16 s = 0;
         if (paused) s |= 1;
@@ -483,11 +491,14 @@ contract LatchVault {
         if (IERC20V(tokenIn).balanceOf(address(this)) >= want + f && want > 0) s |= 64;
         inputs = base | s;
 
-        (bool allow, uint8 kk) = _chip(inputs);
-        k = kk;
+        // One chip call per trade: if every safety fact holds, the inputs are exactly the ones already asked
+        // about. If any fact fails, the circuit's answer is "no" for every such input (verified exhaustively),
+        // so there is nothing to ask.
+        if (inputs != (base | 0x7e)) return (inputs, 0, 0, 0, 0);
+        k = kGuess;
         // slither-disable-next-line incorrect-equality (k = 0 means "no trade")
-        if (!allow || kk == 0 || kk != kGuess) return (inputs, kk, 0, 0, 0);
-        return (inputs, kk, want, f, mo);
+        if (!allowGuess || kGuess == 0) return (inputs, kGuess, 0, 0, 0);
+        return (inputs, kGuess, want, f, mo);
     }
 
     function _chip(uint16 inputs) internal view returns (bool allow, uint8 k) {
@@ -522,6 +533,14 @@ contract LatchVault {
     function _fillOk(uint256 amountIn, uint256 minOut) internal view returns (bool) {
         if (direction == BUY) return amountIn * baseUnit <= limitPrice * minOut; // paid per OKB <= limit
         return minOut * baseUnit >= limitPrice * amountIn; // received per OKB >= limit
+    }
+
+    /// @dev The pool's current price must already give at least the worst accepted output (before price
+    ///      impact), otherwise the swap would certainly fail. Keeps preview() honest in trending markets.
+    function _spotOk(int24 spot, uint256 amount, uint256 minOut) internal view returns (bool) {
+        if (amount > type(uint128).max) return false;
+        uint256 q = UniMath.getQuoteAtTick(spot, uint128(amount), tokenIn, tokenOut);
+        return (q * (1_000_000 - uint256(poolFee))) / 1_000_000 >= minOut;
     }
 
     /// @dev TWAP quote, net of the pool's LP fee, minus the owner's slippage budget.

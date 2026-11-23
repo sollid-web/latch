@@ -150,15 +150,23 @@ try {
 
   /* ---- 2. jumpy market: smart drops to 1x; very jumpy: smart pauses ---- */
   await wait(3700);
-  await moveTo(80 * 1.008); // ~80 ticks away from the TWAP → "jumpy"
+  await moveTo(80 * 1.0045); // ~45 ticks away from the TWAP → "jumpy"
   p = await read(smart, Vault.abi, 'preview', [bot.address]);
-  check('jumpy (spot ~0.8% off the average): smart falls back to 1x', p[1] === 1 && p[2] === 2n * U, `k=${p[1]} amount=${p[2]} in=0x${p[0].toString(16)}`);
-  await moveTo(80 * 1.015); // ~150 ticks → "very jumpy"
+  check('jumpy (spot ~0.45% off the average): smart falls back to 1x', p[1] === 1 && p[2] === 2n * U, `k=${p[1]} amount=${p[2]} in=0x${p[0].toString(16)}`);
+  await moveTo(80 * 1.008); // ~80 ticks → "very jumpy"
   p = await read(smart, Vault.abi, 'preview', [bot.address]);
-  check('very jumpy (~1.5%): smart pauses (amount 0)', p[2] === 0n, `k=${p[1]} amount=${p[2]}`);
+  check('very jumpy (~0.8%): smart pauses (amount 0)', p[2] === 0n, `k=${p[1]} amount=${p[2]}`);
   check('very jumpy: tick refused by the chip', (await why(bw, smart, Vault.abi, 'tick')) === 'ChipSaysNo');
-  await moveTo(80 * 1.03); // ~300 ticks → beyond the hard 2% stability rule
-  check('beyond 2%: hard stability rule refuses before the chip', (await why(bw, smart, Vault.abi, 'tick')) === 'PriceUnstable');
+  await moveTo(80 * 1.015); // ~150 ticks → beyond the hard 1% stability rule
+  check('beyond 1%: hard stability rule refuses before the chip', (await why(bw, smart, Vault.abi, 'tick')) === 'PriceUnstable');
+  // review M-1: trending market, spot ~0.9% against a BUY (inside the 1% limit): preview yes ⇒ tick succeeds
+  const trend = await create(uw, { direction: 0, mode: 0, savings: SAV, base: 2n * U, perTx: 2n * U, daily: 4n * U, ref: 80n * U, limit: 100n * U, interval: 0n });
+  await tx(uw, usdt, ERC.abi, 'transfer', [trend, 5n * U]);
+  await moveTo(80); await wait(2000); await moveTo(80 * 1.009);
+  p = await read(trend, Vault.abi, 'preview', [bot.address]);
+  const tw = await why(bw, trend, Vault.abi, 'tick');
+  check('trending ~0.9% against a buy: preview and tick agree', (p[2] > 0n && tw === 'OK') || (p[2] === 0n && tw !== 'OK'), `preview ${p[2]} tick ${tw}`);
+  check('trending ~0.9%: the trade goes through', tw === 'OK', tw);
   await moveTo(80); await wait(2000);
 
   /* ---- 3. dip-only above the reference: no trade ---- */
@@ -186,7 +194,7 @@ try {
   await tx(bw, plain, Vault.abi, 'tick'); await tx(bw, plain, Vault.abi, 'tick');
   p = await read(plain, Vault.abi, 'preview', [bot.address]);
   check('plain DCA: daily limit reached after 2 buys → preview 0', p[2] === 0n);
-  check('plain DCA: 3rd buy same day refused', (await why(bw, plain, Vault.abi, 'tick')) === 'ChipSaysNo');
+  check('plain DCA: 3rd buy same day refused early and cheaply (before the chip)', (await why(bw, plain, Vault.abi, 'tick')) === 'OverCap');
   check('caps cannot be raised', (await why(uw, plain, Vault.abi, 'setStrategy', [1n * U, 2n * U, 2n * U, 80n * U, 90n * U, 0n, 0])) === 'CapRaised');
   check('keeper cannot change the strategy', (await why(bw, plain, Vault.abi, 'setStrategy', [1n * U, 1n * U, 2n * U, 80n * U, 1000n * U, 0n, 0])) === 'NotOwner');
 
@@ -231,7 +239,7 @@ try {
   check('factory: buy below the 1 USDT0 minimum refused', (await why(uw, fac, Fac.abi, 'createVault', [0, 0, SAV, 500_000n, 1n * U, 1n * U, 80n * U, 90n * U, 0n, Z])) === 'OverCap');
   check('factory: per-trade below base refused', (await why(uw, fac, Fac.abi, 'createVault', [0, 0, SAV, 2n * U, 1n * U, 3n * U, 80n * U, 90n * U, 0n, Z])) === 'OverCap');
   check('factory: bad mode refused', (await why(uw, fac, Fac.abi, 'createVault', [0, 4, SAV, 1n * U, 1n * U, 1n * U, 80n * U, 90n * U, 0n, Z])) === 'BadParam');
-  check('factory: count + list', (await read(fac, Fac.abi, 'vaultCount')) === 6n && (await read(fac, Fac.abi, 'vaultsPage', [0n, 10n])).length === 6);
+  check('factory: count + list', (await read(fac, Fac.abi, 'vaultCount')) === 7n && (await read(fac, Fac.abi, 'vaultsPage', [0n, 10n])).length === 7);
 
   /* ---- 9. the chip agrees with the spec on sample inputs ---- */
   const viaVault = async (x) => read(smart, Vault.abi, 'chip', [x]);
