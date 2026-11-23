@@ -730,6 +730,7 @@ async function act(a, el) {
       try { if (okxConnectP) { const okx = await okxConnectP; if (okx.connected()) await okx.disconnect(); } } catch { /* already gone */ }
       S.account = null; S.provider = null; S.vaults = []; S.wizard = null; S.dialog = null;
       S.note = 'Disconnected. To remove Latch completely, also remove it from the connected sites list in your wallet.';
+      render();
       return refresh();
     }
     case 'hideHelp': S.mobileHelp = false; return render();
