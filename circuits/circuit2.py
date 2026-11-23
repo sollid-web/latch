@@ -26,11 +26,12 @@ def spec(x):
         return (1, 1) if d >= 1 else (0, 0)
     if v == 3:                      # very jumpy: smart/ladder pause
         return (0, 0)
-    if m == 3:                      # ladder: steps at 5%, 15%, 30%
+    if m == 3:                      # ladder: steps at 5%, 15%, 30%; back to 1x when jumpy
+        if d < 2: return (0, 0)
+        if jumpy: return (1, 1)
         if d >= 6: return (1, 3)
         if d >= 4: return (1, 2)
-        if d >= 2: return (1, 1)
-        return (0, 0)
+        return (1, 1)
     # smart DCA: 1x, 2x at 10%+, 3x at 20%+, back to 1x when jumpy
     if jumpy: k = 1
     elif d >= 5: k = 3
@@ -79,8 +80,8 @@ allow = AND(safe, OR(OR(ok_plain, ok_dip), OR(ok_smart, ok_lad)))
 # smart: calm -> 2x at b, 3x at c.   ladder: 2x at d>=4 (=d2), 3x at e6
 s_hi  = AND(AND(smart, nv1), b)         # smart >= 2x
 s_3   = AND(AND(smart, nv1), c)
-l_hi  = AND(ladder, d2)
-l_3   = AND(ladder, e6)
+l_hi  = AND(AND(ladder, nv1), d2)
+l_3   = AND(AND(ladder, nv1), e6)
 hi    = OR(s_hi, l_hi)
 three = OR(s_3, l_3)
 k1 = AND(allow, hi)
@@ -108,6 +109,32 @@ def run(x):
         w.append(1 - (w[ga] & w[gb]))
     return w
 
+# ---------- TAP-02 export (what the TapeOut processor runs) ----------
+# Signals: 0 = constant 0, 1 = constant 1, inputs at 2..17 (input bit i -> signal i+2), gate g -> signal 18+g.
+# Outputs are the LAST 3 signals, packed LSB-first: bit0 = allow, bit1 = k0, bit2 = k1  (k = (out >> 1) & 3).
+tap = [(a + 2, b + 2) for a, b in gates]
+def buf(w):                        # copy a wire to the end with two NANDs (NOT NOT)
+    tap.append((w + 2, w + 2)); n = 17 + len(tap)
+    tap.append((n, n))
+for w in (allow, k0, k1):
+    buf(w)
+# The buffers above are interleaved (NOT x, NOT NOT x) — make sure the very last three signals are the outputs:
+outs = []
+tap2 = list(tap[:len(gates)])
+nots = []
+for w in (allow, k0, k1):
+    tap2.append((w + 2, w + 2)); nots.append(17 + len(tap2))
+for n in nots:
+    tap2.append((n, n))
+tap = tap2
+
+def run_tap(x):
+    sig = [0, 1] + [(x >> i) & 1 for i in range(16)]
+    for a, b in tap:
+        sig.append(1 - (sig[a] & sig[b]))
+    o = sig[-3:]
+    return o[0] | (o[1] << 1) | (o[2] << 2)
+
 # ---------- exhaustive check ----------
 bad = 0
 for x in range(1 << 16):
@@ -117,6 +144,14 @@ for x in range(1 << 16):
         bad += 1
         if bad < 5: print("MISMATCH", hex(x), got, spec(x))
 print(f"gates: {len(gates)} NAND, checked {1<<16} inputs, mismatches: {bad}")
+bad2 = 0
+for x in range(1 << 16):
+    al, k = spec(x)
+    if run_tap(x) != (al | ((k & 1) << 1) | ((k >> 1) << 2)):
+        bad2 += 1
+print(f"TAP-02 netlist: {len(tap)} NAND (incl. 6 output buffers), checked {1<<16} inputs, mismatches: {bad2}")
+assert bad == 0 and bad2 == 0
+netlist = '0x' + ''.join('00' + format(a, '06x') + format(b, '06x') for a, b in tap)
 
 # readable truth summary for the valid safety pattern, calm market
 names = ["plain DCA", "dip-only", "smart DCA", "ladder"]
@@ -132,5 +167,5 @@ for vol in (0, 2, 3):
         print(f"{names[m]:10}" + "".join(f"{x:>7}" for x in row))
 
 out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "circuit2.json")
-json.dump({"inputs": 16, "gates": gates, "outputs": OUT}, open(out_path, "w"))
+json.dump({"inputs": 16, "outputs": 3, "outputOrder": ["allow", "k0", "k1"], "gates": len(tap), "tap02": tap, "netlist": netlist}, open(out_path, "w"))
 print("wrote", out_path)
