@@ -161,8 +161,10 @@ function okxAsEip1193(okx) {
 async function connectOkxApp() {
   const okx = await okxConnect();
   if (okx.connected()) {
-    const accts = await okx.request({ method: 'eth_accounts' }, XL).catch(() => []);
+    // A session saved in this browser can go stale (wallet app closed it): never wait on it for long.
+    const accts = await Promise.race([okx.request({ method: 'eth_accounts' }, XL), new Promise((r) => setTimeout(() => r(null), 3000))]).catch(() => null);
     if (accts?.[0]) return { p: okxAsEip1193(okx), name: 'OKX Wallet app', account: getAddress(accts[0]) };
+    try { await Promise.race([okx.disconnect(), new Promise((r) => setTimeout(r, 1500))]); } catch { /* start fresh below */ }
   }
   const session = await okx.connect({
     namespaces: { eip155: { chains: [XL], defaultChain: String(C.chainId), rpcMap: { [String(C.chainId)]: C.rpc[0] } } },
@@ -179,13 +181,21 @@ if (typeof window !== 'undefined' && /Android|iPhone|iPad|iPod|Mobile/i.test(nav
 export async function connect() {
   let w = findWallet();
   if (!w && isMobile() && !window.okxwallet && !window.ethereum) {
-    S.note = 'Approve the connection in the OKX Wallet app, then come back to this page. If the app does not open, use the options below.'; S.mobileHelp = true; render();
+    S.note = 'Opening the OKX Wallet app… approve the connection there, then come back to this page.'; S.mobileHelp = true; render();
+    // If the app has not opened after a few seconds (page still on screen), say so plainly.
+    const watch = setTimeout(() => {
+      if (!S.account && document.visibilityState === 'visible') {
+        S.note = 'The OKX Wallet app did not open by itself. Tap "Open in OKX Wallet app" below.'; render();
+      }
+    }, 6000);
     try {
       const r = await connectOkxApp();
+      clearTimeout(watch);
       S.provider = r.p; S.walletName = r.name; S.account = r.account; S.walletChain = C.chainId; S.note = ''; S.mobileHelp = false;
       await refreshFn();
       return;
     } catch (e) {
+      clearTimeout(watch);
       S.note = 'Could not connect through the OKX Wallet app (' + plain(e) + '). Use the steps below instead.';
       S.mobileHelp = true; render();
       return;
