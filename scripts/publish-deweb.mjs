@@ -91,7 +91,9 @@ async function main() {
     read(OPENER, 'FEE'), read(BINDING, 'monthlyFee'), pub.getGasPrice(), pub.getBalance({ address: me.address })
   ]);
   if (holder.toLowerCase() !== me.address.toLowerCase()) throw new Error(`circuit #${CID} is held by ${holder}, not your owner wallet ${me.address}`);
-  const have = await read(SITES, 'fileInfo', [container, FILE_PATH]).catch(() => null);
+  // viem returns multi-value results as a list: [size, contentType, sha256Hash, updatedAt, chunkCount]
+  const fileInfo = async () => { const r = await read(SITES, 'fileInfo', [container, FILE_PATH]); return { size: Number(r[0]), sha256Hash: r[2], chunkCount: Number(r[4]) }; };
+  const have = await fileInfo().catch(() => null);
   const live = await read(BINDING, 'isLive', [NAME, container]).catch(() => false);
   // storage cost estimate: ~ 22k gas per 32 bytes written + overhead
   const gasEst = BigInt(file.length) * 720n + BigInt(chunks.length) * 120_000n;
@@ -115,16 +117,16 @@ async function main() {
   };
   if (!opened) await send('open container', 'open', OPENER, [PROCESSOR, CID], openFee);
   let start = 1;
-  if (have && have.sha256Hash === sha && Number(have.chunkCount) >= 1 && Number(have.chunkCount) <= chunks.length) start = Number(have.chunkCount);
+  if (have && have.sha256Hash === sha && have.chunkCount >= 1 && have.chunkCount <= chunks.length) start = have.chunkCount;
   else await send(`putFile 1/${chunks.length}`, 'putFile', SITES, [container, FILE_PATH, 'text/html; charset=utf-8', sha, toHex(chunks[0])]);
   for (let i = start; i < chunks.length; i++) await send(`appendChunk ${i + 1}/${chunks.length}`, 'appendChunk', SITES, [container, FILE_PATH, BigInt(i), toHex(chunks[i])]);
   if ((await read(SITES, 'fallbackPath', [container])) !== FILE_PATH) await send('setFallback', 'setFallback', SITES, [container, FILE_PATH]);
   if (!(await read(BINDING, 'isLive', [NAME, container]))) await send(`bind ${NAME} for ${MONTHS} months`, 'bind', BINDING, [NAME, container, MONTHS], monthly * MONTHS);
 
   // Read every byte back
-  const info = await read(SITES, 'fileInfo', [container, FILE_PATH]);
+  const info = await fileInfo();
   const parts = [];
-  for (let off = 0; off < Number(info.size); off += 60_000) parts.push(Buffer.from((await read(SITES, 'readRange', [container, FILE_PATH, BigInt(off), 60_000n])).slice(2), 'hex'));
+  for (let off = 0; off < info.size; off += 60_000) parts.push(Buffer.from((await read(SITES, 'readRange', [container, FILE_PATH, BigInt(off), 60_000n])).slice(2), 'hex'));
   const back = Buffer.concat(parts);
   const backSha = '0x' + crypto.createHash('sha256').update(back).digest('hex');
   const ok = backSha === sha && back.length === file.length;
