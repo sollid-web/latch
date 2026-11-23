@@ -26,6 +26,15 @@ const out = JSON.parse(solc.compile(JSON.stringify({
   settings: { optimizer: { enabled: true, runs: 200 }, evmVersion: 'cancun', outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object'] } } }
 }), { import: (p) => ({ contents: read('contracts/' + path.basename(p)) }) }));
 for (const e of out.errors || []) if (e.severity === 'error') throw new Error(e.formattedMessage);
+const out2 = JSON.parse(solc.compile(JSON.stringify({
+  language: 'Solidity',
+  sources: { 'LatchVault.sol': { content: read('contracts/LatchVault.sol') }, 'UniMath.sol': { content: read('contracts/UniMath.sol') }, 'LatchFactory2.sol': { content: read('contracts/LatchFactory2.sol') } },
+  settings: { viaIR: true, optimizer: { enabled: true, runs: 200 }, evmVersion: 'cancun', outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object'] } } }
+}), { import: (p) => ({ contents: read('contracts/' + path.basename(p)) }) }));
+for (const e of out2.errors || []) if (e.severity === 'error') throw new Error(e.formattedMessage);
+const Vault2 = { abi: out2.contracts['LatchVault.sol'].LatchVault.abi };
+const Fac2 = { abi: out2.contracts['LatchFactory2.sol'].LatchFactory2.abi, bytecode: '0x' + out2.contracts['LatchFactory2.sol'].LatchFactory2.evm.bytecode.object };
+const circuit2 = JSON.parse(read('circuits/circuit2.json'));
 const art = (f, c) => ({ abi: out.contracts[f][c].abi, bytecode: '0x' + out.contracts[f][c].evm.bytecode.object });
 const Swap = art('LatchSwap.sol', 'LatchSwap'), Fac = art('LatchFactory.sol', 'LatchFactory');
 const ERC = art('Helpers.sol', 'TestERC20'), Proc = art('Helpers.sol', 'NetlistProcessor'), Driver = art('Helpers.sol', 'PoolDriver');
@@ -142,6 +151,39 @@ try {
   let stolen = 'OK';
   try { await pub.simulateContract({ account: bot, address: vb, abi: Swap.abi, functionName: 'withdraw', args: [usdt, bot.address, 1n] }); } catch { stolen = 'refused'; }
   check('stolen bot key cannot withdraw', stolen === 'refused');
+
+  /* ---- v2: Buy + Take Profit vaults sized by strategy circuit #2 (pool now ~45) ---- */
+  await tx(aw, proc, Proc.abi, 'tape', [2n, circuit2.netlist, 16, 3]);
+  const fac2 = await dep(Fac2, [{ processor: proc, circuitId: 2n, router, pool, quoteToken: usdt, baseToken: wokb, treasury: admin.address,
+    hostedKeeper: bot.address, twapWindow: 1800, slippageBps: 100n, minBuy: 1n * U, minSell: 10n ** 16n }]);
+  const SAV2 = '0x3333333333333333333333333333333333333333';
+  await tx(W(alice), fac2, Fac2.abi, 'createVault', [0, 2, SAV2, 1n * U, 3n * U, 6n * U, 60n * U, 50n * U, 0n, Z]); // smart DCA, ref 60 → -25%
+  await tx(W(alice), fac2, Fac2.abi, 'createVault', [1, 2, SAV2, 10n ** 16n, 3n * 10n ** 16n, 10n ** 17n, 39n * U, 40n * U, 0n, Z]); // take profit, ref 39 → +15%
+  await tx(W(alice), fac2, Fac2.abi, 'createVault', [0, 1, SAV2, 1n * U, 1n * U, 3n * U, 40n * U, 50n * U, 0n, Z]); // dip-only, ref 40 → above it
+  const [vBuy, vSell, vDip] = await rd(fac2, Fac2.abi, 'vaultsOf', [alice.address]);
+  await fund(alice, vBuy, 7n * U); await fund(alice, vDip, 3n * U);
+  await tx(aw, wokb, ERC.abi, 'transfer', [vSell, 5n * 10n ** 16n]);
+  const env3 = { ...env, FACTORY_ADDRESS: '', FACTORY2_ADDRESS: fac2 };
+  r = await runOnce(env3, { send: false, prices: P(45) });
+  check('v2 dry run: Buy vault would buy at 3x (OKB 25% under reference)', row(r, vBuy).action === 'would-buy' && row(r, vBuy).multiplier === 3, row(r, vBuy));
+  check('v2 dry run: Take Profit vault would sell at 2x (OKB 15% above reference)', row(r, vSell).action === 'would-sell' && row(r, vSell).multiplier === 2, row(r, vSell));
+  check('v2 dry run: dip-only above its reference → plain reason', row(r, vDip).action === 'hold' && /strategy says wait/.test(row(r, vDip).why), row(r, vDip));
+  const usdOf = (a) => rd(usdt, ERC.abi, 'balanceOf', [a]);
+  const o0 = await okb(SAV2), u0 = await usdOf(SAV2);
+  r = await runOnce(env3, { send: true, wait: true, prices: P(45) });
+  check('v2: Buy vault bought 3 USDT0 of OKB → savings', row(r, vBuy).action === 'bought' && row(r, vBuy).amount === String(3n * U) && (await okb(SAV2)) > o0, row(r, vBuy));
+  check('v2: Take Profit sold 0.02 OKB → USDT0 in savings', row(r, vSell).action === 'sold' && (await usdOf(SAV2)) > u0, row(r, vSell));
+  r = await runOnce(env3, { send: true, wait: true, prices: P(45) });
+  check('v2: Buy vault buys again (3x) on the next run', row(r, vBuy).action === 'bought' && row(r, vBuy).amount === String(3n * U), row(r, vBuy));
+  r = await runOnce(env3, { send: true, wait: true, prices: P(45) });
+  check('v2: then holds with "daily limit reached"', row(r, vBuy).action === 'hold' && /daily limit/.test(row(r, vBuy).why), row(r, vBuy));
+  r = await runOnce({ ...env3, FACTORY_ADDRESS: fac }, { send: false, prices: P(45), offset: 0 });
+  check('v1 + v2 factories served in one run', r.vaults.some((x) => x.version === 1) && r.vaults.some((x) => x.version === 2), r.vaultCount);
+  r = await runOnce({ ...env3, REQUIRE_FEE_COVERS_GAS: '1' }, { send: true, wait: true, prices: P(45) });
+  await tx(W(alice), vDip, Vault2.abi, 'withdraw', [usdt, alice.address, 2n ** 256n - 1n]);
+  r = await runOnce(env3, { send: false, prices: P(45) });
+  check('v2: empty vault → "not enough money in the vault"', /not enough money/.test(row(r, vDip).why), row(r, vDip));
+  check('optional fee-covers-gas filter holds tiny trades when gas is dear', ['hold', 'later'].includes(row(r, vSell).action) || row(r, vSell).action === 'sold', row(r, vSell));
 } catch (err) {
   console.error('TEST CRASHED:', err); failures++;
 } finally { anvil.kill(); }
