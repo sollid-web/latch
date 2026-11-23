@@ -82,7 +82,8 @@ async function main() {
   const wallet = createWalletClient({ chain, transport: http(RPC_URL), account });
   if ((await pub.getChainId()) !== 196) throw new Error('RPC is not X Layer (196)');
   const read = (address, functionName, args = []) => pub.readContract({ address, abi: ABI, functionName, args });
-  const state = fs.existsSync(STATE_FILE) ? JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) : {};
+  const raw = fs.existsSync(STATE_FILE) ? fs.readFileSync(STATE_FILE, 'utf8').trim() : '';
+  const state = raw ? JSON.parse(raw) : {}; // an empty file (fresh rehearsal) means no progress yet
   const save = () => fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 
   const code = await pub.getCode({ address: account.address });
