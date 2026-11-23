@@ -172,7 +172,7 @@ function useOkxSession(okx, account) {
  *  rely on still being there when the approval arrives. */
 export async function restoreSession() {
   if (S.account || window.okxwallet || window.ethereum) return false;
-  if (!okxConnectP && !isMobile()) return false;
+  if (C.onchain || (!okxConnectP && !isMobile())) return false;
   try {
     const okx = await okxConnect();
     if (!okx.connected()) return false;
@@ -212,12 +212,17 @@ async function connectOkxApp() {
   if (!acct) throw new Error('The wallet app did not return an X Layer account.');
   return { okx, account: getAddress(acct.split(':').pop()) };
 }
-if (typeof window !== 'undefined' && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') && !window.okxwallet && !window.ethereum) {
+if (typeof window !== 'undefined' && !C.onchain && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') && !window.okxwallet && !window.ethereum) {
   okxConnect().catch(() => {}); // warm up, so the tap opens the app without delay (iOS blocks slow hand-offs)
 }
 
 export async function connect() {
   let w = findWallet();
+  if (!w && isMobile() && C.onchain) {
+    // On-chain copy (DeWEB): OKX Connect's relay is off-chain, so open this page inside the OKX Wallet app instead.
+    S.note = ''; S.mobileHelp = true; render();
+    return;
+  }
   if (!w && isMobile() && !window.okxwallet && !window.ethereum) {
     S.note = 'Opening the OKX Wallet app… approve the connection there, then come back to this page.'; S.mobileHelp = false; render();
     // If the app has not opened after a few seconds (page still on screen), say so plainly.

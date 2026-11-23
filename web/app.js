@@ -560,7 +560,7 @@ function render() {
   const focus = document.activeElement?.id;
   const page = { home: pageHome, create: pageCreate, vaults: pageVaults, chip: pageChip, activity: pageActivity, safety: pageSafety }[S.page] || pageHome;
   app.innerHTML = header() + `<main id="main">${mobileHelp()}${S.note ? `<p class="wrap note" role="status">${esc(S.note)}</p>` : ''}${page()}</main>
-    <footer class="wrap foot"><span>Latch runs on X Layer. Every trade is decided by TapeOut circuit #${CID2}${C.circuitId ? ` (classic vaults: #${C.circuitId})` : ''}.</span><span>${HAS2 ? link(C.factory2, 'address', 'Vault factory') + ' · ' : ''}<a href="${C.repo}" target="_blank" rel="noopener">GitHub</a></span></footer>` + dialogView();
+    <footer class="wrap foot"><span>${C.onchain ? 'You are on the on-chain copy of Latch, served from X Layer (DeWEB). ' : ''}Latch runs on X Layer. Every trade is decided by TapeOut circuit #${CID2}${C.circuitId ? ` (classic vaults: #${C.circuitId})` : ''}.${!C.onchain && C.deweb ? ` Also on chain: <a href="${esc(C.deweb.url)}" target="_blank" rel="noopener">${esc(C.deweb.name)}</a>.` : ''}</span><span>${HAS2 ? link(C.factory2, 'address', 'Vault factory') + ' · ' : ''}<a href="${C.repo}" target="_blank" rel="noopener">GitHub</a></span></footer>` + dialogView();
   if (focus) document.getElementById(focus)?.focus();
   if (S.dialog && !focus) document.querySelector('.sheet input, .sheet select')?.focus();
 }
