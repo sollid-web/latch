@@ -3,7 +3,7 @@
 import { parseUnits, formatUnits, getAddress, isAddress } from 'viem';
 import {
   C, U6, E18, MAX, ZERO, pub, FACTORY1, VAULT1, FACTORY2, VAULT2, ERC20, WOKB_ABI, POOL, PROC, S, hooks,
-  connect, disconnect, send, plain, tradesOf, okxAppLink, okxWalletLink,
+  connect, disconnect, restoreSession, send, plain, tradesOf, okxAppLink, okxWalletLink,
   esc, usd, okb, short, link, when, spacingText
 } from './core.js';
 import { evalChip, pack, MODES, DEPTHS, depthWord, VOLS, SAFETY, curve, depthOf, GATE_COUNT, SAFE } from './strategy.js';
@@ -754,5 +754,6 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.dialog
 
 route();
 refresh();
+restoreSession().then((ok) => { if (ok) refresh(); }); // already approved in the OKX Wallet app → show connected
 setInterval(() => { if (!S.busy && !S.dialog && S.page !== 'create') refresh(); }, 60_000);
 window.__latch = S; window.__latchRender = render; // for tests and debugging

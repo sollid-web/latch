@@ -144,9 +144,48 @@ export const isMobile = () => /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.
    (ConnectWalletType.OKX_WALLET, not the exchange app) to approve, then you come back here connected. */
 let okxConnectP = null;
 function okxConnect() {
-  if (!okxConnectP) okxConnectP = OKXUniversalProvider.init({ dappMetaData: { name: 'Latch', icon: location.origin + '/icon.png' } });
+  if (!okxConnectP) {
+    okxConnectP = OKXUniversalProvider.init({ dappMetaData: { name: 'Latch', icon: location.origin + '/icon.png' } }).then((okx) => {
+      okx.on('session_delete', () => { // disconnected from the wallet app's side
+        if (S.walletName === 'OKX Wallet app') { S.account = null; S.provider = null; refreshFn(); }
+      });
+      okx.on('session_update', () => { const a = sessionAccount(okx); if (a && S.walletName === 'OKX Wallet app') { S.account = a; render(); } });
+      return okx;
+    });
+  }
   return okxConnectP;
 }
+/** The approved X Layer account from OKX Connect's saved session (no network needed). */
+function sessionAccount(okx) {
+  try {
+    const list = okx.session?.namespaces?.eip155?.accounts || [];
+    const a = list.find((x) => String(x).startsWith(XL + ':')) || list[0];
+    return a ? getAddress(String(a).split(':').pop()) : null;
+  } catch { return null; }
+}
+function useOkxSession(okx, account) {
+  S.provider = okxAsEip1193(okx); S.walletName = 'OKX Wallet app'; S.account = account; S.walletChain = C.chainId;
+  S.note = ''; S.mobileHelp = false;
+}
+/** On load, and whenever you come back to this tab: if you already approved Latch in the OKX Wallet app,
+ *  show you as connected. Phones pause or reload the tab while the wallet app is open, so the page cannot
+ *  rely on still being there when the approval arrives. */
+export async function restoreSession() {
+  if (S.account || window.okxwallet || window.ethereum) return false;
+  if (!okxConnectP && !isMobile()) return false;
+  try {
+    const okx = await okxConnect();
+    if (!okx.connected()) return false;
+    const a = sessionAccount(okx);
+    if (!a) return false;
+    useOkxSession(okx, a);
+    return true;
+  } catch { return false; }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || S.account) return;
+  setTimeout(() => restoreSession().then((ok) => { if (ok) refreshFn(); }), 800);
+});
 const XL = 'eip155:' + C.chainId;
 function okxAsEip1193(okx) {
   return {
@@ -161,9 +200,8 @@ function okxAsEip1193(okx) {
 async function connectOkxApp() {
   const okx = await okxConnect();
   if (okx.connected()) {
-    // A session saved in this browser can go stale (wallet app closed it): never wait on it for long.
-    const accts = await Promise.race([okx.request({ method: 'eth_accounts' }, XL), new Promise((r) => setTimeout(() => r(null), 3000))]).catch(() => null);
-    if (accts?.[0]) return { p: okxAsEip1193(okx), name: 'OKX Wallet app', account: getAddress(accts[0]) };
+    const a = sessionAccount(okx);
+    if (a) return { okx, account: a };
     try { await Promise.race([okx.disconnect(), new Promise((r) => setTimeout(r, 1500))]); } catch { /* start fresh below */ }
   }
   const session = await okx.connect({
@@ -172,7 +210,7 @@ async function connectOkxApp() {
   });
   const acct = session?.namespaces?.eip155?.accounts?.find((a) => a.startsWith(XL + ':')) || session?.namespaces?.eip155?.accounts?.[0];
   if (!acct) throw new Error('The wallet app did not return an X Layer account.');
-  return { p: okxAsEip1193(okx), name: 'OKX Wallet app', account: getAddress(acct.split(':').pop()) };
+  return { okx, account: getAddress(acct.split(':').pop()) };
 }
 if (typeof window !== 'undefined' && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') && !window.okxwallet && !window.ethereum) {
   okxConnect().catch(() => {}); // warm up, so the tap opens the app without delay (iOS blocks slow hand-offs)
@@ -181,21 +219,22 @@ if (typeof window !== 'undefined' && /Android|iPhone|iPad|iPod|Mobile/i.test(nav
 export async function connect() {
   let w = findWallet();
   if (!w && isMobile() && !window.okxwallet && !window.ethereum) {
-    S.note = 'Opening the OKX Wallet app… approve the connection there, then come back to this page.'; S.mobileHelp = true; render();
+    S.note = 'Opening the OKX Wallet app… approve the connection there, then come back to this page.'; S.mobileHelp = false; render();
     // If the app has not opened after a few seconds (page still on screen), say so plainly.
     const watch = setTimeout(() => {
       if (!S.account && document.visibilityState === 'visible') {
-        S.note = 'The OKX Wallet app did not open by itself. Tap "Open in OKX Wallet app" below.'; render();
+        S.note = 'The OKX Wallet app did not open by itself. Tap "Open in OKX Wallet app" below.'; S.mobileHelp = true; render();
       }
     }, 6000);
     try {
       const r = await connectOkxApp();
       clearTimeout(watch);
-      S.provider = r.p; S.walletName = r.name; S.account = r.account; S.walletChain = C.chainId; S.note = ''; S.mobileHelp = false;
+      useOkxSession(r.okx, r.account);
       await refreshFn();
       return;
     } catch (e) {
       clearTimeout(watch);
+      if (await restoreSession()) { await refreshFn(); return; } // approved while this tab was paused
       S.note = 'Could not connect through the OKX Wallet app (' + plain(e) + '). Use the steps below instead.';
       S.mobileHelp = true; render();
       return;
