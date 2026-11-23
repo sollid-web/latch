@@ -140,6 +140,19 @@ async function main() {
     }
   }
 
+  // Never tape out twice: if this exact netlist already lives on the processor, use that circuit.
+  if (!state.circuitId) {
+    for (let i = 1n, misses = 0; i < 500n && misses < 3; i++) {
+      let nl;
+      try { nl = (await read(PROCESSOR, 'netlist', [i])).toLowerCase(); } catch { misses++; continue; }
+      if (!nl || nl === '0x') { misses++; continue; }
+      misses = 0;
+      if (nl === NETLIST) {
+        console.log('Circuit #2 is already on chain as circuit #' + i + ' — nothing to mint or tape out.');
+        state.circuitId = i.toString(); state.found = true; save(); break;
+      }
+    }
+  }
   if (!state.circuitId && have < GATES) {
     const amount = GATES - have;
     console.log('Step 1/3  mint ' + amount + ' NAND');
