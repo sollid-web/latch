@@ -391,7 +391,7 @@ async function readMine() {
 }
 
 async function refresh() {
-  if (S.refreshing) { S.again = true; return; } // e.g. connect() during the first load: run once more after
+  if (S.refreshing) { S.again = true; render(); return; } // e.g. connect() during the first load: run once more after
   S.refreshing = true; S.loading = true; render();
   try {
     await readMarket(); render();
