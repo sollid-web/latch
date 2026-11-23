@@ -11,5 +11,7 @@
   "pool": "0xe3BE6A0137f1b0602Fc1a4841686f43B340a5082",
   "processor": "0x3728a5dfE596F6bF7309cA911e61ecaC9b0b6813",
   "circuitId": 1,
-  "repo": "https://github.com/sollid-web/latch"
+  "repo": "https://github.com/sollid-web/latch",
+  "factory2": "0x4Af276338A81DA70e5dA4108FA0A7F6d294381b8",
+  "circuit2Id": 2
 }

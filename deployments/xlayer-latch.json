@@ -2,5 +2,8 @@
   "LatchFactory": "0xc700C9865f237612b0bA86408BB4C182D41ABD11",
   "pool": "0xe3BE6A0137f1b0602Fc1a4841686f43B340a5082",
   "chainId": 196,
-  "deployedAt": "2026-11-21T22:20:51.588662Z"
+  "deployedAt": "2026-11-21T22:20:51.588662Z",
+  "LatchFactory2": "0x4Af276338A81DA70e5dA4108FA0A7F6d294381b8",
+  "circuit2Id": 2,
+  "v2DeployedAt": "2026-11-23T20:37:10.781162Z"
 }
