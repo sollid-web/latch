@@ -20,6 +20,11 @@ const out = JSON.parse(solc.compile(JSON.stringify({ language: 'Solidity', sourc
   'LatchFactory.sol': { content: rd('contracts/LatchFactory.sol') }, 'Helpers.sol': { content: rd('audit/swap/Helpers.sol') } },
   settings: { optimizer: { enabled: true, runs: 200 }, evmVersion: 'cancun', outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object'] } } } }),
   { import: (p) => ({ contents: rd('contracts/' + p.split('/').pop()) }) }));
+const out2 = JSON.parse(solc.compile(JSON.stringify({ language: 'Solidity', sources: {
+  'LatchVault.sol': { content: rd('contracts/LatchVault.sol') }, 'UniMath.sol': { content: rd('contracts/UniMath.sol') }, 'LatchFactory2.sol': { content: rd('contracts/LatchFactory2.sol') } },
+  settings: { viaIR: true, optimizer: { enabled: true, runs: 200 }, evmVersion: 'cancun', outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object'] } } } }),
+  { import: (p) => ({ contents: rd('contracts/' + p.split('/').pop()) }) }));
+const Fac2 = { abi: out2.contracts['LatchFactory2.sol'].LatchFactory2.abi, bytecode: '0x' + out2.contracts['LatchFactory2.sol'].LatchFactory2.evm.bytecode.object };
 const art = (f, c) => ({ abi: out.contracts[f][c].abi, bytecode: '0x' + out.contracts[f][c].evm.bytecode.object });
 const Fac = art('LatchFactory.sol', 'LatchFactory'), ERC = art('Helpers.sol', 'TestERC20'), Proc = art('Helpers.sol', 'NetlistProcessor'), Driver = art('Helpers.sol', 'PoolDriver');
 const U = (p) => require(R + 'keeper-worker/node_modules/@uniswap/' + p);
@@ -43,11 +48,15 @@ await tx(pool, Pool.abi, 'increaseObservationCardinalityNext', [200]);
 for (const t of [usdt, wokb]) { await tx(t, ERC.abi, 'mint', [admin.address, 10n ** 30n]); await tx(t, ERC.abi, 'approve', [driver, 2n ** 256n - 1n]); }
 await tx(driver, Driver.abi, 'addLiquidity', [pool, -887270, 887270, 10n ** 15n]);
 await tx(usdt, ERC.abi, 'mint', [user, 100n * 10n ** 6n]);
+await tx(wokb, ERC.abi, 'mint', [user, 2n * 10n ** 18n]);
 await pub.request({ method: 'anvil_setBalance', params: [user, '0x56BC75E2D63100000'] });
 const proc = await dep(Proc); const G = [[2,2],[3,9],[10,10],[11,4],[12,12],[13,5],[14,14],[15,6],[16,16],[17,7],[18,18],[19,8],[20,20]];
 await tx(proc, Proc.abi, 'tape', [1n, '0x' + G.map(([a, b]) => '00' + a.toString(16).padStart(6, '0') + b.toString(16).padStart(6, '0')).join(''), 7, 1]);
 const fac = await dep(Fac, [proc, 1n, usdt, wokb, router, pool, admin.address, bot.address, 1800, 100n, 1_000_000n]);
+await tx(proc, Proc.abi, 'tape', [2n, JSON.parse(rd('circuits/circuit2.json')).netlist, 16, 3]);
+const fac2 = await dep(Fac2, [{ processor: proc, circuitId: 2n, router, pool, quoteToken: usdt, baseToken: wokb, treasury: admin.address,
+  hostedKeeper: bot.address, twapWindow: 1800, slippageBps: 100n, minBuy: 1_000_000n, minSell: 10n ** 16n }]);
 await pub.request({ method: 'evm_increaseTime', params: [2100] }); await pub.request({ method: 'evm_mine', params: [] });
-fs.writeFileSync(path.join(UI, 'web-local.json'), JSON.stringify({ chainId: 196, rpc: [RPC], explorer: 'https://www.oklink.com/xlayer', factory: fac, usdt, wokb, pool, processor: proc, circuitId: 1, router, uniFactory: uf, repo: 'https://github.com/sollid-web/latch', user }));
+fs.writeFileSync(path.join(UI, 'web-local.json'), JSON.stringify({ chainId: 196, rpc: [RPC], explorer: 'https://www.oklink.com/xlayer', factory: fac, factory2: fac2, circuit2Id: 2, usdt, wokb, pool, processor: proc, circuitId: 1, router, uniFactory: uf, repo: 'https://github.com/sollid-web/latch', user }));
 console.log('READY', fac);
 await new Promise(() => {});

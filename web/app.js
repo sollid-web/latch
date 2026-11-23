@@ -1,245 +1,23 @@
-// Latch web app — create a vault, fund it, watch it buy OKB, pause or withdraw.
-// Bundled into public/index.html by scripts/build-web.mjs (esbuild). No server.
-import { OKXUniversalProvider, ConnectWalletType } from '@okxconnect/universal-provider';
+// Latch web app: Home, Create, My vaults, Chip, Activity, Safety (hash routes, one file, no server).
+// Bundled into public/index.html by scripts/build-web.mjs (esbuild).
+import { parseUnits, formatUnits, getAddress, isAddress } from 'viem';
 import {
-  createPublicClient, createWalletClient, custom, fallback, http, parseAbi, parseAbiItem,
-  formatUnits, parseUnits, getAddress, isAddress, decodeErrorResult
-} from 'viem';
+  C, U6, E18, MAX, ZERO, pub, FACTORY1, VAULT1, FACTORY2, VAULT2, ERC20, WOKB_ABI, POOL, PROC, S, hooks,
+  connect, disconnect, send, plain, tradesOf, okxAppLink, okxWalletLink,
+  esc, usd, okb, short, link, when, spacingText
+} from './core.js';
+import { evalChip, pack, MODES, DEPTHS, depthWord, VOLS, SAFETY, curve, depthOf, GATE_COUNT, SAFE } from './strategy.js';
 
-const C = window.LATCH_CONFIG;
-const U6 = 10n ** 6n;
-const MAX = 2n ** 256n - 1n;
+const HAS2 = !!C.factory2;
+const CID2 = C.circuit2Id ?? 2;
+Object.assign(S, {
+  net: null, v1: [], v2: [], hist: {}, feed: null, loading: false, refreshing: false, feedBusy: false,
+  c: null, dialog: null, mins: { buy: U6, sell: 10n ** 16n },
+  x: { depth: 3, vol: 0, mode: 2, dir: 0, safety: SAFE, live: null } // chip explorer input
+});
 
-const chain = {
-  id: C.chainId, name: 'X Layer', nativeCurrency: { name: 'OKB', symbol: 'OKB', decimals: 18 },
-  rpcUrls: { default: { http: C.rpc } }, blockExplorers: { default: { name: 'OKLink', url: C.explorer } }
-};
-const pub = createPublicClient({ chain, transport: fallback(C.rpc.map((u) => http(u, { timeout: 12_000 }))) });
+/* ================================================================ data */
 
-const FACTORY = parseAbi([
-  'function createVault(address savings,uint256 perTxCap,uint256 dailyCap,uint256 maxPrice,uint256 minInterval,address keeper) returns (address)',
-  'function vaultsOf(address owner) view returns (address[])',
-  'function vaultCount() view returns (uint256)',
-  'function hostedKeeper() view returns (address)',
-  'function vaultsPage(uint256 start, uint256 count) view returns (address[])',
-  'event VaultCreated(address indexed owner, address indexed vault, address keeper, uint256 perTxCap, uint256 dailyCap, uint256 maxPrice, uint256 minInterval)'
-]);
-const VAULT = parseAbi([
-  'function owner() view returns (address)',
-  'function keeper() view returns (address)',
-  'function savings() view returns (address)',
-  'function paused() view returns (bool)',
-  'function armed() view returns (bool)',
-  'function perTxCap() view returns (uint256)',
-  'function dailyCap() view returns (uint256)',
-  'function maxPrice() view returns (uint256)',
-  'function minInterval() view returns (uint256)',
-  'function nextBuyAt() view returns (uint256)',
-  'function lastBuyAt() view returns (uint256)',
-  'function volumeSwept() view returns (uint256)',
-  'function totalBought() view returns (uint256)',
-  'function buys() view returns (uint256)',
-  'function feeBpsNow() view returns (uint256)',
-  'function status() view returns (address,bool,bool,uint256,uint256,uint256,uint256,address,address,address)',
-  'function preview(uint256 amount) view returns (uint8 bits, bool allow)',
-  'function quote(uint256 amount) view returns (uint256 twapPrice, uint256 expectedOut, uint256 minOut)',
-  'function circuitAllows(uint8 bits) view returns (bool)',
-  'function setPaused(bool next)',
-  'function setMaxPrice(uint256 next)',
-  'function setMinInterval(uint256 secs)',
-  'function setCaps(uint256 perTxCap, uint256 dailyCap)',
-  'function withdraw(address token, address to, uint256 amount)',
-  'error NotOwner()', 'error NotKeeper()', 'error Paused()', 'error OverCap()', 'error Underfunded()',
-  'error BadParam()', 'error CapRaised()', 'error BadRecipient()', 'error ZeroAddress()', 'error TooSoon(uint256)',
-  'error PriceTooHigh(uint256,uint256)', 'error PriceUnstable()', 'error CircuitDenied(uint8)', 'error NotArmed()', 'error BadSavings()'
-]);
-const ERC20 = parseAbi([
-  'function balanceOf(address) view returns (uint256)',
-  'function transfer(address to, uint256 amount) returns (bool)'
-]);
-const POOL = parseAbi(['function slot0() view returns (uint160,int24,uint16,uint16,uint16,uint8,bool)', 'function token0() view returns (address)']);
-const BOUGHT = parseAbiItem('event Bought(address indexed keeper, uint256 amountIn, uint256 amountOut, uint256 fee, uint256 twapPrice, uint8 bits)');
-
-const ERRORS_PLAIN = {
-  NotOwner: 'Only the vault owner can do that. Connect the wallet that created this vault.',
-  Underfunded: 'Not enough USDT0 for that.',
-  BadParam: 'That value is outside the allowed range.',
-  CapRaised: 'Limits can only be lowered, never raised. That is a safety rule.',
-  BadRecipient: 'That wallet cannot receive OKB from a vault (it is a system contract). Use your own wallet address.',
-  ZeroAddress: 'An address is missing.',
-  OverCap: 'Amount per buy must be at least 1 USDT0 and not more than the daily limit.',
-  BadSavings: 'That wallet cannot receive the OKB (it is Latch\u2019s fee wallet, a bot, or another vault). Choose another wallet address.'
-};
-
-/* ---------------------------------------------------------------- state */
-const S = {
-  account: null, walletChain: null, provider: null, walletName: '',
-  price: null, vaultCount: null, hostedKeeper: null, circuitOk: null,
-  vaults: [], loading: false, error: '', note: '',
-  hist: {}, open: {}, netVaults: [], // buy history per vault, open <details>, vaults + last buy time
-  blocks: new Map(), logsBusy: false, refreshing: false, // timestamp → block cache
-  wizard: null, // {step, strategy, perBuy, price, perDay, every, savings, ownBot, botAddr, created, deposit}
-  busy: '', txs: [], net: null, feed: null, dialog: null,
-  chip: { bits: 0x7e, live: false } // hero circuit demo: the 7 inputs, editable
-};
-
-/* ---------------------------------------------------------------- wallet */
-const announced = [];
-window.addEventListener('eip6963:announceProvider', (e) => { if (e?.detail?.provider) announced.push(e.detail); });
-try { window.dispatchEvent(new Event('eip6963:requestProvider')); } catch { /* old browsers */ }
-function findWallet() {
-  if (window.okxwallet) return { p: window.okxwallet, name: 'OKX Wallet' };
-  const okx = announced.find((d) => /okx|okex/i.test(d.info?.rdns || d.info?.name || ''));
-  if (okx) return { p: okx.provider, name: okx.info.name };
-  if (window.ethereum) return { p: window.ethereum, name: 'Wallet' };
-  if (announced[0]) return { p: announced[0].provider, name: announced[0].info?.name || 'Wallet' };
-  return null;
-}
-/** OKX's App Universal Link: an https link the phone hands to the installed OKX app, which opens this page
- *  in its DApp browser (where the wallet is injected); without the app it shows OKX's download page. Phone
- *  browsers often ignore a bare okx:// link silently, so okx:// is only the inner part. */
-function okxAppLink(url = location.href) {
-  const inner = 'okx://wallet/dapp/url?dappUrl=' + encodeURIComponent(url);
-  return 'https://web3.okx.com/download?deeplink=' + encodeURIComponent(inner);
-}
-/** The standalone OKX Wallet app has its own scheme (okxwallet://, as in OKX's official connect SDK), so this
- *  opens the Web3 wallet app rather than the exchange app. Same DApp-browser path as the okx:// link. */
-function okxWalletLink(url = location.href) {
-  return 'okxwallet://wallet/dapp/url?dappUrl=' + encodeURIComponent(url);
-}
-const isMobile = () => /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') || (navigator.maxTouchPoints > 1 && Math.min(screen.width, screen.height) < 900);
-
-/* OKX Connect (OKX's official SDK): from a normal phone browser, asks the standalone OKX Wallet app
-   (ConnectWalletType.OKX_WALLET, not the exchange app) to approve, then you come back here connected. */
-let okxConnectP = null;
-function okxConnect() {
-  if (!okxConnectP) {
-    okxConnectP = OKXUniversalProvider.init({ dappMetaData: { name: 'Latch', icon: location.origin + '/icon.png' } });
-  }
-  return okxConnectP;
-}
-const XL = 'eip155:' + C.chainId;
-function okxAsEip1193(okx) {
-  return {
-    request: ({ method, params }) => {
-      if (method === 'eth_chainId') return Promise.resolve('0x' + C.chainId.toString(16));
-      if (method === 'wallet_switchEthereumChain') return Promise.resolve(null);
-      return okx.request({ method, params }, XL);
-    },
-    on() {}, removeListener() {}
-  };
-}
-async function connectOkxApp() {
-  const okx = await okxConnect();
-  if (okx.connected()) {
-    const accts = await okx.request({ method: 'eth_accounts' }, XL).catch(() => []);
-    if (accts?.[0]) return { p: okxAsEip1193(okx), name: 'OKX Wallet app', account: getAddress(accts[0]) };
-  }
-  let session = null;
-  {
-    session = await okx.connect({
-      namespaces: { eip155: { chains: [XL], defaultChain: String(C.chainId), rpcMap: { [String(C.chainId)]: C.rpc[0] } } },
-      sessionConfig: { redirect: 'none', connectWalletType: ConnectWalletType.OKX_WALLET }
-    });
-  }
-  const acct = session?.namespaces?.eip155?.accounts?.find((a) => a.startsWith(XL + ':')) || session?.namespaces?.eip155?.accounts?.[0];
-  if (!acct) throw new Error('The wallet app did not return an X Layer account.');
-  return { p: okxAsEip1193(okx), name: 'OKX Wallet app', account: getAddress(acct.split(':').pop()) };
-}
-if (typeof window !== 'undefined' && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') && !window.okxwallet && !window.ethereum) {
-  okxConnect().catch(() => {}); // warm up, so the tap opens the app without delay (iOS blocks slow hand-offs)
-}
-
-async function connect() {
-  let w = findWallet();
-  if (!w && isMobile() && !window.okxwallet && !window.ethereum) {
-    // Normal phone browser: no wallet inside. Ask the OKX Wallet app to connect, then come back.
-    S.note = 'Approve the connection in the OKX Wallet app, then come back to this page. If the app does not open, use the options below.'; S.mobileHelp = true; render();
-    try {
-      const r = await connectOkxApp();
-      S.provider = r.p; S.walletName = r.name; S.account = r.account; S.walletChain = C.chainId; S.note = ''; S.mobileHelp = false;
-      await refresh();
-      return;
-    } catch (e) {
-      S.note = 'Could not connect through the OKX Wallet app (' + plain(e) + '). Use the steps below instead.';
-      S.mobileHelp = true; render();
-      return;
-    }
-  }
-  // In-app wallet browsers can inject their provider a little late: ask again and wait up to ~3 s.
-  for (let i = 0; !w && i < 6; i++) {
-    try { window.dispatchEvent(new Event('eip6963:requestProvider')); } catch { /* old browsers */ }
-    await new Promise((r) => setTimeout(r, 500));
-    w = findWallet();
-  }
-  if (!w) {
-    S.mobileHelp = true; S.note = isMobile() ? '' : 'No wallet found in this browser. On a computer, install the OKX Wallet extension and reload. On a phone, follow the steps below.';
-    render();
-    return;
-  }
-  S.provider = w.p; S.walletName = w.name; S.note = '';
-  try {
-    const accts = await w.p.request({ method: 'eth_requestAccounts' });
-    S.account = accts?.[0] ? getAddress(accts[0]) : null;
-    S.walletChain = Number(await w.p.request({ method: 'eth_chainId' }));
-    if (S.walletChain !== C.chainId) await switchChain();
-    if (w.p.on) {
-      w.p.on('accountsChanged', (a) => { S.account = a?.[0] ? getAddress(a[0]) : null; refresh(); });
-      w.p.on('chainChanged', (id) => { S.walletChain = Number(id); render(); });
-    }
-  } catch (e) {
-    S.note = e?.code === 4001 ? 'You rejected the connection in your wallet.'
-      : e?.code === -32002 ? 'Your wallet already has a request waiting. Open the wallet and answer it.'
-      : plain(e);
-  }
-  await refresh();
-}
-async function switchChain() {
-  const hex = '0x' + C.chainId.toString(16);
-  try {
-    await S.provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: hex }] });
-  } catch (e) {
-    if (e?.code === 4902 || /Unrecognized chain/i.test(e?.message || '')) {
-      await S.provider.request({ method: 'wallet_addEthereumChain', params: [{ chainId: hex, chainName: 'X Layer', nativeCurrency: { name: 'OKB', symbol: 'OKB', decimals: 18 }, rpcUrls: [C.rpc[0]], blockExplorerUrls: [C.explorer] }] });
-    } else throw e;
-  }
-  S.walletChain = Number(await S.provider.request({ method: 'eth_chainId' }));
-}
-function wallet() {
-  return createWalletClient({ account: S.account, chain, transport: custom(S.provider) });
-}
-
-/* ---------------------------------------------------------------- tx helper */
-function plain(e) {
-  const data = e?.cause?.data || e?.data || e?.cause?.cause?.data;
-  const name = e?.cause?.data?.errorName || (() => {
-    try { return typeof data === 'string' ? decodeErrorResult({ abi: VAULT, data }).errorName : null; } catch { return null; }
-  })();
-  if (name && ERRORS_PLAIN[name]) return ERRORS_PLAIN[name];
-  if (e?.code === 4001 || /rejected|denied/i.test(e?.message || '')) return 'You cancelled it in your wallet.';
-  return String(e?.shortMessage || e?.message || e).split('\n')[0];
-}
-async function send(label, req) {
-  if (!S.account) return connect();
-  if (S.walletChain !== C.chainId) { try { await switchChain(); } catch (e) { S.error = plain(e); render(); return null; } }
-  S.busy = label; S.error = ''; render();
-  try {
-    await pub.simulateContract({ account: S.account, ...req });   // show the real reason before the wallet pops up
-    const hash = await wallet().writeContract({ ...req, chain });
-    S.txs.unshift({ label, hash, state: 'sent' }); render();
-    const r = await pub.waitForTransactionReceipt({ hash, timeout: 120_000 });
-    S.txs[0].state = r.status === 'success' ? 'done' : 'failed';
-    if (r.status !== 'success') throw new Error(label + ' failed on chain');
-    return r;
-  } catch (e) {
-    S.error = label + ': ' + plain(e);
-    return null;
-  } finally {
-    S.busy = ''; render();
-  }
-}
-
-/* ---------------------------------------------------------------- reads */
 async function readMarket() {
   try {
     const [s0, t0] = await Promise.all([
@@ -249,574 +27,732 @@ async function readMarket() {
     const raw = Math.pow(1.0001, Number(s0[1]));
     S.price = t0.toLowerCase() === C.usdt.toLowerCase() ? 1e12 / raw : raw * 1e12;
   } catch { S.price = null; }
-  try {
-    const [n, k] = await Promise.all([
-      pub.readContract({ address: C.factory, abi: FACTORY, functionName: 'vaultCount' }),
-      pub.readContract({ address: C.factory, abi: FACTORY, functionName: 'hostedKeeper' })
-    ]);
-    S.vaultCount = Number(n); S.hostedKeeper = k;
-  } catch { /* factory not reachable */ }
+  if (HAS2 && !S.treasury) {
+    try {
+      const [t, k, mb, ms] = await Promise.all(['treasury', 'hostedKeeper', 'minBuy', 'minSell'].map((f) => pub.readContract({ address: C.factory2, abi: FACTORY2, functionName: f })));
+      S.treasury = t; S.hostedKeeper = k; S.mins = { buy: mb, sell: ms };
+    } catch { /* later */ }
+  }
 }
 
-/** Network totals across every vault (social proof, read from chain). The latest-buys feed is
- *  loaded afterwards by loadLogs(), so these numbers never wait for log searches. */
+/** Network totals across every vault, v1 and v2 (read from chain). */
 async function readNetwork() {
   try {
-    const all = await pub.readContract({ address: C.factory, abi: FACTORY, functionName: 'vaultsPage', args: [0n, 300n] });
-    const per = await Promise.all(all.map((v) => Promise.all([
-      pub.readContract({ address: v, abi: VAULT, functionName: 'totalBought' }),
-      pub.readContract({ address: v, abi: VAULT, functionName: 'volumeSwept' }),
-      pub.readContract({ address: v, abi: VAULT, functionName: 'buys' }),
-      pub.readContract({ address: v, abi: VAULT, functionName: 'lastBuyAt' })
-    ]).catch(() => [0n, 0n, 0n, 0n])));
-    S.net = per.reduce((a, [o, i, b]) => ({ okb: a.okb + o, usdt: a.usdt + i, buys: a.buys + b }), { okb: 0n, usdt: 0n, buys: 0n });
-    S.netVaults = all.map((v, i) => ({ vault: v, last: per[i][3] }));
+    const [l1, l2] = await Promise.all([
+      pub.readContract({ address: C.factory, abi: FACTORY1, functionName: 'vaultsPage', args: [0n, 300n] }).catch(() => []),
+      HAS2 ? pub.readContract({ address: C.factory2, abi: FACTORY2, functionName: 'vaultsPage', args: [0n, 300n] }).catch(() => []) : []
+    ]);
+    const r1 = await Promise.all(l1.map((v) => Promise.all(['totalBought', 'volumeSwept', 'buys', 'lastBuyAt']
+      .map((f) => pub.readContract({ address: v, abi: VAULT1, functionName: f }))).catch(() => [0n, 0n, 0n, 0n])));
+    const r2 = await Promise.all(l2.map((v) => Promise.all(['direction', 'totalOut', 'volumeIn', 'trades', 'lastTradeAt']
+      .map((f) => pub.readContract({ address: v, abi: VAULT2, functionName: f }))).catch(() => [0, 0n, 0n, 0n, 0n])));
+    const n = { okb: 0n, usdtIn: 0n, profit: 0n, okbSold: 0n, trades: 0n, vaults: l1.length + l2.length, buyVaults: 0, sellVaults: 0 };
+    r1.forEach(([o, i, b]) => { n.okb += o; n.usdtIn += i; n.trades += b; });
+    r2.forEach(([d, out, inn, t]) => {
+      if (Number(d) === 0) { n.okb += out; n.usdtIn += inn; n.buyVaults++; } else { n.profit += out; n.okbSold += inn; n.sellVaults++; }
+      n.trades += t;
+    });
+    S.net = n;
+    S.netVaults = [...l1.map((v, i) => ({ vault: v, version: 1, last: r1[i][3] })), ...l2.map((v, i) => ({ vault: v, version: 2, last: r2[i][4] }))];
   } catch { /* keep the last values */ }
 }
 
-/* ---------------------------------------------------------------- buy history (event logs)
- * The public X Layer RPC refuses eth_getLogs over more than 100 blocks, so every search is split
- * into 100-block pieces. Instead of scanning backwards blindly, each vault's own lastBuyAt tells
- * us when its latest buy happened; we find that block by its timestamp and search around it. */
-const LOG_SPAN = 100n;
-
-async function logsIn(address, from, to) {
-  const ranges = [];
-  for (let a = from; a <= to; a += LOG_SPAN) ranges.push([a, a + LOG_SPAN - 1n < to ? a + LOG_SPAN - 1n : to]);
-  const out = [];
-  for (let i = 0; i < ranges.length; i += 4) { // at most 4 requests at a time
-    const parts = await Promise.all(ranges.slice(i, i + 4).map(([a, b]) => pub.getLogs({ address, event: BOUGHT, fromBlock: a, toBlock: b })));
-    for (const p of parts) out.push(...p);
-  }
-  return out;
+async function readV1(v) {
+  const r = (fn) => pub.readContract({ address: v, abi: VAULT1, functionName: fn });
+  const [st, maxPrice, minInterval, lastBuyAt, spent, bought, buys] = await Promise.all([r('status'), r('maxPrice'), r('minInterval'), r('lastBuyAt'), r('volumeSwept'), r('totalBought'), r('buys')]);
+  return { address: v, version: 1, paused: st[2], balance: st[3], perTxCap: st[4], dailyCap: st[5], keeper: st[7], savings: st[8], maxPrice, minInterval, lastBuyAt, spent, bought, buys };
 }
 
-/** First block whose timestamp is >= ts (cached). Interpolation search, bisection as a fallback. */
-async function blockAt(ts, head) {
-  const key = ts.toString();
-  if (S.blocks.has(key)) return S.blocks.get(key);
-  if (ts >= head.timestamp) return head.number;
-  let hi = { n: head.number, t: head.timestamp };
-  let lo = null;
-  for (let step = 1000n; ; step *= 4n) {
-    const n = hi.n > step ? hi.n - step : 0n;
-    const b = await pub.getBlock({ blockNumber: n });
-    if (b.timestamp < ts) { lo = { n, t: b.timestamp }; break; }
-    hi = { n, t: b.timestamp };
-    if (n === 0n) { S.blocks.set(key, 0n); return 0n; }
-  }
-  for (let i = 0; i < 48 && hi.n - lo.n > 1n; i++) {
-    let m = i % 2 === 0 && hi.t > lo.t
-      ? lo.n + ((hi.n - lo.n) * (ts - lo.t)) / (hi.t - lo.t)
-      : lo.n + (hi.n - lo.n) / 2n;
-    if (m <= lo.n) m = lo.n + 1n;
-    if (m >= hi.n) m = hi.n - 1n;
-    const b = await pub.getBlock({ blockNumber: m });
-    if (b.timestamp < ts) lo = { n: m, t: b.timestamp }; else hi = { n: m, t: b.timestamp };
-  }
-  S.blocks.set(key, hi.n);
-  return hi.n;
-}
-
-/** Buys of one vault around its latest buy (newest first). `back` = how many blocks before it to include. */
-async function buysOf(v, lastBuyAt, head, back = 1200n) {
-  if (!lastBuyAt) return [];
-  const b = await blockAt(lastBuyAt, head);
-  const to = b + LOG_SPAN - 1n < head.number ? b + LOG_SPAN - 1n : head.number;
-  const logs = await logsIn(v, b > back ? b - back : 0n, to);
-  return logs.reverse().slice(0, 8).map((l) => ({ vault: l.address, hash: l.transactionHash, inn: l.args.amountIn, out: l.args.amountOut, fee: l.args.fee, bits: Number(l.args.bits), block: l.blockNumber }));
-}
-
-/** Runs after the page has its numbers: your vaults' recent buys, then the network feed. */
-async function loadLogs() {
-  if (S.logsBusy) return;
-  S.logsBusy = true;
+async function readV2(v) {
+  const F = ['keeper', 'savings', 'paused', 'direction', 'mode', 'tokenIn', 'tokenOut', 'baseAmount', 'perTxCap', 'dailyCap', 'refPrice', 'limitPrice',
+    'minInterval', 'minAmount', 'lastTradeAt', 'nextTradeAt', 'spentTodayNow', 'volumeIn', 'totalOut', 'trades', 'feeBpsNow', 'twapPrice'];
+  const vals = await Promise.all(F.map((f) => pub.readContract({ address: v, abi: VAULT2, functionName: f }).catch(() => null)));
+  const d = { address: v, version: 2 };
+  F.forEach((f, i) => { d[f] = vals[i]; });
+  d.dir = Number(d.direction); d.mode = Number(d.mode);
+  const [bal, stuck] = await Promise.all([d.tokenIn, d.tokenOut].map((t) => pub.readContract({ address: t, abi: ERC20, functionName: 'balanceOf', args: [v] }).catch(() => 0n)));
+  d.balance = bal; d.stuck = stuck;
   try {
-    const head = await pub.getBlock();
-    for (const d of S.vaults) {
-      try { S.hist[d.address] = await buysOf(d.address, d.lastBuyAt, head); }
-      catch { if (S.hist[d.address] === undefined) S.hist[d.address] = null; }
-      render();
+    const [inputs, k, amount, fee, minOut, avg] = await pub.readContract({ address: v, abi: VAULT2, functionName: 'preview', args: [d.keeper] });
+    Object.assign(d, { inputs: Number(inputs), k: Number(k), amount, fee, minOut, avg });
+    if (amount === 0n) {
+      const [allow, kk] = await pub.readContract({ address: v, abi: VAULT2, functionName: 'chip', args: [(Number(inputs) & 0xff80) | SAFE] });
+      d.strategyNo = !allow || Number(kk) === 0;
+      d.kIfSafe = Number(kk);
     }
-    const recent = S.netVaults.filter((x) => x.last > 0n).sort((a, b) => (b.last > a.last ? 1 : -1)).slice(0, 6);
-    const feed = [];
-    for (const x of recent) {
-      try { const [latest] = await buysOf(x.vault, x.last, head, 0n); if (latest) feed.push(latest); } catch { /* skip this vault */ }
-    }
-    S.feed = feed.sort((a, b) => (b.block > a.block ? 1 : -1));
-    render();
-  } catch { /* keep the last values */ }
-  finally { S.logsBusy = false; }
-}
-
-async function readVault(v) {
-  const r = (fn, args = [], account) => pub.readContract({ address: v, abi: VAULT, functionName: fn, args, account });
-  const [st, maxPrice, minInterval, nextBuyAt, lastBuyAt, spent, bought, buys, bps, usdtBal] = await Promise.all([
-    r('status'), r('maxPrice'), r('minInterval'), r('nextBuyAt'), r('lastBuyAt'), r('volumeSwept'), r('totalBought'), r('buys'), r('feeBpsNow'),
-    pub.readContract({ address: C.usdt, abi: ERC20, functionName: 'balanceOf', args: [v] })
-  ]);
-  const d = {
-    address: v, paused: st[2], armed: st[1], balance: st[3], perTxCap: st[4], dailyCap: st[5], spentToday: st[6],
-    keeper: st[7], savings: st[8], maxPrice, minInterval, nextBuyAt, lastBuyAt, spent, bought, buys, bps, usdtBal
-  };
-  let amount = d.perTxCap;
-  const left = d.dailyCap > d.spentToday ? d.dailyCap - d.spentToday : 0n;
-  if (amount > left) amount = left;
-  const afford = (d.balance * 10000n) / (10000n + d.bps);
-  if (amount > afford) amount = afford;
-  d.nextAmount = amount;
-  try {
-    const [bits, allow] = await r('preview', [amount > 0n ? amount : d.perTxCap], d.keeper);
-    d.bits = Number(bits); d.allow = allow;
-    d.chip = await r('circuitAllows', [bits]);
   } catch (e) { d.previewError = plain(e); }
-  try {
-    const [twap] = await r('quote', [U6]);
-    d.twap = Number(twap) / 1e6;
-  } catch { /* pool history */ }
   return d;
 }
 
 async function readMine() {
-  if (!S.account) { S.vaults = []; return; }
+  if (!S.account) { S.v1 = []; S.v2 = []; return; }
   try {
-    const list = await pub.readContract({ address: C.factory, abi: FACTORY, functionName: 'vaultsOf', args: [S.account] });
-    const owned = [];
-    for (const v of list) {
-      const o = await pub.readContract({ address: v, abi: VAULT, functionName: 'owner' });
-      if (o.toLowerCase() === S.account.toLowerCase()) owned.push(v);
-    }
-    S.vaults = await Promise.all(owned.map(readVault));
+    const owned = async (factory, fabi, vabi) => {
+      const list = await pub.readContract({ address: factory, abi: fabi, functionName: 'vaultsOf', args: [S.account] });
+      const owners = await Promise.all(list.map((v) => pub.readContract({ address: v, abi: vabi, functionName: 'owner' })));
+      return list.filter((_, i) => owners[i].toLowerCase() === S.account.toLowerCase());
+    };
+    const [o1, o2] = await Promise.all([owned(C.factory, FACTORY1, VAULT1).catch(() => []), HAS2 ? owned(C.factory2, FACTORY2, VAULT2) : []]);
+    [S.v1, S.v2] = await Promise.all([Promise.all(o1.map(readV1)), Promise.all(o2.map(readV2))]);
+    S.wallet = await Promise.all([C.usdt, C.wokb].map((t) => pub.readContract({ address: t, abi: ERC20, functionName: 'balanceOf', args: [S.account] }).catch(() => null)))
+      .then(([u, w]) => ({ usdt: u, wokb: w }));
+    S.wallet.okb = await pub.getBalance({ address: S.account }).catch(() => null);
   } catch (e) { S.error = 'Could not read your vaults: ' + plain(e); }
 }
 
+/** Recent trades: yours (My vaults) and the whole network (Activity, Home). Loaded after the numbers. */
+async function loadTrades() {
+  if (S.feedBusy) return;
+  S.feedBusy = true;
+  try {
+    const head = await pub.getBlock();
+    for (const d of [...S.v2, ...S.v1]) {
+      const last = d.version === 2 ? d.lastTradeAt : d.lastBuyAt;
+      try { S.hist[d.address] = await tradesOf(d.address, d.version, last, head); } catch { if (S.hist[d.address] === undefined) S.hist[d.address] = null; }
+      render();
+    }
+    const recent = (S.netVaults || []).filter((x) => x.last > 0n).sort((a, b) => (b.last > a.last ? 1 : -1)).slice(0, 8);
+    const feed = [];
+    for (const x of recent) {
+      try { feed.push(...(await tradesOf(x.vault, x.version, x.last, head, 0n)).slice(0, 3)); } catch { /* skip */ }
+    }
+    S.feed = feed.sort((a, b) => (b.block > a.block ? 1 : -1)).slice(0, 12);
+    render();
+  } catch { /* keep the last values */ }
+  finally { S.feedBusy = false; }
+}
+
 async function refresh() {
-  if (S.refreshing) { S.again = true; render(); return; } // e.g. connect() during the first load: run once more after
+  if (S.refreshing) { S.again = true; render(); return; }
   S.refreshing = true; S.loading = true; render();
   try {
     await readMarket(); render();
     await Promise.all([readNetwork().then(render), readMine()]);
-  } finally {
-    S.refreshing = false; S.loading = false; render();
-  }
+  } finally { S.refreshing = false; S.loading = false; render(); }
   if (S.again) { S.again = false; return refresh(); }
-  loadLogs(); // in the background; renders again when the buys arrive
+  loadTrades();
 }
+hooks(() => render(), () => refresh());
 
-/* ---------------------------------------------------------------- formatting */
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const usd = (v, d = 2) => Number(formatUnits(v, 6)).toLocaleString('en-US', { maximumFractionDigits: d, minimumFractionDigits: Math.min(d, 2) });
-const okb = (v, d = 6) => Number(formatUnits(v, 18)).toLocaleString('en-US', { maximumFractionDigits: d });
-const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '';
-const link = (a, kind = 'address', text) => `<a href="${C.explorer}/${kind}/${a}" target="_blank" rel="noopener">${esc(text || short(a))}</a>`;
-const every = (s) => s >= 604800n ? 'every week' : s >= 86400n ? 'every day' : s >= 3600n ? `at most every ${Number(s / 3600n)} h` : s > 0n ? `at most every ${Number(s / 60n)} min` : 'whenever the price is right';
-const when = (ts) => { const d = Number(ts) * 1000 - Date.now(); if (d <= 0) return 'now'; const h = Math.floor(d / 3.6e6), m = Math.ceil((d % 3.6e6) / 6e4); return h ? `${h} h ${m} min` : `${m} min`; };
-const isDca = (d) => d.minInterval >= 86400n;
-function strategyText(d) {
-  if (isDca(d)) return { name: 'Auto-DCA', line: `${usd(d.perTxCap)} USDT0 of OKB ${every(d.minInterval)}, never above ${usd(d.maxPrice)}` };
-  return { name: 'Buy the dip', line: `${usd(d.perTxCap)} USDT0 of OKB when it is ${usd(d.maxPrice)} or lower, up to ${usd(d.dailyCap)} a day` };
-}
+/* ================================================================ shared bits */
 
-/* ---------------------------------------------------------------- the circuit (same netlist as TapeOut circuit #1) */
-const GATES = [[2, 2], [3, 9], [10, 10], [11, 4], [12, 12], [13, 5], [14, 14], [15, 6], [16, 16], [17, 7], [18, 18], [19, 8], [20, 20]];
-function evalCircuit(bits) {
-  const s = [false, true];
-  for (let i = 0; i < 7; i++) s.push(((bits >> i) & 1) === 1);
-  const gates = GATES.map(([a, b]) => { const o = !(s[a] && s[b]); s.push(o); return o; });
-  return { gates, allow: s[s.length - 1] };
-}
-const CHECKS = [
-  ['Paused by you', 0, true],
-  ['Sent by your helper bot', 1],
-  ['OKB only to your wallet', 2],
-  ['Price at or under your limit', 3],
-  ['Within your amount per buy', 4],
-  ['Within today\u2019s limit', 5],
-  ['Enough USDT0 in the vault', 6]
-];
-const PROC = parseAbi(['function eval(uint256 id, bytes inputs) view returns (bytes)']);
-/** Plain reason for a "no" from the chip: the first rule that is not met. */
-function whyNo(bits) {
-  if (bits & 1) return 'you paused the vault';
-  if (!(bits & 2)) return 'this bot is not allowed for the vault';
-  if (!(bits & 8)) return 'OKB is above your price, or the price is moving too fast';
-  if (!(bits & 16)) return 'the amount is outside your per-buy limit';
-  if (!(bits & 32)) return 'today’s buy is done, or it is too soon since the last one';
-  if (!(bits & 64)) return 'not enough USDT0 in the vault';
-  return 'a rule is not met';
-}
-/** A normal wait (price or timing), not a problem with the vault. */
-const waiting = (bits) => (bits & 0x57) === 0x56;
+const PAGES = [['home', 'Home'], ['create', 'Create'], ['vaults', 'My vaults'], ['chip', 'The chip'], ['activity', 'Activity'], ['safety', 'Safety']];
+const LOGO = `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 3v4M12 3v4M16 3v4M8 17v4M12 17v4M16 17v4M3 8h4M3 12h4M3 16h4M17 8h4M17 12h4M17 16h4" stroke="currentColor" stroke-width="1.6"/><rect x="8.5" y="8.5" width="7" height="7" rx="1" fill="currentColor"/></svg>`;
+const ICON = {
+  buy: `<svg viewBox="0 0 48 24" width="48" height="24" aria-hidden="true"><path d="M2 5 L14 8 L22 20 L30 13 L46 6" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="22" cy="20" r="3" fill="currentColor"/></svg>`,
+  sell: `<svg viewBox="0 0 48 24" width="48" height="24" aria-hidden="true"><path d="M2 19 L14 16 L22 5 L30 11 L46 18" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="22" cy="5" r="3" fill="currentColor"/></svg>`
+};
+const P = (n, d = 2) => (n == null || !Number.isFinite(n) ? '…' : n.toLocaleString('en-US', { maximumFractionDigits: d, minimumFractionDigits: d }));
+const price6 = (v) => P(Number(v) / 1e6);
+const amt = (v, dir) => (dir === 0 ? usd(v) + ' USDT0' : okb(v, 4) + ' OKB');
+const outAmt = (v, dir) => (dir === 0 ? okb(v, 6) + ' OKB' : usd(v) + ' USDT0');
+const kWord = (k) => (k === 0 ? 'no trade' : k + '×');
 
-/* ---------------------------------------------------------------- views */
 function header() {
   const conn = S.account
-    ? `<span class="row gap"><button class="btn quiet" data-a="refresh" title="Refresh">${esc(short(S.account))}</button><button class="btn quiet sm" data-a="disconnect" title="Disconnect this wallet from Latch">Disconnect</button></span>`
-    : `<button class="btn primary" data-a="connect">Connect wallet</button>`;
+    ? `<span class="row gap"><button class="btn quiet sm acct" data-a="refresh" title="Refresh">${esc(short(S.account))}</button><button class="btn quiet sm" data-a="disconnect" title="Disconnect this wallet from Latch">Disconnect</button></span>`
+    : `<button class="btn primary sm" data-a="connect">Connect wallet</button>`;
+  const nav = PAGES.map(([id, label]) => `<a href="#/${id === 'home' ? '' : id}" class="${S.page === id ? 'on' : ''}" ${S.page === id ? 'aria-current="page"' : ''}>${label}</a>`).join('');
   return `<header class="hdr"><div class="wrap hdr-in">
-    <a class="mark" href="#top" aria-label="Latch home">${LOGO}<span>Latch</span></a>
-    <nav class="nav"><a href="#how">How it works</a><a href="#safety">Safety</a><a href="#faq">Questions</a></nav>
-    ${conn}</div></header>`;
+    <a class="mark" href="#/" aria-label="Latch home">${LOGO}<span>Latch</span></a>
+    <nav class="nav" aria-label="Pages">${nav}</nav>${conn}</div>
+    <nav class="nav-m" aria-label="Pages">${nav}</nav></header>`;
 }
-const LOGO = `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 3v4M12 3v4M16 3v4M8 17v4M12 17v4M16 17v4M3 8h4M3 12h4M3 16h4M17 8h4M17 12h4M17 16h4" stroke="currentColor" stroke-width="1.6"/><rect x="8.5" y="8.5" width="7" height="7" rx="1" fill="currentColor"/></svg>`;
 
-function chipPanel() {
-  const bits = S.chip.bits;
-  const { gates, allow } = evalCircuit(bits);
-  const rows = CHECKS.map(([label, bit, inverse]) => {
-    const on = ((bits >> bit) & 1) === 1;
-    const good = inverse ? !on : on;
-    const sw = inverse ? (on ? 'Yes' : 'No') : (on ? 'Yes' : 'No');
-    return `<li><button class="pin ${good ? 'ok' : 'bad'}" data-a="flip" data-bit="${bit}" aria-pressed="${on}" style="--i:${bit}">
-      <span class="pin-label">${esc(label)}</span><span class="pin-val">${sw}</span></button></li>`;
-  }).join('');
-  const cells = gates.map((g, i) => `<span class="gate ${g ? 'hi' : ''}" style="--i:${i}" title="NAND gate ${i + 1}: ${g ? 1 : 0}"></span>`).join('');
-  return `<figure class="chip-panel ${allow ? 'allow' : 'deny'}" aria-label="Interactive model of TapeOut circuit #1">
-    <ul class="pins">${rows}</ul>
-    <div class="die">
-      <div class="die-body">
-        <div class="gates">${cells}</div>
-        <p class="die-name">TapeOut circuit #${C.circuitId}</p>
-        <p class="die-sub">13 NAND gates · input <span class="num">0x${bits.toString(16).padStart(2, '0')}</span></p>
+function gateGrid(gates, small) {
+  return `<div class="gates ${small ? 'sm' : ''}" role="img" aria-label="${GATE_COUNT} NAND gates, ${gates.filter(Boolean).length} switched on">${gates.map((g) => `<span class="${g ? 'hi' : ''}"></span>`).join('')}</div>`;
+}
+
+/** The interactive strategy chip (Home hero and The chip page). */
+function chipWidget(full) {
+  const x = S.x; const dir = x.dir;
+  const input = pack({ safety: x.safety, depth: x.depth, vol: x.vol, mode: x.mode });
+  const r = evalChip(input);
+  const seg = (name, list, cur) => `<div class="seg" role="radiogroup" aria-label="${esc(name)}">${list.map((l, i) => `<button role="radio" aria-checked="${i === cur}" class="${i === cur ? 'on' : ''}" data-a="x" data-k="${name}" data-v="${i}">${esc(l)}</button>`).join('')}</div>`;
+  const verdict = r.allow ? `${dir === 0 ? 'Buy' : 'Sell'} ${r.k}×` : 'Wait';
+  const why = !r.allow && (x.safety !== SAFE) ? 'A safety check failed, so nothing trades, whatever the strategy says.'
+    : !r.allow ? (x.vol === 3 && x.mode >= 2 ? 'The market is very jumpy: smart and ladder strategies pause.' : `${MODES[dir][x.mode].name} waits: OKB is ${depthWord(x.depth, dir)}.`)
+    : r.k === 1 && x.vol >= 2 && x.mode >= 2 ? 'Jumpy market: the chip drops to the base amount.' : `${r.k} × your base amount, sent straight to your wallet.`;
+  return `<figure class="chipw ${r.allow ? 'allow' : 'deny'} ${full ? 'full' : ''}" aria-label="Strategy chip, interactive">
+    <div class="chipw-in">
+      <div class="ctl">
+        <div class="ctl-row"><span class="ctl-l">Vault</span>${seg('dir', ['Buy OKB', 'Take profit'], dir)}</div>
+        <div class="ctl-row"><span class="ctl-l">Strategy</span>${seg('mode', MODES[dir].map((m) => m.name), x.mode)}</div>
+        <label class="ctl-row"><span class="ctl-l">OKB ${dir === 0 ? 'below' : 'above'} reference</span>
+          <input type="range" min="0" max="7" step="1" value="${x.depth}" data-a="xr" data-k="depth" aria-valuetext="${esc(DEPTHS[x.depth])}">
+          <span class="ctl-v num">${esc(x.depth === 0 ? 'no move' : DEPTHS[x.depth])}</span></label>
+        <div class="ctl-row"><span class="ctl-l">Market</span>${seg('vol', VOLS, x.vol)}</div>
+        ${full ? `<div class="ctl-row"><span class="ctl-l">Safety checks</span><div class="safety">${SAFETY.map(([l, bit, inv]) => {
+          const on = (x.safety >> bit) & 1; const good = inv ? !on : !!on;
+          return `<button class="pin ${good ? 'ok' : 'bad'}" data-a="xs" data-bit="${bit}" aria-pressed="${!!on}">${esc(inv ? (on ? 'Paused by the owner' : 'Not paused') : l)}</button>`;
+        }).join('')}</div></div>` : ''}
+      </div>
+      <div class="die">
+        ${gateGrid(r.gates, !full)}
+        <p class="die-name">TapeOut circuit #${CID2} · ${GATE_COUNT} NAND gates</p>
+        <p class="die-sub num">input 0x${input.toString(16).padStart(4, '0')} → output 0b${(r.k << 1 | (r.allow ? 1 : 0)).toString(2).padStart(3, '0')}</p>
+      </div>
+      <div class="verdict" aria-live="polite">
+        <p class="verdict-word">${verdict}</p>
+        <p class="verdict-sub">${esc(why)}</p>
+        <button class="btn quiet sm" data-a="askChip">${x.live === 'asking' ? 'Asking the chain…' : x.live ? `Chain says: ${esc(x.live)}` : 'Ask the real chip'}</button>
       </div>
     </div>
-    <div class="verdict">
-      <p class="verdict-word">${allow ? 'Buy allowed' : 'Blocked'}</p>
-      <p class="verdict-sub">${allow ? 'Uniswap swap runs, OKB lands in your wallet.' : 'Nothing moves. Your USDT0 stays in the vault.'}</p>
-      <button class="btn quiet sm" data-a="askChip">${S.chip.live === 'asking' ? 'Asking…' : S.chip.live ? `Chain says: ${S.chip.live}` : 'Ask the real chip'}</button>
-    </div>
-    <figcaption>Every buy is checked by this circuit on chain. Tap any rule to flip it and see what the chip decides.</figcaption>
+    <figcaption>This is the real circuit that is live on X Layer, running in your browser. Change the inputs; "Ask the real chip" sends the same input to the TapeOut processor on chain.</figcaption>
   </figure>`;
 }
 
-function hero() {
+function errBox() { return S.error && !S.dialog ? `<p class="err" role="alert">${esc(S.error)}</p>` : ''; }
+
+/* ================================================================ pages */
+
+function pageHome() {
   const n = S.net;
-  return `<section class="hero wrap" id="top">
+  const feed = (S.feed || []).slice(0, 4);
+  return `<section class="hero wrap">
     <div class="hero-copy">
-      <h1>Stack OKB on autopilot, without trusting a bot.</h1>
-      <p class="lead">Put USDT0 in a vault only you control. Latch buys OKB on the dip or on a schedule and sends it to your wallet as WOKB (wrapped OKB, always worth 1 OKB). Your vault checks every buy against your rules, and a TapeOut chip on the blockchain must agree, so the bot can never buy too much, pay too much, or send your money anywhere else.</p>
-      <div class="cta-row">
-        <button class="btn primary lg" data-a="wizard">Create my vault</button>
-        <a class="btn quiet lg" href="#safety">See how it stays safe</a>
-      </div>
+      <h1>Buy OKB on dips. Take profit on rises. A chip decides how much.</h1>
+      <p class="lead">Put USDT0 or OKB in a vault only you control. Latch trades for you on Uniswap, and the size of every trade is decided on chain by a 101-gate TapeOut circuit: more when the move is bigger, less when the market is jumpy, nothing when your rules say no. The bot can never withdraw, raise your limits or send money anywhere but your wallet.</p>
+      <div class="cta-row"><a class="btn primary lg" href="#/create?buy">Buy OKB automatically</a><a class="btn quiet lg" href="#/create?sell">Take profit automatically</a></div>
       <dl class="facts">
-        <div><dt>OKB price</dt><dd class="num">${S.price ? S.price.toFixed(2) : '…'}</dd></div>
+        <div><dt>OKB price</dt><dd class="num">${P(S.price)}</dd></div>
+        <div><dt>Trades checked by chip</dt><dd class="num">${n ? n.trades : '…'}</dd></div>
         <div><dt>OKB bought</dt><dd class="num">${n ? okb(n.okb, 4) : '…'}</dd></div>
-        <div><dt>Buys checked</dt><dd class="num">${n ? n.buys : '…'}</dd></div>
-        <div><dt>Vaults</dt><dd class="num">${S.vaultCount ?? '…'}</dd></div>
+        <div><dt>Vaults</dt><dd class="num">${n ? n.vaults : '…'}</dd></div>
       </dl>
     </div>
-    ${chipPanel()}
+    ${chipWidget(false)}
+  </section>
+  <section class="wrap block"><h2>Two jobs, one vault each</h2>
+    <div class="jobs">
+      <a class="job" href="#/create?buy"><span class="job-icon">${ICON.buy}</span><b>Buy OKB</b><span>Holds USDT0. Buys a little every day, or only on dips, or more the deeper it falls. OKB goes straight to your wallet.</span></a>
+      <a class="job" href="#/create?sell"><span class="job-icon">${ICON.sell}</span><b>Take profit</b><span>Holds OKB. Sells a little as the price rises above your reference, more on bigger rises, never under your floor. USDT0 goes straight to your wallet.</span></a>
+    </div></section>
+  <section class="wrap block"><h2>How a trade happens</h2>
+    <ol class="flow">
+      <li><b>The bot asks</b><span>Every minute, Latch's bot asks each vault for a trade.</span></li>
+      <li><b>Your vault measures</b><span>How far OKB moved from your reference, how jumpy the market is, and 7 safety facts.</span></li>
+      <li><b>The chip decides</b><span>Circuit #${CID2} answers: no trade, 1×, 2× or 3× your base amount.</span></li>
+      <li><b>Uniswap swaps</b><span>At the fair price, or the swap is refused.</span></li>
+      <li><b>Your wallet receives</b><span>OKB (as WOKB) or USDT0. Never anywhere else.</span></li>
+    </ol></section>
+  ${feed.length ? `<section class="wrap block"><div class="row between"><h2>Latest trades</h2><a href="#/activity">All activity</a></div>${feedList(feed)}</section>` : ''}`;
+}
+
+/* ---------- Create ---------- */
+function newCreate(dir) {
+  const p = S.price || 80;
+  const c = { step: dir == null ? 0 : 1, dir: dir ?? 0, mode: 2, spacing: '86400', savings: S.account || '', ownBot: false, botAddr: '', limitsTouched: false };
+  setDefaults(c, p);
+  return c;
+}
+function setDefaults(c, p = S.price || 80) {
+  if (c.dir === 0) { c.base = '2'; c.ref = (Math.round(p * 10) / 10).toString(); c.limit = Math.ceil(p * 1.2).toString(); c.deposit = '20'; }
+  else { c.base = '0.02'; c.ref = (Math.round(p * 10) / 10).toString(); c.limit = (Math.floor(p * 10) / 10).toString(); c.deposit = '0.1'; }
+  suggestLimits(c);
+}
+const maxK = (mode) => Math.max(...curve(mode, 0));
+function suggestLimits(c) {
+  if (c.limitsTouched) return;
+  const b = Number(c.base) || 0; const m = maxK(c.mode);
+  c.perTx = trim(b * m); c.daily = trim(b * m);
+}
+const trim = (n) => String(Number(n.toFixed(6)));
+
+/** Plain-English sentence for a strategy (create review + vault cards). */
+function describe(dir, mode, baseStr, refP, limitP, spacing) {
+  const unit = dir === 0 ? 'USDT0 of OKB' : 'OKB';
+  const u = dir === 0 ? 'USDT0' : 'OKB';
+  const b = Number(baseStr);
+  const cv = curve(mode, 0);
+  const verb = dir === 0 ? 'buys' : 'sells';
+  const rel = dir === 0 ? 'below' : 'above';
+  const at = (d) => (d === 1 ? `${rel} ${P(refP)}` : `${[0, 0, 5, 10, 15, 20, 30, 40][d]}% or more ${rel} ${P(refP)}`);
+  const often = spacingText(BigInt(spacing));
+  const guard = dir === 0 ? `never paying more than ${P(limitP)}` : `never selling under ${P(limitP)}`;
+  const steps = []; let prev = 0;
+  cv.forEach((k, d) => { if (k !== prev) { steps.push([k, d]); prev = k; } });
+  if (mode === 0) return `Latch ${verb} ${trim(b)} ${unit} ${often}, whatever the move, ${guard}.`;
+  const jumpy = mode >= 2 ? ' In a jumpy market it trades only the base amount; in a very jumpy one it waits.' : '';
+  if (cv[0] > 0) {
+    const more = steps.filter(([, d]) => d > 0).map(([k, d]) => `${trim(b * k)} ${u} when OKB is ${at(d)}`).join(', ');
+    return `Latch ${verb} ${trim(b * cv[0])} ${unit} ${often}${more ? `, rising to ${more}` : ''}, ${guard}.${jumpy}`;
+  }
+  const parts = steps.map(([k, d]) => `${trim(b * k)} ${u} when OKB is ${at(d)}`).join(', ');
+  return `Latch ${verb} ${often}, only on a move: ${parts}, ${guard}.${jumpy}`;
+}
+
+function curveRow(dir, mode, vol = 0) {
+  const cv = curve(mode, vol);
+  return `<div class="curve" role="img" aria-label="Trade size by move">${cv.map((k, d) => `<span class="k${k}" title="${esc(DEPTHS[d])}: ${kWord(k)}"><i style="height:${k * 24}%"></i><em>${k ? k + '×' : '–'}</em></span>`).join('')}</div>
+    <div class="curve-x"><span>${dir === 0 ? 'no dip' : 'no rise'}</span><span>−/+5%</span><span>15%</span><span>30%+</span></div>`;
+}
+
+function pageCreate() {
+  if (!HAS2) return `<section class="wrap block"><h1 class="pg">Create a vault</h1><p>Version 2 is not configured on this site yet.</p></section>`;
+  if (!S.c) S.c = newCreate(null);
+  const c = S.c; const dir = c.dir;
+  const steps = ['Goal', 'Strategy', 'Amounts', 'Review', 'Add funds'];
+  const bar = `<ol class="steps">${steps.map((s, i) => `<li class="${i === c.step ? 'on' : i < c.step ? 'done' : ''}">${s}</li>`).join('')}</ol>`;
+  const nav = (back, next, label = 'Continue', dis = '') => `<div class="row between">${back ? `<button class="btn quiet" data-a="cback">Back</button>` : '<span></span>'}${next ? `<button class="btn primary" data-a="${next}" ${dis}>${label}</button>` : ''}</div>`;
+  let body = '';
+  if (c.step === 0) {
+    body = `<div class="jobs">
+      <button class="job ${dir === 0 ? 'sel' : ''}" data-a="cdir" data-v="0"><span class="job-icon">${ICON.buy}</span><b>Buy OKB</b><span>Your vault holds USDT0 and buys OKB for you.</span></button>
+      <button class="job ${dir === 1 ? 'sel' : ''}" data-a="cdir" data-v="1"><span class="job-icon">${ICON.sell}</span><b>Take profit</b><span>Your vault holds OKB and sells some for USDT0 as the price rises.</span></button>
+    </div>${nav(false, 'cnext')}`;
+  } else if (c.step === 1) {
+    body = `<div class="modes">${MODES[dir].map((m, i) => `<button class="mode ${c.mode === i ? 'sel' : ''}" data-a="cmode" data-v="${i}">
+        <b>${esc(m.name)}</b><span>${esc(m.line)}</span>${curveRow(dir, i)}</button>`).join('')}</div>
+      <p class="fine">Bars: trade size the chip picks as OKB moves ${dir === 0 ? 'below' : 'above'} your reference price (calm market).</p>
+      ${nav(true, 'cnext')}`;
+  } else if (c.step === 2) {
+    const u = dir === 0 ? 'USDT0' : 'OKB';
+    const min = dir === 0 ? usd(S.mins.buy) : okb(S.mins.sell, 4);
+    body = `<div class="form two">
+      <label>Base amount per trade (${u})<input id="c-base" data-c="base" type="number" min="0" step="any" inputmode="decimal" value="${esc(c.base)}"><small>1× trade. At least ${min} ${u}.</small></label>
+      <label>How often, at most<select id="c-spacing" data-c="spacing">${[['3600', 'Every hour'], ['86400', 'Every day'], ['604800', 'Every week'], ['0', 'Whenever the chip allows']].map(([v, l]) => `<option value="${v}" ${c.spacing === v ? 'selected' : ''}>${l}</option>`).join('')}</select><small>The bot checks every minute.</small></label>
+      <label>Reference price (USDT0 per OKB)<input id="c-ref" data-c="ref" type="number" step="any" inputmode="decimal" value="${esc(c.ref)}"><small>Moves are measured from here. OKB is ${P(S.price)} now.</small></label>
+      <label>${dir === 0 ? 'Never pay more than' : 'Never sell under'} (USDT0 per OKB)<input id="c-limit" data-c="limit" type="number" step="any" inputmode="decimal" value="${esc(c.limit)}"><small>${dir === 0 ? 'A ceiling: no buys during a spike.' : 'A floor: no sales in a crash.'}</small></label>
+      <label>Most per trade (${u})<input id="c-perTx" data-c="perTx" type="number" step="any" inputmode="decimal" value="${esc(c.perTx)}"><small>Can be lowered later, never raised.</small></label>
+      <label>Most per day (${u})<input id="c-daily" data-c="daily" type="number" step="any" inputmode="decimal" value="${esc(c.daily)}"><small>Can be lowered later, never raised.</small></label>
+      <label class="span2">Send the ${dir === 0 ? 'OKB' : 'USDT0'} to<input id="c-savings" data-c="savings" type="text" spellcheck="false" value="${esc(c.savings)}"><small>Fixed forever once the vault is created.</small></label>
+      <details class="span2" ${c.ownBot ? 'open' : ''}><summary>Use my own bot or AI agent</summary>
+        <label class="chk"><input id="c-ownBot" data-c="ownBot" type="checkbox" ${c.ownBot ? 'checked' : ''}> Use my own bot instead of Latch's</label>
+        <label>Bot address<input id="c-botAddr" data-c="botAddr" type="text" spellcheck="false" placeholder="0x…" value="${esc(c.botAddr)}"><small>Same limits; it can never withdraw or change settings.</small></label>
+      </details>
+    </div>${nav(true, 'cnext', 'Review')}`;
+  } else if (c.step === 3) {
+    body = `<p class="summary">${esc(describe(dir, c.mode, c.base, Number(c.ref), Number(c.limit), c.spacing))}</p>
+      ${curveRow(dir, c.mode)}
+      <ul class="terms">
+        <li>At most ${esc(c.perTx)} ${dir === 0 ? 'USDT0' : 'OKB'} per trade and ${esc(c.daily)} per day.</li>
+        <li>${dir === 0 ? 'OKB (as WOKB, worth 1 OKB each)' : 'USDT0'} goes to <span class="num">${esc(short(c.savings))}</span>.</li>
+        <li>Prices use Uniswap's 30-minute average. A trade is refused if the price is more than about 1% away from it, or if the fill would break your ${dir === 0 ? 'ceiling' : 'floor'}.</li>
+        <li>${c.ownBot ? 'Your bot' : 'Latch’s bot'} can only trigger trades. It can't withdraw, raise limits or redirect funds.</li>
+        <li>TapeOut circuit #${CID2} decides the size of every trade on chain.</li>
+        <li>Fee: 1% of each trade, falling with volume. Pause or withdraw any time.</li>
+      </ul>${nav(true, 'ccreate', S.busy ? esc(S.busy) + '…' : 'Create my vault', S.busy ? 'disabled' : '')}`;
+  } else {
+    const w = S.wallet || {};
+    const fundTok = dir === 0 ? 'USDT0' : 'WOKB';
+    const have = dir === 0 ? w.usdt : w.wokb;
+    body = `<p class="summary">Your vault is live: ${link(c.created)}. Add ${fundTok} for it to ${dir === 0 ? 'spend' : 'sell'}.</p>
+      <div class="form"><label>Amount to add (${fundTok})<input id="c-deposit" data-c="deposit" type="number" min="0" step="any" inputmode="decimal" value="${esc(c.deposit)}">
+        <small>Your wallet holds ${have != null ? (dir === 0 ? usd(have) : okb(have, 4)) : '…'} ${fundTok}${dir === 1 && w.okb != null ? ` and ${okb(w.okb, 4)} OKB` : ''}.</small></label></div>
+      ${dir === 1 ? `<p class="fine">Uniswap trades WOKB (wrapped OKB, always worth 1 OKB). If you hold plain OKB, wrap some first: it is one transaction and you can unwrap any time.</p>` : ''}
+      <div class="row between"><a class="btn quiet" href="#/vaults">Later</a><span class="row gap">${dir === 1 ? `<button class="btn quiet" data-a="cwrap" ${S.busy ? 'disabled' : ''}>Wrap OKB → WOKB</button>` : ''}<button class="btn primary" data-a="cdeposit" ${S.busy ? 'disabled' : ''}>${S.busy ? esc(S.busy) + '…' : 'Add ' + fundTok}</button></span></div>`;
+  }
+  return `<section class="wrap block narrow"><h1 class="pg">${c.step === 0 ? 'Create a vault' : dir === 0 ? 'Buy OKB automatically' : 'Take profit automatically'}</h1>
+    ${bar}${errBox()}${body}</section>`;
+}
+
+/* ---------- My vaults ---------- */
+function reasonV2(d) {
+  if (d.paused) return 'Paused. Nothing trades until you resume.';
+  if (d.previewError) return 'Checks unavailable right now: ' + d.previewError;
+  if (d.amount > 0n) return `The chip says ${d.dir === 0 ? 'buy' : 'sell'} ${d.k}× (${amt(d.amount, d.dir)}). The bot trades within about a minute.`;
+  if (d.dailyCap - d.spentTodayNow < d.minAmount) return 'Today’s limit is used. Next trade after midnight UTC.';
+  if (d.nextTradeAt > 0n) return `Next trade possible in ${when(d.nextTradeAt)}.`;
+  if (d.balance < d.minAmount) return `Add ${d.dir === 0 ? 'USDT0' : 'WOKB'} so Latch has something to ${d.dir === 0 ? 'buy with' : 'sell'}.`;
+  if (d.strategyNo) {
+    const dep = (d.inputs >> 7) & 7, vol = (d.inputs >> 10) & 3;
+    return vol === 3 && d.mode >= 2 ? 'The market is very jumpy; the strategy waits for it to calm down.'
+      : `Waiting: OKB is ${depthWord(dep, d.dir)} (${price6(d.refPrice)}).`;
+  }
+  if (!((d.inputs >> 3) & 1)) return d.dir === 0 ? `Waiting: OKB is above your ceiling of ${price6(d.limitPrice)}, or moving too fast.` : `Waiting: OKB is under your floor of ${price6(d.limitPrice)}, or moving too fast.`;
+  return 'Waiting for the next check.';
+}
+/** One plain word for the safety side. When the strategy sizes a trade at 0, size-dependent checks fail too,
+ *  so name the real cause rather than counting failed bits. */
+function safetyWord(d) {
+  if (d.inputs == null) return '…';
+  if ((d.inputs & 0x7f) === SAFE) return 'all 7 pass';
+  if (d.paused) return 'paused by you';
+  if (d.dailyCap - d.spentTodayNow < d.minAmount) return 'daily limit used';
+  if (d.nextTradeAt > 0n) return 'spacing: wait';
+  if (d.balance < d.minAmount) return 'needs funds';
+  if (d.strategyNo) return 'pass (strategy waits)';
+  if (!((d.inputs >> 3) & 1)) return d.dir === 0 ? 'above your ceiling' : 'under your floor';
+  return 'not met';
+}
+function vaultCard2(d) {
+  const dir = d.dir; const m = MODES[dir][d.mode];
+  const status = d.paused ? ['Paused', 'paused'] : d.amount > 0n ? [dir === 0 ? 'Buying' : 'Selling', 'live'] : ['Waiting', 'wait'];
+  const avg = d.dir === 0 ? (d.totalOut > 0n ? (Number(d.volumeIn) / 1e6) / (Number(d.totalOut) / 1e18) : null) : (d.volumeIn > 0n ? (Number(d.totalOut) / 1e6) / (Number(d.volumeIn) / 1e18) : null);
+  const usedPct = d.dailyCap > 0n ? Math.min(100, Number((d.spentTodayNow * 100n) / d.dailyCap)) : 0;
+  const dep = d.inputs != null ? (d.inputs >> 7) & 7 : 0, vol = d.inputs != null ? (d.inputs >> 10) & 3 : 0;
+  const h = S.hist[d.address];
+  const hist = h === undefined ? '<p class="muted">Loading recent trades…</p>' : h === null ? '<p class="muted">Recent trades could not be loaded.</p>'
+    : h.length ? histTable(h) : '<p class="muted">No trades yet.</p>';
+  const unitIn = dir === 0 ? 'USDT0' : 'WOKB';
+  const busy = S.busy ? 'disabled' : '';
+  return `<article class="vault" data-v="${d.address}" data-ver="2">
+    <header class="vault-head"><span class="vault-icon">${dir === 0 ? ICON.buy : ICON.sell}</span>
+      <div><h3>${dir === 0 ? 'Buy OKB' : 'Take profit'} · ${esc(m.name)}</h3><p class="muted">${esc(describe(dir, d.mode, formatUnits(d.baseAmount, dir === 0 ? 6 : 18), Number(d.refPrice) / 1e6, Number(d.limitPrice) / 1e6, String(d.minInterval)))}</p></div>
+      <span class="status ${status[1]}">${status[0]}</span></header>
+    <dl class="vault-stats">
+      <div><dt>${dir === 0 ? 'OKB bought' : 'USDT0 taken'}</dt><dd class="num">${dir === 0 ? okb(d.totalOut, 6) : usd(d.totalOut)}</dd></div>
+      <div><dt>Average price</dt><dd class="num">${avg ? P(avg) : '—'}</dd></div>
+      <div><dt>${unitIn} left</dt><dd class="num">${dir === 0 ? usd(d.balance) : okb(d.balance, 4)}</dd></div>
+      <div><dt>Trades</dt><dd class="num">${d.trades}</dd></div>
+    </dl>
+    <div class="sees">
+      <p class="sees-t">What the chip sees now</p>
+      <ul class="sees-l">
+        <li><span>Move</span><b>${esc(d.inputs != null ? depthWord(dep, dir) : '…')}</b></li>
+        <li><span>Market</span><b>${esc(d.inputs != null ? VOLS[vol] : '…')}</b></li>
+        <li><span>Safety</span><b class="${d.inputs != null && (d.inputs & 0x7f) === SAFE ? 'ok' : ''}">${esc(safetyWord(d))}</b></li>
+        <li><span>Decision</span><b class="${d.amount > 0n ? 'ok' : ''}">${d.amount > 0n ? `${dir === 0 ? 'buy' : 'sell'} ${d.k}×` : 'wait'}</b></li>
+      </ul>
+    </div>
+    <div class="meter" role="img" aria-label="${usedPct}% of today's limit used"><span style="width:${usedPct}%"></span></div>
+    <p class="meter-label"><span>${amt(d.spentTodayNow, dir)} of ${amt(d.dailyCap, dir)} used today</span><span>${esc(reasonV2(d))}</span></p>
+    <details data-k="${d.address}:rules" ${S.open[d.address + ':rules'] ? 'open' : ''}><summary>Settings and safety checks</summary>
+      <ul class="kv">
+        <li><span>Base amount (1×)</span><b class="num">${amt(d.baseAmount, dir)}</b></li>
+        <li><span>Most per trade / per day</span><b class="num">${amt(d.perTxCap, dir)} / ${amt(d.dailyCap, dir)}</b></li>
+        <li><span>Reference price</span><b class="num">${price6(d.refPrice)}</b></li>
+        <li><span>${dir === 0 ? 'Ceiling' : 'Floor'}</span><b class="num">${price6(d.limitPrice)}</b></li>
+        <li><span>30-min average now</span><b class="num">${d.twapPrice ? price6(d.twapPrice) : '…'}</b></li>
+        <li><span>Spacing</span><b>${esc(spacingText(d.minInterval))}</b></li>
+      </ul>
+      ${d.inputs != null ? `<ul class="checks">${SAFETY.map(([l, b, inv]) => { const on = (d.inputs >> b) & 1; const pass = inv ? !on : !!on; return `<li class="${pass ? 'ok' : 'bad'}">${esc(inv ? 'Not paused by you' : l)}</li>`; }).join('')}</ul>
+      <p class="chip-line">Chip input <span class="num">0x${d.inputs.toString(16).padStart(4, '0')}</span> · ${link(C.processor, 'address', 'circuit #' + CID2 + ' on chain')}</p>` : ''}
+    </details>
+    <details data-k="${d.address}:hist" ${S.open[d.address + ':hist'] ? 'open' : ''}><summary>Recent trades</summary>${hist}</details>
+    <div class="actions">
+      <button class="btn primary sm" data-a="vadd" ${busy}>Add ${unitIn}</button>
+      <button class="btn quiet sm" data-a="${d.paused ? 'vresume' : 'vpause'}" ${busy}>${d.paused ? 'Resume' : 'Pause'}</button>
+      <button class="btn quiet sm" data-a="vstrategy" ${busy}>Change strategy</button>
+      <button class="btn quiet sm" data-a="vwithdraw" ${busy}>Withdraw all</button>
+    </div>
+    <p class="fine">Vault ${link(d.address)} · output to ${link(d.savings)} · bot ${d.keeper && S.hostedKeeper && d.keeper.toLowerCase() === S.hostedKeeper.toLowerCase() ? 'Latch hosted' : link(d.keeper)} · fee ${(Number(d.feeBpsNow) / 100).toFixed(2)}%</p>
+  </article>`;
+}
+function vaultCard1(d) {
+  const busy = S.busy ? 'disabled' : '';
+  const avg = d.bought > 0n ? (Number(d.spent) / 1e6) / (Number(d.bought) / 1e18) : null;
+  return `<article class="vault classic" data-v="${d.address}" data-ver="1">
+    <header class="vault-head"><span class="vault-icon">${ICON.buy}</span>
+      <div><h3>Classic buy vault</h3><p class="muted">${usd(d.perTxCap)} USDT0 per buy, ${esc(spacingText(d.minInterval))}, at ${usd(d.maxPrice)} or lower. Checked by safety circuit #${C.circuitId}.</p></div>
+      <span class="status ${d.paused ? 'paused' : 'live'}">${d.paused ? 'Paused' : 'On'}</span></header>
+    <dl class="vault-stats">
+      <div><dt>OKB bought</dt><dd class="num">${okb(d.bought)}</dd></div>
+      <div><dt>Average price</dt><dd class="num">${avg ? P(avg) : '—'}</dd></div>
+      <div><dt>USDT0 left</dt><dd class="num">${usd(d.balance)}</dd></div>
+      <div><dt>Buys</dt><dd class="num">${d.buys}</dd></div>
+    </dl>
+    <div class="actions">
+      <button class="btn quiet sm" data-a="${d.paused ? 'vresume' : 'vpause'}" ${busy}>${d.paused ? 'Resume' : 'Pause'}</button>
+      <button class="btn quiet sm" data-a="vwithdraw" ${busy}>Withdraw all</button>
+    </div>
+    <p class="fine">Vault ${link(d.address)} · OKB to ${link(d.savings)}</p>
+  </article>`;
+}
+function pageVaults() {
+  if (!S.account) return `<section class="wrap block narrow"><h1 class="pg">My vaults</h1><div class="empty"><p>Connect the wallet that owns your vaults.</p><button class="btn primary" data-a="connect">Connect wallet</button></div></section>`;
+  const none = !S.v1.length && !S.v2.length;
+  return `<section class="wrap block"><div class="row between"><h1 class="pg">My vaults</h1><span class="row gap"><a class="btn primary sm" href="#/create">New vault</a><button class="btn quiet sm" data-a="refresh">${S.loading ? 'Loading…' : 'Refresh'}</button></span></div>
+    ${errBox()}
+    ${none ? (S.loading ? '<p class="muted">Loading…</p>' : `<div class="empty"><p>No vault yet. It takes one transaction to create one.</p><a class="btn primary" href="#/create">Create a vault</a></div>`) : ''}
+    ${S.v2.map(vaultCard2).join('')}
+    ${S.v1.length ? `<h2 class="sub">Classic vaults</h2>${S.v1.map(vaultCard1).join('')}` : ''}
+    ${S.txs.length ? `<p class="fine">Last action: ${esc(S.txs[0].label)}, ${esc(S.txs[0].state)}. ${link(S.txs[0].hash, 'tx')}</p>` : ''}</section>`;
+}
+
+/* ---------- The chip ---------- */
+function pageChip() {
+  const x = S.x;
+  const table = (dir) => `<table class="grid"><thead><tr><th>Strategy</th>${DEPTHS.map((d, i) => `<th>${i === 0 ? (dir === 0 ? 'no dip' : 'no rise') : esc(d)}</th>`).join('')}</tr></thead>
+    <tbody>${MODES[dir].map((m, i) => `<tr><th>${esc(m.name)}</th>${curve(i, x.vol).map((k) => `<td class="k${k}">${k ? k + '×' : '–'}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  return `<section class="wrap block"><h1 class="pg">The strategy chip</h1>
+    <p class="lead-s">Every trade's size is decided by TapeOut circuit #${CID2}: ${GATE_COUNT} NAND gates taped out on X Layer at processor ${link(C.processor)}. The vault turns the market into 16 input bits; the chip answers with 3 bits: allow, and a size of 1×, 2× or 3×. Nothing in the bot or the website can change that answer.</p>
+    ${chipWidget(true)}</section>
+  <section class="wrap block"><h2>Everything the chip can answer (market: ${esc(VOLS[x.vol])})</h2>
+    <p class="fine">Change "Market" above to see how each strategy reacts to a jumpy market. All safety checks passing.</p>
+    <h3 class="sub">Buy OKB: how far below the reference</h3><div class="scroll">${table(0)}</div>
+    <h3 class="sub">Take profit: how far above the reference</h3><div class="scroll">${table(1)}</div></section>
+  <section class="wrap block split">
+    <div><h2>What goes in</h2><ul class="plain">
+      <li>7 safety facts, all must hold: not paused, the vault's own bot, output to the owner's wallet, price inside the owner's limit and stable, size within limits, daily limit and spacing, enough funds.</li>
+      <li>How far OKB's 30-minute average moved from the owner's reference price, in 8 steps.</li>
+      <li>How jumpy the market is: the gap between the live price and the 30-minute average, in 4 steps.</li>
+      <li>The owner's strategy: steady, dips/rises only, smart or ladder.</li></ul></div>
+    <div><h2>Checked, not trusted</h2><p>The netlist was checked against the written rules for all 65,536 possible inputs before tape-out, then again against the live processor. The vault still enforces every money rule in Solidity too, so even a wrong answer from a chip could not exceed your limits or send funds anywhere else.</p>
+      <p>Classic vaults use safety circuit #${C.circuitId} (13 NAND gates), which checks the same 7 safety facts.</p>
+      <p><a href="${C.repo}/tree/main/circuits" target="_blank" rel="noopener">Read the circuit source and its checks</a></p></div>
   </section>`;
 }
 
-function stepsBar(step) {
-  const steps = ['Strategy', 'Settings', 'Review', 'Add funds'];
-  return `<ol class="steps">${steps.map((s, i) => `<li class="${i === step ? 'on' : i < step ? 'done' : ''}">${s}</li>`).join('')}</ol>`;
+/* ---------- Activity ---------- */
+function histTable(rows) {
+  return `<div class="scroll"><table class="hist"><thead><tr><th>Trade</th><th>Paid</th><th>Received</th><th>Size</th><th>Avg price</th><th>Transaction</th></tr></thead><tbody>${rows.map((x) => `<tr>
+    <td>${x.dir === 0 ? 'Buy' : 'Take profit'}</td><td class="num">${amt(x.inn, x.dir)}</td><td class="num">${outAmt(x.out, x.dir)}</td>
+    <td class="num">${x.version === 2 ? x.k + '×' : 'fixed'}</td><td class="num">${price6(x.price)}</td><td>${link(x.hash, 'tx')}</td></tr>`).join('')}</tbody></table></div>`;
 }
-const ICON_DIP = `<svg viewBox="0 0 48 24" width="48" height="24" aria-hidden="true"><path d="M2 6 L14 9 L22 20 L30 12 L46 4" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="22" cy="20" r="3" fill="currentColor"/></svg>`;
-const ICON_DCA = `<svg viewBox="0 0 48 24" width="48" height="24" aria-hidden="true"><path d="M2 20 H46" stroke="currentColor" stroke-width="1.5" opacity=".5"/>${[6, 16, 26, 36, 46].map((x) => `<rect x="${x - 3}" y="8" width="6" height="12" rx="1" fill="currentColor"/>`).join('')}</svg>`;
+function feedList(rows) {
+  return `<ul class="feed">${rows.map((f) => `<li><span class="tag ${f.dir === 0 ? 'buy' : 'sell'}">${f.dir === 0 ? 'Bought' : 'Sold'}</span>
+    <span class="num">${f.dir === 0 ? okb(f.out, 4) + ' OKB' : okb(f.inn, 4) + ' OKB'}</span><span class="muted">${f.dir === 0 ? 'for ' + usd(f.inn) + ' USDT0' : 'for ' + usd(f.out) + ' USDT0'}</span>
+    <span class="num">${f.version === 2 ? 'chip: ' + f.k + '×' : 'chip: yes'}</span>${link(f.hash, 'tx', 'transaction')}</li>`).join('')}</ul>`;
+}
+function pageActivity() {
+  const n = S.net;
+  return `<section class="wrap block"><h1 class="pg">Activity</h1>
+    <dl class="facts wide">
+      <div><dt>Trades checked by a chip</dt><dd class="num">${n ? n.trades : '…'}</dd></div>
+      <div><dt>OKB bought</dt><dd class="num">${n ? okb(n.okb, 4) : '…'}</dd></div>
+      <div><dt>USDT0 spent on OKB</dt><dd class="num">${n ? usd(n.usdtIn) : '…'}</dd></div>
+      <div><dt>Profit taken (USDT0)</dt><dd class="num">${n ? usd(n.profit) : '…'}</dd></div>
+      <div><dt>Vaults</dt><dd class="num">${n ? `${n.vaults}` : '…'}</dd></div>
+    </dl>
+    <h2 class="sub">Latest trades on X Layer</h2>
+    ${S.feed == null ? '<p class="muted">Loading trades from the chain…</p>' : S.feed.length ? feedList(S.feed) : '<p class="muted">No trades yet.</p>'}
+    <p class="fine">Read live from the chain. Contracts: ${HAS2 ? link(C.factory2, 'address', 'vault factory') + ' · ' : ''}${link(C.factory, 'address', 'classic factory')} · ${link(C.processor, 'address', 'TapeOut processor')}</p></section>`;
+}
 
-function wizardView() {
-  const w = S.wizard; if (!w) return '';
-  const p = S.price || 0;
-  let body = '';
-  if (w.step === 0) {
-    body = `<div class="choices">
-      <button class="choice ${w.strategy === 'dip' ? 'sel' : ''}" data-a="strategy" data-v="dip">${ICON_DIP}
-        <b>Buy the dip</b><span>Buys only when OKB falls to the price you pick.</span></button>
-      <button class="choice ${w.strategy === 'dca' ? 'sel' : ''}" data-a="strategy" data-v="dca">${ICON_DCA}
-        <b>Auto-DCA</b><span>Buys a fixed amount every day or week, up to a price ceiling.</span></button>
-    </div>
-    <div class="row end"><button class="btn primary" data-a="next" ${w.strategy ? '' : 'disabled'}>Continue</button></div>`;
-  } else if (w.step === 1) {
-    const dip = w.strategy === 'dip';
-    body = `<div class="form">
-      <label>Amount per buy (USDT0)<input id="f-perBuy" type="number" min="1" step="0.5" inputmode="decimal" value="${esc(w.perBuy)}"><small>At least 1 USDT0.</small></label>
-      ${dip
-        ? `<label>Buy when OKB is at or below<input id="f-price" type="number" step="0.1" inputmode="decimal" value="${esc(w.price)}"><small>OKB is ${p.toFixed(2)} now. Latch uses the 30-minute average, so a one-second wick doesn't count.</small></label>
-           <label>Most buys per day<input id="f-perDay" type="number" min="1" max="24" step="1" inputmode="numeric" value="${esc(w.perDay)}"></label>`
-        : `<label>How often<select id="f-every"><option value="86400" ${w.every === '86400' ? 'selected' : ''}>Every day</option><option value="604800" ${w.every === '604800' ? 'selected' : ''}>Every week</option></select></label>
-           <label>Never pay more than (USDT0 per OKB)<input id="f-price" type="number" step="1" inputmode="decimal" value="${esc(w.price)}"><small>OKB is ${p.toFixed(2)} now. The ceiling stops buys during a spike.</small></label>`}
-      <label>Send the OKB to<input id="f-savings" type="text" spellcheck="false" value="${esc(w.savings)}"><small>Fixed forever once the vault is created.</small></label>
-      <details ${w.ownBot ? 'open' : ''}><summary>Use my own bot or AI agent</summary>
-        <label class="chk"><input id="f-ownBot" type="checkbox" ${w.ownBot ? 'checked' : ''}> Use my own bot instead of Latch's</label>
-        <label>Bot address<input id="f-botAddr" type="text" spellcheck="false" placeholder="0x…" value="${esc(w.botAddr)}"><small>It gets the same limits and can never withdraw or change settings.</small></label>
-      </details>
-    </div>
-    <div class="row between"><button class="btn quiet" data-a="back">Back</button><button class="btn primary" data-a="next">Review</button></div>`;
-  } else if (w.step === 2) {
-    const per = Number(w.perBuy); const dip = w.strategy === 'dip';
-    const daily = dip ? per * Number(w.perDay) : per;
-    body = `<p class="summary">${dip
-      ? `When OKB's 30-minute average is <b>${esc(w.price)}</b> or lower, Latch buys <b>${per} USDT0</b> of OKB, up to <b>${daily} USDT0</b> a day.`
-      : `Latch buys <b>${per} USDT0</b> of OKB <b>${w.every === '604800' ? 'every week' : 'every day'}</b>, never above <b>${esc(w.price)}</b> per OKB.`}</p>
-      <ul class="terms">
-        <li>OKB goes to <span class="num">${esc(short(w.savings))}</span>.</li>
-        <li>Swaps use Uniswap's deepest USDT0/OKB pool and are refused if more than 1% worse than the average price.</li>
-        <li>${w.ownBot ? 'Your bot' : 'Latch’s bot'} can only trigger buys. It can't withdraw, raise limits or redirect OKB.</li>
-        <li>TapeOut circuit #${C.circuitId} must approve every buy on chain.</li>
-        <li>Pause or withdraw any time. Fee: 1% per buy on top of your price, no other Latch fees.</li>
-        <li>You receive WOKB (wrapped OKB, worth 1 OKB each).</li>
-      </ul>
-    <div class="row between"><button class="btn quiet" data-a="back">Back</button><button class="btn primary" data-a="create" ${S.busy ? 'disabled' : ''}>${S.busy ? esc(S.busy) + '…' : 'Create my vault'}</button></div>`;
-  } else {
-    body = `<p class="summary">Your vault is live at ${link(w.created)}. Add USDT0 for it to spend.</p>
-    <div class="form"><label>Amount to add (USDT0)<input id="f-deposit" type="number" min="0" step="0.5" inputmode="decimal" value="${esc(w.deposit)}"><small>Your wallet holds ${S.usdtWallet != null ? usd(S.usdtWallet) : '…'} USDT0.</small></label></div>
-    <div class="row between"><button class="btn quiet" data-a="closeWizard">Later</button><button class="btn primary" data-a="deposit" ${S.busy ? 'disabled' : ''}>${S.busy ? esc(S.busy) + '…' : 'Add USDT0'}</button></div>`;
-  }
-  return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="wz-t"><div class="sheet">
-    <div class="row between"><h2 id="wz-t">Create your vault</h2><button class="x" data-a="closeWizard" aria-label="Close">×</button></div>
-    ${stepsBar(w.step)}${S.error ? `<p class="err" role="alert">${esc(S.error)}</p>` : ''}${body}</div></div>`;
+/* ---------- Safety ---------- */
+function pageSafety() {
+  return `<section class="wrap block split"><div><h1 class="pg">Safety</h1>
+      <h2>What a stolen bot key could do</h2>
+      <p>Most trading bots hold your keys. If they are hacked, your account is emptied. With Latch, the worst a stolen bot key can do is trigger the trades your own rules already allow, at your prices, into your own wallet. Latch can also switch a bot key off for every vault at once; that switch can only stop trades, never move funds.</p>
+      <p>The vault refuses a trade if Uniswap's live price is more than about 1% away from its 30-minute average, or if the worst accepted fill would break your ceiling or floor. The bot also refuses when Uniswap disagrees with the major exchanges.</p></div>
+    <div><h2>What only you can do</h2>
+      <ul class="plain"><li>Withdraw everything, any time, even while paused</li><li>Pause and resume</li><li>Change the strategy, reference price, ceiling or floor, and spacing</li><li>Lower your limits (they can never be raised) or switch to your own bot or AI agent</li></ul>
+      <h2 class="sub">Checked and open</h2><p>Open-source contracts. Tests against Uniswap's real contract code (47 for the vault, 29 for the bot), Slither static analysis, and three independent reviews by separate AI agents, with every finding fixed or answered in writing. This is not a professional audit: start small.</p>
+      <p><a href="${C.repo}" target="_blank" rel="noopener">Read the code, tests and reviews</a></p></div></section>
+  <section class="wrap block split">
+    <div><h2>Fees</h2><p>1% of each trade, falling to 0.75%, 0.5% and 0.25% as your vault's volume passes 1,000, 5,000 and 20,000 USDT0. Uniswap's pool keeps its own 0.05%. No sign-up, deposit or withdrawal fees. Latch's bot pays the gas.</p></div>
+    <div><h2>Risks</h2><p>OKB's price can keep falling after you buy, or keep rising after you sell. USDT0's issuer can freeze addresses. Smart contracts can have bugs. Prices come from one Uniswap pool, protected by the 30-minute average and the live-price check.</p></div></section>
+  <section class="wrap block faq"><h2>Questions</h2>
+    <details><summary>Can Latch take my money?</summary><p>No. Only the wallet that created the vault can withdraw. Latch's bot can only trigger trades within your rules, into your wallet.</p></details>
+    <details><summary>Why WOKB and not OKB?</summary><p>Uniswap trades the wrapped form of OKB. Each WOKB is always worth 1 OKB and can be unwrapped any time. Add the WOKB token in your wallet to see it.</p></details>
+    <details><summary>What is the reference price?</summary><p>The price your strategy measures moves from. A Buy vault with reference 85 sees OKB at 76 as "10% below"; a Take Profit vault with reference 85 sees 98 as "15% above". You can change it any time.</p></details>
+    <details><summary>Which wallet do I need?</summary><p>OKX Wallet: the browser extension on a computer, or the OKX Wallet app on a phone (Latch asks the app to connect, or open this page in the app's Discover tab).</p></details>
+    <details><summary>What happens when the market is jumpy?</summary><p>Smart and ladder strategies trade only the base amount when the live price is 0.35–0.6% away from the 30-minute average, and pause beyond that. Every strategy stops at about 1%.</p></details>
+  </section>`;
 }
+
+/* ================================================================ render */
 
 function dialogView() {
   const g = S.dialog; if (!g) return '';
+  const fields = (g.fields || []).map((f) => f.options
+    ? `<label class="form">${esc(f.label)}<select id="dg-${f.id}">${f.options.map(([v, l]) => `<option value="${esc(v)}" ${String(f.value) === String(v) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>${f.hint ? `<small>${esc(f.hint)}</small>` : ''}</label>`
+    : `<label class="form">${esc(f.label)}<input id="dg-${f.id}" type="number" step="any" inputmode="decimal" value="${esc(f.value)}">${f.hint ? `<small>${esc(f.hint)}</small>` : ''}</label>`).join('');
   return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="dg-t"><form class="sheet small" data-form="dialog">
     <div class="row between"><h2 id="dg-t">${esc(g.title)}</h2><button type="button" class="x" data-a="closeDialog" aria-label="Close">×</button></div>
-    ${g.text ? `<p class="dlg-text">${g.text}</p>` : ''}
-    ${g.field ? `<label class="form">${esc(g.field)}<input id="dg-v" type="number" step="any" inputmode="decimal" value="${esc(g.value)}" autofocus>${g.hint ? `<small>${esc(g.hint)}</small>` : ''}</label>` : ''}
+    ${g.text ? `<p class="dlg-text">${g.text}</p>` : ''}<div class="form">${fields}</div>
     ${S.error ? `<p class="err" role="alert">${esc(S.error)}</p>` : ''}
     <div class="row end gap"><button type="button" class="btn quiet" data-a="closeDialog">Cancel</button><button type="submit" class="btn ${g.danger ? 'danger' : 'primary'}" ${S.busy ? 'disabled' : ''}>${S.busy ? esc(S.busy) + '…' : esc(g.ok)}</button></div>
   </form></div>`;
 }
 
-function vaultCard(d) {
-  const st = strategyText(d);
-  const avg = d.bought > 0n ? Number(d.spent) / 1e6 / (Number(d.bought) / 1e18) : null;
-  const usedPct = d.dailyCap > 0n ? Math.min(100, Number((d.spentToday * 100n) / d.dailyCap)) : 0;
-  const status = d.paused ? ['Paused', 'paused'] : d.allow ? ['Buying', 'live'] : ['Waiting', 'wait'];
-  const nextLine = d.paused ? 'Paused. Nothing will be bought until you resume.'
-    : d.balance < 1_000_000n ? 'Add USDT0 so Latch has something to buy with.'
-    : d.allow ? 'All checks pass. The bot buys within about a minute.'
-    : ((d.bits >> 3) & 1) === 0 ? `Waiting for OKB to reach ${usd(d.maxPrice)} (30-min average now ${d.twap ? d.twap.toFixed(2) : '…'}).`
-    : ((d.bits >> 5) & 1) === 0 ? (d.nextBuyAt > 0n ? `Next buy in ${when(d.nextBuyAt)}.` : 'Today’s limit is used. Next buy after midnight UTC.')
-    : 'Waiting for the next check.';
-  const checks = d.bits == null ? `<p class="muted">${esc(d.previewError || 'Checks unavailable right now.')}</p>`
-    : `<ul class="checks">${CHECKS.map(([label, bit, inverse]) => {
-      const on = (d.bits >> bit) & 1; const pass = inverse ? !on : !!on;
-      return `<li class="${pass ? 'ok' : 'bad'}">${esc(inverse ? 'Not paused by you' : label)}</li>`;
-    }).join('')}</ul>
-    <p class="chip-line ${d.chip ? 'ok' : waiting(d.bits) ? 'wait' : 'bad'}">TapeOut circuit #${C.circuitId} says <b>${d.chip ? 'yes' : 'no'}</b> to input <span class="num">0x${d.bits.toString(16).padStart(2, '0')}</span>${d.chip ? '' : ` (${esc(whyNo(d.bits))})`}. ${link(C.processor, 'address', 'View the chip')}</p>`;
-  const h = S.hist[d.address];
-  const hist = h === undefined ? '<p class="muted">Loading recent buys…</p>'
-    : h === null ? '<p class="muted">Recent buys could not be loaded.</p>'
-    : h.length ? `<table class="hist"><thead><tr><th>Paid</th><th>Received</th><th>Chip</th><th>Transaction</th></tr></thead><tbody>${h.map((x) => `<tr><td class="num">${usd(x.inn)} USDT0</td><td class="num">${okb(x.out)} WOKB</td><td class="num ok">yes</td><td>${link(x.hash, 'tx')}</td></tr>`).join('')}</tbody></table>`
-    : '<p class="muted">No buys yet.</p>';
-  const busy = S.busy ? 'disabled' : '';
-  return `<article class="vault" data-v="${d.address}">
-    <header class="vault-head">
-      <span class="vault-icon">${isDca(d) ? ICON_DCA : ICON_DIP}</span>
-      <div><h3>${esc(st.name)}</h3><p class="muted">${esc(st.line)}</p></div>
-      <span class="status ${status[1]}">${status[0]}</span>
-    </header>
-    <dl class="vault-stats">
-      <div><dt>OKB bought</dt><dd class="num">${okb(d.bought)}</dd></div>
-      <div><dt>Average price (before fee)</dt><dd class="num">${avg ? avg.toFixed(2) : '—'}</dd></div>
-      <div><dt>USDT0 left</dt><dd class="num">${usd(d.balance)}</dd></div>
-      <div><dt>Buys</dt><dd class="num">${d.buys}</dd></div>
-    </dl>
-    <div class="meter" role="img" aria-label="${usedPct}% of today's limit used"><span style="width:${usedPct}%"></span></div>
-    <p class="meter-label"><span>${usd(d.spentToday)} of ${usd(d.dailyCap)} USDT0 used today</span><span>${esc(nextLine)}</span></p>
-    <details data-k="${d.address}:checks" ${S.open[d.address + ':checks'] ? 'open' : ''}><summary>Checks for the next buy</summary>${checks}</details>
-    <details data-k="${d.address}:buys" ${S.open[d.address + ':buys'] ? 'open' : ''}><summary>Recent buys</summary>${hist}</details>
-    <div class="actions">
-      <button class="btn primary sm" data-a="addFunds" ${busy}>Add USDT0</button>
-      <button class="btn quiet sm" data-a="${d.paused ? 'resume' : 'pause'}" ${busy}>${d.paused ? 'Resume' : 'Pause'}</button>
-      <button class="btn quiet sm" data-a="setPrice" ${busy}>Change price</button>
-      <button class="btn quiet sm" data-a="setEvery" ${busy}>Change spacing</button>
-      <button class="btn quiet sm" data-a="withdraw" ${busy}>Withdraw all</button>
-    </div>
-    <p class="fine">Vault ${link(d.address)}. WOKB (wrapped OKB) goes to ${link(d.savings)}. Bot: ${d.keeper.toLowerCase() === (S.hostedKeeper || '').toLowerCase() ? 'Latch hosted' : link(d.keeper)}. Fee ${(Number(d.bps) / 100).toFixed(2)}%.</p>
-  </article>`;
-}
-
-function dashboard() {
-  if (!S.account) return '';
-  const list = S.vaults.length ? S.vaults.map(vaultCard).join('')
-    : `<div class="empty"><p>No vault yet. It takes one transaction to create one.</p><button class="btn primary" data-a="wizard">Create my vault</button></div>`;
-  return `<section class="wrap block" id="vaults"><div class="row between"><h2>Your vaults</h2><button class="btn quiet sm" data-a="refresh">${S.loading ? 'Loading…' : 'Refresh'}</button></div>
-    ${S.error && !S.wizard && !S.dialog ? `<p class="err" role="alert">${esc(S.error)}</p>` : ''}${list}
-    ${S.txs.length ? `<p class="fine">Last action: ${esc(S.txs[0].label)}, ${esc(S.txs[0].state)}. ${link(S.txs[0].hash, 'tx')}</p>` : ''}</section>`;
-}
-
-function feedView() {
-  if (!S.feed || !S.feed.length) return '';
-  return `<section class="wrap block"><h2>Latest buys on X Layer</h2>
-    <ul class="feed">${S.feed.map((f) => `<li><span class="num">${okb(f.out)} WOKB</span><span class="muted">for ${usd(f.inn)} USDT0</span><span class="ok">chip said yes</span>${link(f.hash, 'tx', 'transaction')}</li>`).join('')}</ul></section>`;
-}
-
-function info() {
-  return `<section class="wrap block" id="how"><h2>How a buy happens</h2>
-    <ol class="flow">
-      <li><b>The bot asks</b><span>Every minute, Latch's bot asks your vault to buy.</span></li>
-      <li><b>Your vault checks 7 rules</b><span>Your price, your limits, your wallet, not paused, enough funds.</span></li>
-      <li><b>The TapeOut chip decides</b><span>Circuit #${C.circuitId} on X Layer must say yes, or the buy stops.</span></li>
-      <li><b>Uniswap swaps</b><span>USDT0 becomes OKB at the fair price, or the swap is refused.</span></li>
-      <li><b>OKB lands in your wallet</b><span>As WOKB (wrapped OKB). Never in the vault, never anywhere else.</span></li>
-    </ol>
-  </section>
-  <section class="wrap block split" id="safety">
-    <div><h2>What a stolen bot key could do</h2>
-      <p>Most trading bots hold your keys. If they are hacked, your account is emptied. With Latch, the worst a stolen bot key can do is buy your chosen amount of OKB, at your price or better, into your own wallet. Latch can also switch any bot key off for every vault at once (this can only stop buys, never move funds).</p>
-      <p>The vault also refuses a buy if Uniswap's price jumped away from its 30-minute average, and the bot refuses if Uniswap disagrees with the major exchanges.</p></div>
-    <div><h2>What only you can do</h2>
-      <ul class="plain"><li>Withdraw everything, any time, even while paused</li><li>Pause and resume buying</li><li>Change your price and spacing</li><li>Lower your limits or switch to your own bot or AI agent, directly on your vault contract (limits can never be raised)</li></ul></div>
-  </section>
-  <section class="wrap block split">
-    <div><h2>Fees</h2><p>1% of each buy, falling to 0.75%, 0.5% and 0.25% as your vault's volume grows. The fee comes on top of the price you set. Uniswap's pool also keeps its 0.05% trading fee. No sign-up or withdrawal fees. Latch's bot pays the gas.</p></div>
-    <div><h2>Checked and open</h2><p>Open-source contracts, Slither with zero findings, two independent reviews by separate AI agents (not a professional audit), and tests against Uniswap's real code. ${`<a href="${C.repo}" target="_blank" rel="noopener">Read the code and the reviews</a>`}.</p></div>
-  </section>
-  <section class="wrap block faq" id="faq"><h2>Questions</h2>
-    <details><summary>Can Latch take my money?</summary><p>No. Only the wallet that created the vault can withdraw. Latch's bot can only trigger buys within your rules, into your wallet.</p></details>
-    <details><summary>What if OKB never reaches my price?</summary><p>Nothing is bought and your USDT0 stays in the vault. Change the price or withdraw whenever you like.</p></details>
-    <details><summary>Which wallet do I need?</summary><p>OKX Wallet: the browser extension on a computer, or open this page from the Discover tab in the OKX Wallet app.</p></details>
-    <details><summary>Why do I receive WOKB, not OKB?</summary><p>Uniswap trades the wrapped form of OKB. Each WOKB is worth exactly 1 OKB. Add the WOKB token in OKX Wallet to see it, and swap it back to OKB whenever you like.</p></details>
-    <details><summary>What are the risks?</summary><p>OKB's price can fall after you buy. USDT0's issuer can freeze addresses. Smart contracts can have bugs; Latch's are reviewed and tested, but start small.</p></details>
-  </section>`;
+function mobileHelp() {
+  if (!S.mobileHelp) return '';
+  return `<section class="wrap note" role="status"><p><b>Open Latch inside your wallet app.</b> Phone browsers can't connect to a wallet directly.</p>
+    <ol class="terms" style="margin-top:8px"><li>Tap <b>Open in OKX Wallet app</b> (the Web3 wallet). If your wallet is inside the OKX exchange app, tap <b>Open in OKX app</b>. If nothing opens, tap <b>Copy link</b>.</li><li>Open the <b>OKX Wallet</b> app (or the OKX app, then switch to <b>Wallet</b>).</li><li>Go to <b>Discover</b> (the browser), paste the link and open it.</li><li>Tap <b>Connect wallet</b> there.</li></ol>
+    <div class="row gap" style="flex-wrap:wrap"><a class="btn primary sm" href="${esc(okxWalletLink())}" rel="noopener">Open in OKX Wallet app</a><a class="btn quiet sm" href="${esc(okxAppLink())}" rel="noopener">Open in OKX app</a><button class="btn quiet sm" data-a="copyLink">${S.copied ? 'Link copied' : 'Copy link'}</button><button class="btn quiet sm" data-a="hideHelp">Close</button></div></section>`;
 }
 
 function render() {
   const app = document.getElementById('app');
   const focus = document.activeElement?.id;
-  const mh = S.mobileHelp ? `<section class="wrap note" role="status"><p><b>Open Latch inside your wallet app.</b> Phone browsers can't connect to a wallet directly.</p>
-    <ol class="terms" style="margin-top:8px"><li>Tap <b>Open in OKX Wallet app</b> (the Web3 wallet). If your wallet is inside the OKX exchange app, tap <b>Open in OKX app</b>. If nothing opens, tap <b>Copy link</b>.</li><li>Open the <b>OKX Wallet</b> app (or the OKX app, then switch to <b>Wallet</b>).</li><li>Go to <b>Discover</b> (the browser), paste the link and open it.</li><li>Tap <b>Connect wallet</b> there.</li></ol>
-    <div class="row gap" style="flex-wrap:wrap"><a class="btn primary sm" href="${esc(okxWalletLink())}" rel="noopener">Open in OKX Wallet app</a><a class="btn quiet sm" href="${esc(okxAppLink())}" rel="noopener">Open in OKX app</a><button class="btn quiet sm" data-a="copyLink">${S.copied ? 'Link copied' : 'Copy link'}</button><button class="btn quiet sm" data-a="hideHelp">Close</button></div></section>` : '';
-  app.innerHTML = header() + `<main>${hero()}${mh}${S.note ? `<p class="wrap note" role="status">${esc(S.note)}</p>` : ''}${dashboard()}${feedView()}${info()}</main>
-    <footer class="wrap foot"><span>Latch runs on X Layer and checks every buy with TapeOut circuit #${C.circuitId}.</span><span>${link(C.factory, 'address', 'Factory contract')} · <a href="${C.repo}" target="_blank" rel="noopener">GitHub</a></span></footer>` + wizardView() + dialogView();
+  const page = { home: pageHome, create: pageCreate, vaults: pageVaults, chip: pageChip, activity: pageActivity, safety: pageSafety }[S.page] || pageHome;
+  app.innerHTML = header() + `<main id="main">${mobileHelp()}${S.note ? `<p class="wrap note" role="status">${esc(S.note)}</p>` : ''}${page()}</main>
+    <footer class="wrap foot"><span>Latch runs on X Layer. Every trade is decided by TapeOut circuit #${CID2}${C.circuitId ? ` (classic vaults: #${C.circuitId})` : ''}.</span><span>${HAS2 ? link(C.factory2, 'address', 'Vault factory') + ' · ' : ''}<a href="${C.repo}" target="_blank" rel="noopener">GitHub</a></span></footer>` + dialogView();
   if (focus) document.getElementById(focus)?.focus();
-  if (S.dialog && !focus) document.getElementById('dg-v')?.focus();
+  if (S.dialog && !focus) document.querySelector('.sheet input, .sheet select')?.focus();
 }
 
-/* ---------------------------------------------------------------- actions */
-function readWizardForm() {
-  const w = S.wizard; const g = (id) => document.getElementById(id);
-  for (const k of ['perBuy', 'price', 'perDay', 'every', 'savings', 'botAddr', 'deposit']) if (g('f-' + k)) w[k] = g('f-' + k).value.trim();
-  if (g('f-ownBot')) w.ownBot = g('f-ownBot').checked;
+/* ================================================================ routing */
+
+function route() {
+  const h = location.hash.replace(/^#\/?/, '');
+  const [p, q] = h.split('?');
+  const page = PAGES.some(([id]) => id === p) ? p : 'home';
+  const changed = page !== S.page;
+  S.page = page; S.error = '';
+  if (page === 'create' && (q === 'buy' || q === 'sell')) { S.c = newCreate(q === 'buy' ? 0 : 1); history.replaceState(null, '', '#/create'); }
+  else if (page === 'create' && (!S.c || S.c.step === 4) && changed) S.c = newCreate(null);
+  render();
+  if (changed) window.scrollTo(0, 0);
 }
-function validate(w) {
-  if (!(Number(w.perBuy) >= 1)) return 'Amount per buy must be at least 1 USDT0.';
-  if (!(Number(w.price) > 0)) return 'Enter a price above 0.';
-  if (w.strategy === 'dip' && !(Number(w.perDay) >= 1)) return 'Most buys per day must be at least 1.';
-  if (!isAddress(w.savings)) return 'The "Send the OKB to" address is not valid.';
-  if (w.ownBot && !isAddress(w.botAddr)) return 'Your bot address is not valid.';
+window.addEventListener('hashchange', route);
+
+/* ================================================================ actions */
+
+function readCreateForm() {
+  const c = S.c; if (!c) return;
+  document.querySelectorAll('[data-c]').forEach((el) => { c[el.dataset.c] = el.type === 'checkbox' ? el.checked : el.value.trim(); });
+}
+function validateCreate(c) {
+  const dec = c.dir === 0 ? 6 : 18;
+  let base, perTx, daily;
+  try { base = parseUnits(c.base || '0', dec); perTx = parseUnits(c.perTx || '0', dec); daily = parseUnits(c.daily || '0', dec); } catch { return 'Check the amounts: use numbers only.'; }
+  const min = c.dir === 0 ? S.mins.buy : S.mins.sell;
+  if (base < min) return `The base amount must be at least ${c.dir === 0 ? usd(min) + ' USDT0' : okb(min, 4) + ' OKB'}.`;
+  if (perTx < base) return 'Most per trade must be at least the base amount.';
+  if (daily < perTx) return 'Most per day must be at least the most per trade.';
+  if (!(Number(c.ref) > 0)) return 'Enter a reference price above 0.';
+  if (!(Number(c.limit) > 0)) return `Enter a ${c.dir === 0 ? 'ceiling' : 'floor'} price above 0.`;
+  if (!isAddress(c.savings)) return 'The "Send to" address is not valid.';
+  if (S.treasury && c.savings.toLowerCase() === S.treasury.toLowerCase()) return 'That wallet is Latch’s fee wallet. Choose another wallet to receive the output.';
+  if (c.ownBot && !isAddress(c.botAddr)) return 'Your bot address is not valid.';
   return '';
 }
 function openDialog(d) { S.error = ''; S.dialog = d; render(); }
+const dlg = (id) => document.getElementById('dg-' + id)?.value?.trim();
 
 async function runDialog() {
   const g = S.dialog; if (!g) return;
-  const raw = document.getElementById('dg-v')?.value?.trim();
-  let r = null;
+  const d = g.d; let r = null;
   try {
-    if (g.kind === 'add') r = await send('Adding USDT0', { address: C.usdt, abi: ERC20, functionName: 'transfer', args: [g.vault, parseUnits(raw || '0', 6)] });
-    if (g.kind === 'price') r = await send('Changing price', { address: g.vault, abi: VAULT, functionName: 'setMaxPrice', args: [parseUnits(raw || '0', 6)] });
-    if (g.kind === 'every') r = await send('Changing spacing', { address: g.vault, abi: VAULT, functionName: 'setMinInterval', args: [BigInt(Math.round(Number(raw || 0) * 3600))] });
-    if (g.kind === 'withdraw') r = await send('Withdrawing', { address: g.vault, abi: VAULT, functionName: 'withdraw', args: [C.usdt, S.account, MAX] });
+    if (g.kind === 'add') r = await send('Adding funds', { address: d.version === 2 ? d.tokenIn : C.usdt, abi: ERC20, functionName: 'transfer', args: [d.address, parseUnits(dlg('amt') || '0', d.version === 2 && d.dir === 1 ? 18 : 6)] });
+    if (g.kind === 'strategy') {
+      const dec = d.dir === 0 ? 6 : 18;
+      const base = parseUnits(dlg('base') || '0', dec);
+      if (base > d.perTxCap) { S.error = `The base amount can be at most your per-trade limit (${amt(d.perTxCap, d.dir)}).`; return render(); }
+      r = await send('Saving strategy', { address: d.address, abi: VAULT2, functionName: 'setStrategy',
+        args: [base, d.perTxCap, d.dailyCap, parseUnits(dlg('ref') || '0', 6), parseUnits(dlg('limit') || '0', 6), BigInt(dlg('spacing') || '0'), Number(dlg('mode'))] });
+    }
+    if (g.kind === 'withdraw') {
+      if (d.version === 1) r = await send('Withdrawing', { address: d.address, abi: VAULT1, functionName: 'withdraw', args: [C.usdt, S.account, MAX] });
+      else {
+        for (const [t, bal] of [[d.tokenIn, d.balance], [d.tokenOut, d.stuck]]) {
+          if (bal > 0n) { r = await send('Withdrawing', { address: d.address, abi: VAULT2, functionName: 'withdraw', args: [t, S.account, MAX] }); if (!r) break; }
+        }
+      }
+    }
   } catch (e) { S.error = plain(e); render(); return; }
   if (r) { S.dialog = null; await refresh(); }
 }
 
 async function act(a, el) {
   const card = el.closest('[data-v]'); const v = card?.dataset.v;
-  const d = S.vaults.find((x) => x.address === v);
+  const d = [...S.v2, ...S.v1].find((x) => x.address === v);
   S.error = '';
+  const c = S.c;
   switch (a) {
     case 'connect': return connect();
     case 'refresh': return refresh();
-    case 'disconnect': {
-      // OKX Connect sessions are ended for real; browser-extension wallets keep the site in their own
-      // "connected sites" list, which only the wallet can clear.
-      try { if (okxConnectP) { const okx = await okxConnectP; if (okx.connected()) await okx.disconnect(); } } catch { /* already gone */ }
-      S.account = null; S.provider = null; S.vaults = []; S.wizard = null; S.dialog = null;
-      S.note = 'Disconnected. To remove Latch completely, also remove it from the connected sites list in your wallet.';
-      render();
-      return refresh();
-    }
+    case 'disconnect': await disconnect(); S.v1 = []; S.v2 = []; S.dialog = null; render(); return refresh();
     case 'hideHelp': S.mobileHelp = false; return render();
     case 'copyLink': {
-      try { await navigator.clipboard.writeText(location.href); S.copied = true; }
-      catch { window.prompt('Copy this link:', location.href); }
+      try { await navigator.clipboard.writeText(location.href); S.copied = true; } catch { window.prompt('Copy this link:', location.href); }
       return render();
     }
-    case 'flip': S.chip.bits ^= 1 << Number(el.dataset.bit); S.chip.live = false; return render();
+    /* chip explorer */
+    case 'x': {
+      const k = el.dataset.k; S.x[k] = Number(el.dataset.v); S.x.live = null;
+      if (k === 'dir' && S.x.mode > 3) S.x.mode = 0;
+      return render();
+    }
+    case 'xs': S.x.safety ^= 1 << Number(el.dataset.bit); S.x.live = null; return render();
     case 'askChip': {
-      S.chip.live = 'asking'; render();
+      S.x.live = 'asking'; render();
+      const input = pack(S.x);
       try {
-        const out = await pub.readContract({ address: C.processor, abi: PROC, functionName: 'eval', args: [BigInt(C.circuitId), '0x' + S.chip.bits.toString(16).padStart(2, '0')] });
-        S.chip.live = (parseInt(out.slice(2, 4), 16) & 1) ? 'yes' : 'no';
-      } catch { S.chip.live = 'nothing (no connection)'; }
+        const out = await pub.readContract({ address: C.processor, abi: PROC, functionName: 'eval', args: [BigInt(CID2), '0x' + (input & 0xff).toString(16).padStart(2, '0') + (input >> 8).toString(16).padStart(2, '0')] });
+        const o = parseInt(out.slice(2, 4), 16);
+        S.x.live = o & 1 ? `${S.x.dir === 0 ? 'buy' : 'sell'} ${(o >> 1) & 3}×` : 'wait';
+      } catch { S.x.live = 'no answer (connection)'; }
       return render();
     }
-    case 'wizard': {
-      if (!S.account) { await connect(); if (!S.account) return; }
-      const p = S.price || 80;
-      S.wizard = { step: 0, strategy: '', perBuy: '5', price: (Math.floor(p * 0.9 * 10) / 10).toString(), perDay: '2', every: '604800', savings: S.account, ownBot: false, botAddr: '', deposit: '20' };
-      return render();
+    /* create */
+    case 'cdir': c.dir = Number(el.dataset.v); c.limitsTouched = false; setDefaults(c); return render();
+    case 'cmode': c.mode = Number(el.dataset.v); suggestLimits(c); return render();
+    case 'cback': readCreateForm(); c.step--; return render();
+    case 'cnext': {
+      if (c.step === 0 && !S.account) { await connect(); if (!S.account) return; c.savings = c.savings || S.account; }
+      if (c.step === 2) { readCreateForm(); const e = validateCreate(c); if (e) { S.error = e; return render(); } }
+      if (c.step === 1 && !c.savings && S.account) c.savings = S.account;
+      c.step++; return render();
     }
-    case 'closeWizard': S.wizard = null; return refresh();
-    case 'closeDialog': S.dialog = null; return render();
-    case 'strategy': S.wizard.strategy = el.dataset.v; S.wizard.price = el.dataset.v === 'dca' ? String(Math.ceil((S.price || 80) * 1.5)) : (Math.floor((S.price || 80) * 0.9 * 10) / 10).toString(); return render();
-    case 'back': readWizardForm(); S.wizard.step--; return render();
-    case 'next': {
-      if (S.wizard.step === 1) { readWizardForm(); const e = validate(S.wizard); if (e) { S.error = e; return render(); } }
-      S.wizard.step++; return render();
-    }
-    case 'create': {
-      const w = S.wizard; const dip = w.strategy === 'dip';
-      const per = parseUnits(w.perBuy, 6);
-      const daily = dip ? per * BigInt(Math.floor(Number(w.perDay))) : per;
-      const interval = dip ? 0n : BigInt(w.every);
+    case 'ccreate': {
+      const dec = c.dir === 0 ? 6 : 18;
       const r = await send('Creating your vault', {
-        address: C.factory, abi: FACTORY, functionName: 'createVault',
-        args: [getAddress(w.savings), per, daily, parseUnits(w.price, 6), interval, w.ownBot ? getAddress(w.botAddr) : '0x0000000000000000000000000000000000000000']
+        address: C.factory2, abi: FACTORY2, functionName: 'createVault',
+        args: [c.dir, c.mode, getAddress(c.savings), parseUnits(c.base, dec), parseUnits(c.perTx, dec), parseUnits(c.daily, dec),
+          parseUnits(c.ref, 6), parseUnits(c.limit, 6), BigInt(c.spacing), c.ownBot ? getAddress(c.botAddr) : ZERO]
       });
       if (!r) return;
-      const list = await pub.readContract({ address: C.factory, abi: FACTORY, functionName: 'vaultsOf', args: [S.account] });
-      w.created = list[list.length - 1];
-      S.usdtWallet = await pub.readContract({ address: C.usdt, abi: ERC20, functionName: 'balanceOf', args: [S.account] }).catch(() => null);
-      w.step = 3; return render();
+      const list = await pub.readContract({ address: C.factory2, abi: FACTORY2, functionName: 'vaultsOf', args: [S.account] });
+      c.created = list[list.length - 1]; c.step = 4;
+      await readMine(); return render();
     }
-    case 'deposit': {
-      readWizardForm();
-      const amt = parseUnits(S.wizard.deposit || '0', 6);
-      if (amt <= 0n) { S.error = 'Enter an amount above 0.'; return render(); }
-      const r = await send('Adding USDT0', { address: C.usdt, abi: ERC20, functionName: 'transfer', args: [S.wizard.created, amt] });
-      if (r) { S.wizard = null; await refresh(); }
+    case 'cwrap': {
+      readCreateForm();
+      const want = parseUnits(c.deposit || '0', 18);
+      const have = S.wallet?.wokb ?? 0n;
+      const need = want > have ? want - have : 0n;
+      if (need === 0n) { S.note = 'You already hold enough WOKB for this deposit.'; return render(); }
+      const r = await send('Wrapping OKB', { address: C.wokb, abi: WOKB_ABI, functionName: 'deposit', value: need });
+      if (r) { await readMine(); render(); }
       return;
     }
-    case 'addFunds': {
-      const bal = await pub.readContract({ address: C.usdt, abi: ERC20, functionName: 'balanceOf', args: [S.account] }).catch(() => null);
-      return openDialog({ kind: 'add', vault: v, title: 'Add USDT0', field: 'Amount (USDT0)', value: '5', hint: bal != null ? `Your wallet holds ${usd(bal)} USDT0.` : '', ok: 'Add USDT0' });
+    case 'cdeposit': {
+      readCreateForm();
+      const dec = c.dir === 0 ? 6 : 18;
+      let amount; try { amount = parseUnits(c.deposit || '0', dec); } catch { amount = 0n; }
+      if (amount <= 0n) { S.error = 'Enter an amount above 0.'; return render(); }
+      const r = await send('Adding funds', { address: c.dir === 0 ? C.usdt : C.wokb, abi: ERC20, functionName: 'transfer', args: [c.created, amount] });
+      if (r) { S.c = null; location.hash = '#/vaults'; await refresh(); }
+      return;
     }
-    case 'pause': case 'resume': {
-      const r = await send(a === 'pause' ? 'Pausing' : 'Resuming', { address: v, abi: VAULT, functionName: 'setPaused', args: [a === 'pause'] });
+    /* vault actions */
+    case 'vadd': {
+      const two = d.version === 2;
+      const tok = two ? (d.dir === 0 ? 'USDT0' : 'WOKB') : 'USDT0';
+      const bal = two && d.dir === 1 ? S.wallet?.wokb : S.wallet?.usdt;
+      return openDialog({ kind: 'add', d, title: 'Add ' + tok, ok: 'Add ' + tok,
+        fields: [{ id: 'amt', label: `Amount (${tok})`, value: two && d.dir === 1 ? '0.05' : '5', hint: bal != null ? `Your wallet holds ${two && d.dir === 1 ? okb(bal, 4) : usd(bal)} ${tok}.` : '' }] });
+    }
+    case 'vpause': case 'vresume': {
+      const r = await send(a === 'vpause' ? 'Pausing' : 'Resuming', { address: v, abi: d.version === 2 ? VAULT2 : VAULT1, functionName: 'setPaused', args: [a === 'vpause'] });
       if (r) await refresh(); return;
     }
-    case 'setPrice':
-      return openDialog({ kind: 'price', vault: v, title: isDca(d) ? 'Change price ceiling' : 'Change buy price', field: isDca(d) ? 'Never pay more than (USDT0 per OKB)' : 'Buy when OKB is at or below', value: usd(d.maxPrice).replace(/,/g, ''), hint: `OKB is ${S.price ? S.price.toFixed(2) : '…'} now.`, ok: 'Save price' });
-    case 'setEvery':
-      return openDialog({ kind: 'every', vault: v, title: 'Change spacing', field: 'Hours between buys', value: String(Number(d.minInterval) / 3600), hint: '0 = no spacing, 24 = daily, 168 = weekly.', ok: 'Save spacing' });
-    case 'withdraw':
-      return openDialog({ kind: 'withdraw', vault: v, title: 'Withdraw all USDT0', text: `${usd(d.balance)} USDT0 goes back to your wallet ${esc(short(S.account))}. Pause first if you also want buying to stop.`, ok: 'Withdraw all', danger: true });
+    case 'vstrategy': {
+      const dec = d.dir === 0 ? 6 : 18;
+      return openDialog({ kind: 'strategy', d, title: 'Change strategy', ok: 'Save strategy', fields: [
+        { id: 'mode', label: 'Strategy', value: d.mode, options: MODES[d.dir].map((m, i) => [i, `${m.name}: ${m.short}`]) },
+        { id: 'base', label: `Base amount per trade (${d.dir === 0 ? 'USDT0' : 'OKB'})`, value: formatUnits(d.baseAmount, dec), hint: `At most your per-trade limit, ${amt(d.perTxCap, d.dir)}.` },
+        { id: 'ref', label: 'Reference price', value: formatUnits(d.refPrice, 6), hint: `OKB is ${P(S.price)} now.` },
+        { id: 'limit', label: d.dir === 0 ? 'Never pay more than' : 'Never sell under', value: formatUnits(d.limitPrice, 6) },
+        { id: 'spacing', label: 'How often, at most', value: String(d.minInterval), options: [['3600', 'Every hour'], ['86400', 'Every day'], ['604800', 'Every week'], ['0', 'Whenever the chip allows'], ...(['0', '3600', '86400', '604800'].includes(String(d.minInterval)) ? [] : [[String(d.minInterval), spacingText(d.minInterval)]])] }
+      ] });
+    }
+    case 'vwithdraw': {
+      const what = d.version === 2 ? amt(d.balance, d.dir) : usd(d.balance) + ' USDT0';
+      return openDialog({ kind: 'withdraw', d, title: 'Withdraw everything', ok: 'Withdraw all', danger: true,
+        text: `${esc(what)} goes back to your wallet ${esc(short(S.account))}. Pause first if you also want trading to stop.` });
+    }
+    case 'closeDialog': S.dialog = null; return render();
   }
 }
+
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-a]'); if (!el || el.disabled) return;
+  if (el.tagName === 'INPUT') return;
   e.preventDefault(); act(el.dataset.a, el);
 });
-document.addEventListener('submit', (e) => {
-  if (e.target.matches('[data-form=dialog]')) { e.preventDefault(); runDialog(); }
+document.addEventListener('input', (e) => {
+  const el = e.target;
+  if (el.dataset?.a === 'xr') { S.x[el.dataset.k] = Number(el.value); S.x.live = null; render(); document.querySelector('[data-a=xr]')?.focus(); return; }
+  if (el.dataset?.c && S.c) {
+    S.c[el.dataset.c] = el.type === 'checkbox' ? el.checked : el.value.trim();
+    if (el.dataset.c === 'perTx' || el.dataset.c === 'daily') S.c.limitsTouched = true;
+  }
 });
-// Remember which sections are open, so re-rendering (refresh every minute, buys arriving) keeps them open.
-document.addEventListener('toggle', (e) => {
-  const k = e.target?.dataset?.k; if (k) S.open[k] = e.target.open;
-}, true);
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && (S.dialog || S.wizard) && !S.busy) { S.dialog = null; if (S.wizard) { S.wizard = null; refresh(); } else render(); }
+document.addEventListener('change', (e) => {
+  const el = e.target;
+  if (el.dataset?.c === 'base' && S.c) { suggestLimits(S.c); render(); }
 });
+document.addEventListener('submit', (e) => { if (e.target.matches('[data-form=dialog]')) { e.preventDefault(); runDialog(); } });
+document.addEventListener('toggle', (e) => { const k = e.target?.dataset?.k; if (k) S.open[k] = e.target.open; }, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.dialog && !S.busy) { S.dialog = null; render(); } });
 
-render();
+route();
 refresh();
-setInterval(() => { if (!S.busy && !S.wizard && !S.dialog) refresh(); }, 60_000);
+setInterval(() => { if (!S.busy && !S.dialog && S.page !== 'create') refresh(); }, 60_000);
 window.__latch = S; window.__latchRender = render; // for tests and debugging

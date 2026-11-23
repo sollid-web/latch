@@ -1,10 +1,11 @@
-// UI end-to-end test (dev only). Three terminals' worth of steps, from the repo root:
-//   1. node web/e2e-setup.mjs                                   (local chain; prints READY, keep it running)
+// UI end-to-end test (dev only), from the repo root:
+//   1. node web/e2e-setup.mjs                                   (local chain with v1 + v2 contracts; prints READY, keep it running)
 //   2. WEB_CONFIG=<tmp>/latch-ui/web-local.json node scripts/build-web.mjs
 //   3. node web/e2e.mjs                                         (needs Playwright: npm i -g playwright, or PLAYWRIGHT=/path/to/playwright)
 // UI_DIR overrides <tmp>/latch-ui; CHROME=/path/to/chrome picks a browser binary.
-// Drives the real page with a mock OKX wallet: connect → create DCA vault → deposit → hosted bot buys →
-// dashboard shows the buy, rule chip, spacing → pause → withdraw all → mobile layout.
+// Drives the real page with a mock OKX wallet through every page: Home chip → create a Buy vault (smart) →
+// fund → hosted bot buys 3× → create a Take Profit vault (ladder) → fund → bot sells → change strategy →
+// pause → withdraw → The chip, Activity, Safety → phone layout.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,8 +23,7 @@ const { runOnce } = await import('../keeper-worker/src/keeper.js');
 const shots = path.join(UI, 'shots'); fs.mkdirSync(shots, { recursive: true });
 const b = await chromium.launch(process.env.CHROME ? { executablePath: process.env.CHROME } : {});
 const ctx = await b.newContext({ viewport: { width: 1280, height: 900 } });
-// Mock OKX wallet: forwards every request to the local chain, which signs as the user (auto-impersonate).
-await ctx.addInitScript(({ rpc, user }) => {
+await ctx.addInitScript(({ rpc, user }) => { // mock OKX wallet: the local chain signs as the user (auto-impersonate)
   const call = async (method, params) => {
     const r = await fetch(rpc, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
     const j = await r.json(); if (j.error) { const e = new Error(j.error.message); e.code = j.error.code; e.data = j.error.data; throw e; } return j.result;
@@ -39,77 +39,106 @@ await ctx.addInitScript(({ rpc, user }) => {
     },
     on() {}
   };
-  window.confirm = () => true;
-  window.prompt = (q, d) => (/How much/.test(q) ? '5' : /hours/.test(q) ? '24' : d);
 }, { rpc: cfg.rpc[0], user: cfg.user });
 const page = await ctx.newPage();
-const ok = (n, c) => { console.log((c ? 'PASS ' : 'FAIL ') + n); if (!c) process.exitCode = 1; };
+const ok = (n, c, extra) => { console.log((c ? 'PASS ' : 'FAIL ') + n + (c || !extra ? '' : '  → ' + String(extra).slice(0, 300))); if (!c) process.exitCode = 1; };
 const errs = []; page.on('pageerror', (e) => errs.push(String(e)));
-await page.goto(pathToFileURL(path.join(R, 'public/index.html')).href); await page.waitForTimeout(1500);
-await page.screenshot({ path: shots + '/1-landing.png' });
-await page.click('.pin >> nth=3'); await page.waitForTimeout(200);
-ok('flipping a rule makes the chip block', /Blocked/.test(await page.evaluate(() => document.querySelector('.verdict').innerText)));
+const txt = () => page.evaluate(() => document.querySelector('main').innerText);
+const url = pathToFileURL(path.join(R, 'public/index.html')).href;
+const go = async (h, wait = 1200) => { await page.evaluate((x) => { location.hash = x; }, h); await page.waitForTimeout(wait); };
+const botEnv = { KEEPER_PRIVATE_KEY: '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d', RPC_URL: cfg.rpc[0], FACTORY_ADDRESS: cfg.factory, FACTORY2_ADDRESS: cfg.factory2, CHAIN_ID: '196' };
+const P = (x) => [{ venue: 'A', ok: true, price: x }, { venue: 'B', ok: true, price: x + 0.1 }];
+const verdict = () => page.evaluate(() => document.querySelector('.verdict').innerText);
+
+/* ---- Home + chip ---- */
+await page.goto(url); await page.waitForTimeout(2000);
+await page.screenshot({ path: shots + '/1-home.png', fullPage: true });
+ok('home: headline + two jobs', /Buy OKB on dips\. Take profit on rises/.test(await txt()) && /Two jobs, one vault each/.test(await txt()));
+ok('home chip: smart, 10–15% dip, calm → Buy 2×', /Buy 2×/.test(await verdict()), await verdict());
 await page.click('[data-a=askChip]'); await page.waitForTimeout(1500);
-ok('real chip on chain agrees (no)', /Chain says: no/.test(await page.evaluate(() => document.querySelector('.verdict').innerText)));
-await page.screenshot({ path: shots + '/1b-chip-blocked.png' });
-await page.click('.pin >> nth=3'); await page.waitForTimeout(200);
-const txt = () => page.evaluate(() => document.body.innerText);
-await page.click('text=Connect wallet'); await page.waitForTimeout(1500);
-ok('connected and sees empty dashboard', /No vault yet/.test(await txt()));
-await page.click('.hero [data-a=wizard]'); await page.waitForTimeout(300);
-await page.click('.sheet [data-v=dca]'); await page.click('.sheet [data-a=next]');
-await page.fill('#f-perBuy', '2'); await page.selectOption('#f-every', '86400'); await page.fill('#f-price', '150');
-await page.screenshot({ path: shots + '/2-settings.png' });
-await page.click('.sheet [data-a=next]'); await page.waitForTimeout(200);
-ok('review sentence in plain words', /buys 2 USDT0 of OKB every day/.test(await txt()));
-await page.screenshot({ path: shots + '/3-review.png' });
-await page.click('[data-a=create]'); await page.waitForTimeout(4000);
-ok('vault created, deposit step shown', /Your vault is live/.test(await txt()));
-await page.fill('#f-deposit', '10'); await page.click('[data-a=deposit]'); await page.waitForTimeout(5000);
-const t1 = await txt();
-ok('dashboard shows the vault with 10 USDT0', /Auto-DCA/.test(t1) && /10\.00/.test(t1));
-ok('ready to buy (all checks pass)', /Buying/.test(t1));
-await page.screenshot({ path: shots + '/4-dashboard-ready.png', fullPage: true });
-// hosted bot runs
-const r = await runOnce({ KEEPER_PRIVATE_KEY: '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d', RPC_URL: cfg.rpc[0], FACTORY_ADDRESS: cfg.factory }, { send: true, wait: true, prices: [{ venue: 'a', ok: true, price: 78.5 }, { venue: 'b', ok: true, price: 78.4 }] });
-ok('hosted bot bought', (r.vaults || []).some((v) => v.action === 'bought'));
-await page.click('[data-a=refresh] >> nth=0'); await page.waitForTimeout(4000);
-await page.evaluate(() => document.querySelectorAll('details').forEach((d) => d.open = true));
-const t2 = await txt();
-ok('dashboard: 1 buy, OKB bought, avg price ~78', /Average price \(before fee\)\s*7[89]\./.test(t2));
-ok('next buy is tomorrow (spacing)', /Next buy in/.test(t2));
-ok('rule chip line shown', /TapeOut circuit #1 says/.test(t2));
-ok('recent buys table shows the buy', /Received/.test(t2) && /WOKB/.test(t2) && !/could not be loaded/.test(t2));
-ok('latest-buys feed shows the buy', /Latest buys on X Layer/.test(t2));
-ok('chip line explains why it says no', /today\u2019s buy is done/.test(t2));
-await page.screenshot({ path: shots + '/5-after-buy.png', fullPage: true });
-await page.click('[data-a=pause]'); await page.waitForTimeout(4000);
-ok('pause works', /Paused/.test(await txt()));
-await page.click('[data-a=withdraw]'); await page.waitForTimeout(300); await page.screenshot({ path: shots + '/5b-withdraw-dialog.png' }); await page.click('.sheet [type=submit]'); await page.waitForTimeout(4000);
-const t3 = await txt();
-ok('withdraw all works (0.00 left)', /USDT0 left\s*0\.00/i.test(t3));
-await page.screenshot({ path: shots + '/6-withdrawn.png', fullPage: true });
-await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(300);
-await page.screenshot({ path: shots + '/7-mobile.png', fullPage: true });
-ok('no page errors', errs.length === 0); if (errs.length) console.log(errs);
-// Phone browser with no wallet: Connect shows the phone steps, and "Open in OKX app" is OKX's https universal link.
-{
-  const m = await b.newContext({ viewport: { width: 390, height: 844 }, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1' });
-  let opened = null, walletApp = null;
-  await m.route('https://web3.okx.com/**', (route) => { opened = route.request().url(); route.abort(); });
-  await m.route('https://web3link.okx.com/**', (route) => { walletApp = route.request().url(); route.abort(); });
-  const mp = await m.newPage();
-  await mp.goto(pathToFileURL(path.join(R, 'public/index.html')).href); await mp.waitForTimeout(1000);
-  const pageUrl = mp.url();
-  await mp.click('text=Connect wallet'); await mp.waitForTimeout(4000);
-  ok('phone: Connect asks the standalone OKX Wallet app (OKX Connect, web3link.okx.com)', !!walletApp && walletApp.startsWith('https://web3link.okx.com/ul/connect'));
-  await mp.goto(pathToFileURL(path.join(R, 'public/index.html')).href); await mp.waitForTimeout(800);
-  await mp.evaluate(() => { window.__latch.mobileHelp = true; window.__latchRender(); }); await mp.waitForTimeout(300);
-  ok('phone: fallback steps with Copy link are available', /Copy link/.test(await mp.evaluate(() => document.body.innerText)));
-  await mp.click('a:has-text("Open in OKX app")'); await mp.waitForTimeout(1500);
-  const inner = opened ? new URL(opened).searchParams.get('deeplink') : null; // okx://wallet/dapp/url?dappUrl=<encoded page>
-  ok('phone: Open in OKX app uses the universal link to this page', !!opened && opened.startsWith('https://web3.okx.com/download?deeplink=')
-    && /^okx:\/\/wallet\/dapp\/url\?dappUrl=/.test(inner || '') && decodeURIComponent(inner.split('dappUrl=')[1] || '') === pageUrl);
-  await m.close();
+ok('real chip on chain agrees (buy 2×)', /Chain says: buy 2×/.test(await verdict()), await verdict());
+await page.click('[data-a=x][data-k=vol][data-v="3"]'); await page.waitForTimeout(200);
+ok('very jumpy → Wait', /^Wait/.test(await verdict()), await verdict());
+await page.click('[data-a=x][data-k=vol][data-v="0"]');
+await page.locator('[data-a=xr]').fill('6'); await page.waitForTimeout(200);
+ok('slider to 30–40% → Buy 3×', /Buy 3×/.test(await verdict()), await verdict());
+
+/* ---- Create a Buy vault (smart, reference 100 → OKB ~21% below → 3×) ---- */
+await page.click('header [data-a=connect]'); await page.waitForTimeout(1500);
+await go('#/create?buy', 600);
+ok('create: Buy preset opens on Strategy', /Buy OKB automatically/.test(await txt()) && /Smart/.test(await txt()));
+await page.screenshot({ path: shots + '/2-create-strategy.png', fullPage: true });
+await page.click('[data-a=cmode][data-v="2"]'); await page.click('[data-a=cnext]'); await page.waitForTimeout(200);
+await page.fill('#c-ref', '100'); await page.fill('#c-base', '2'); await page.locator('#c-base').dispatchEvent('change'); await page.waitForTimeout(200);
+ok('limits suggested from strategy (3 × base = 6)', (await page.inputValue('#c-perTx')) === '6' && (await page.inputValue('#c-daily')) === '6', await page.inputValue('#c-perTx'));
+await page.screenshot({ path: shots + '/3-create-amounts.png', fullPage: true });
+await page.click('[data-a=cnext]'); await page.waitForTimeout(300);
+const review = await txt();
+ok('review sentence in plain English', /Latch buys 2 USDT0 of OKB at most once a day, rising to 4 USDT0 when OKB is 10% or more below 100\.00, 6 USDT0 when OKB is 20% or more below 100\.00/.test(review), review.split('\n').find((l) => /Latch buys/.test(l)));
+await page.screenshot({ path: shots + '/4-create-review.png', fullPage: true });
+await page.click('[data-a=ccreate]'); await page.waitForTimeout(2500);
+ok('vault created → Add funds step', /Your vault is live/.test(await txt()), (await txt()).slice(0, 300));
+await page.fill('#c-deposit', '20'); await page.click('[data-a=cdeposit]'); await page.waitForTimeout(3500);
+ok('after funding: on My vaults with the Buy vault', /My vaults/.test(await txt()) && /Buy OKB · Smart/.test(await txt()), (await txt()).slice(0, 300));
+ok('My vaults: chip decision shows buy 3×', /buy 3×/.test(await txt()), (await txt()).match(/Decision[^\n]*\n[^\n]*/)?.[0]);
+
+/* ---- Hosted bot trades ---- */
+let r = await runOnce(botEnv, { send: true, wait: true, prices: P(78.5) });
+const row = (x) => r.vaults.find((v) => v.version === 2 && v.action === x);
+ok('bot: Buy vault bought 6 USDT0 (3×)', row('bought')?.amount === '6000000' && row('bought')?.multiplier === 3, JSON.stringify(r.vaults));
+
+/* ---- Create a Take Profit vault (ladder, reference 70 → OKB ~12% above → 1×) ---- */
+await go('#/create?sell', 600);
+await page.click('[data-a=cmode][data-v="3"]'); await page.click('[data-a=cnext]'); await page.waitForTimeout(200);
+await page.fill('#c-ref', '70'); await page.fill('#c-limit', '72');
+await page.click('[data-a=cnext]'); await page.waitForTimeout(300);
+ok('take profit review: ladder sentence', /Latch sells at most once a day, only on a move: 0\.02 OKB when OKB is 5% or more above 70\.00/.test(await txt()), (await txt()).split('\n').find((l) => /Latch sells/.test(l)));
+await page.click('[data-a=ccreate]'); await page.waitForTimeout(2500);
+await page.fill('#c-deposit', '0.1'); await page.click('[data-a=cdeposit]'); await page.waitForTimeout(3500);
+r = await runOnce(botEnv, { send: true, wait: true, prices: P(78.5) });
+ok('bot: Take Profit vault sold 0.02 OKB (ladder 1×)', r.vaults.some((v) => v.version === 2 && v.kind === 'take-profit' && v.action === 'sold' && v.amount === '20000000000000000'), JSON.stringify(r.vaults));
+
+/* ---- My vaults after trades ---- */
+await page.click('main [data-a=refresh]'); await page.waitForTimeout(6000);
+const mv = await txt();
+ok('My vaults: Buy vault shows OKB bought and 1 trade', /Buy OKB · Smart[\s\S]*OKB bought\s*\n?\s*0\.0[0-9]+/.test(mv), mv.slice(0, 500));
+ok('My vaults: Take profit card present', /Take profit · Ladder/.test(mv));
+ok('My vaults: classic vaults not shown when none', !/Classic vaults/.test(mv));
+await page.click('.vault[data-ver="2"] >> nth=0 >> summary >> nth=1'); await page.waitForTimeout(1500);
+ok('recent trades table shows 3×', /3×/.test(await page.evaluate(() => document.querySelector('.vault[data-ver="2"] .hist')?.innerText || '')));
+await page.screenshot({ path: shots + '/5-vaults.png', fullPage: true });
+// change strategy on the Take Profit vault → Steady
+await page.click('.vault[data-ver="2"] >> nth=1 >> [data-a=vstrategy]'); await page.waitForTimeout(300);
+await page.selectOption('#dg-mode', '0'); await page.click('.sheet [type=submit]'); await page.waitForTimeout(3000);
+ok('strategy changed to Steady', /Take profit · Steady/.test(await txt()), (await txt()).slice(0, 400));
+// pause the Buy vault, then withdraw all
+await page.click('.vault[data-ver="2"] >> nth=0 >> [data-a=vpause]'); await page.waitForTimeout(3000);
+ok('Buy vault paused', /Paused/.test(await page.evaluate(() => document.querySelector('.vault[data-ver="2"] .status').innerText)));
+await page.click('.vault[data-ver="2"] >> nth=0 >> [data-a=vwithdraw]'); await page.waitForTimeout(300);
+await page.click('.sheet [type=submit]'); await page.waitForTimeout(3500);
+ok('withdraw all → USDT0 left 0.00', /USDT0 left\s*\n?\s*0\.00/.test(await txt()), (await txt()).slice(0, 400));
+
+/* ---- The chip, Activity, Safety ---- */
+await go('#/chip', 800);
+ok('chip page: table of every answer', /Everything the chip can answer/.test(await txt()) && (await page.locator('table.grid').count()) === 2);
+await page.click('[data-a=xs][data-bit="0"]'); await page.waitForTimeout(200);
+ok('chip page: paused safety bit → Wait', /^Wait/.test(await verdict()) && /safety check failed/i.test(await verdict()));
+await page.screenshot({ path: shots + '/6-chip.png', fullPage: true });
+await go('#/activity', 6000);
+const act = await txt();
+ok('activity: totals + trades with chip sizes', /Trades checked by a chip\s*\n?\s*2/.test(act) && /chip: 3×/.test(act) && /chip: 1×/.test(act), act.slice(0, 600));
+await page.screenshot({ path: shots + '/7-activity.png', fullPage: true });
+await go('#/safety', 500);
+ok('safety page', /What a stolen bot key could do/.test(await txt()) && /Questions/.test(await txt()));
+ok('no page errors', errs.length === 0, errs.join(' | '));
+
+/* ---- Phone layout ---- */
+await page.setViewportSize({ width: 390, height: 844 });
+for (const [h, n] of [['#/', 'm-home'], ['#/create?buy', 'm-create'], ['#/vaults', 'm-vaults'], ['#/chip', 'm-chip']]) {
+  await go(h, h === '#/vaults' ? 4000 : 800);
+  await page.screenshot({ path: `${shots}/${n}.png`, fullPage: true });
+  const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  ok(`phone ${h}: no sideways scrolling`, over <= 1, over);
 }
 await b.close();
+console.log(process.exitCode ? '\nSOME FAILED' : '\nALL PASS');
