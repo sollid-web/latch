@@ -86,7 +86,14 @@ export const SOURCES = [
   { venue: 'KuCoin', get: async () => priceFrom(await getJson('https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=OKB-USDT'), (j) => j.data.price) },
   { venue: 'Bitget', get: async () => priceFrom(await getJson('https://api.bitget.com/api/v2/spot/market/tickers?symbol=OKBUSDT'), (j) => j.data[0].lastPr) },
   { venue: 'MEXC', get: async () => priceFrom(await getJson('https://api.mexc.com/api/v3/ticker/price?symbol=OKBUSDT'), (j) => j.price) },
-  { venue: 'HTX', get: async () => priceFrom(await getJson('https://api.huobi.pro/market/detail/merged?symbol=okbusdt'), (j) => j.tick.close) }
+  { venue: 'HTX', get: async () => priceFrom(await getJson('https://api.huobi.pro/market/detail/merged?symbol=okbusdt'), (j) => j.tick.close) },
+  // More independent answers from Cloudflare's network (several big exchanges refuse or rate-limit it):
+  { venue: 'CoinPaprika', get: async () => priceFrom(await getJson('https://api.coinpaprika.com/v1/tickers/okb-okb'), (j) => j.quotes.USD.price) },
+  { venue: 'CryptoCompare', get: async () => priceFrom(await getJson('https://min-api.cryptocompare.com/data/price?fsym=OKB&tsyms=USDT'), (j) => j.USDT) },
+  { venue: 'BitMart', get: async () => priceFrom(await getJson('https://api-cloud.bitmart.com/spot/quotation/v3/ticker?symbol=OKB_USDT'), (j) => j.data.last) },
+  { venue: 'LBank', get: async () => priceFrom(await getJson('https://api.lbkex.com/v2/ticker/24hr.do?symbol=okb_usdt'), (j) => j.data[0].ticker.latest) },
+  { venue: 'XT', get: async () => priceFrom(await getJson('https://sapi.xt.com/v4/public/ticker/price?symbol=okb_usdt'), (j) => j.result[0].p) },
+  { venue: 'CoinEx', get: async () => priceFrom(await getJson('https://api.coinex.com/v2/spot/ticker?market=OKBUSDT'), (j) => j.data[0].last) }
 ];
 
 export async function fetchPrices(sources = SOURCES) {
