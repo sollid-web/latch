@@ -92,4 +92,19 @@ await page.screenshot({ path: shots + '/6-withdrawn.png', fullPage: true });
 await page.setViewportSize({ width: 390, height: 844 }); await page.waitForTimeout(300);
 await page.screenshot({ path: shots + '/7-mobile.png', fullPage: true });
 ok('no page errors', errs.length === 0); if (errs.length) console.log(errs);
+// Phone browser with no wallet: Connect must hand the page to the OKX app through OKX's https universal link.
+{
+  const m = await b.newContext({ viewport: { width: 390, height: 844 }, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1' });
+  let opened = null;
+  await m.route('https://web3.okx.com/**', (route) => { opened = route.request().url(); route.abort(); });
+  const mp = await m.newPage();
+  await mp.goto(pathToFileURL(path.join(R, 'public/index.html')).href); await mp.waitForTimeout(1000);
+  const pageUrl = mp.url();
+  await mp.click('text=Connect wallet'); await mp.waitForTimeout(1500);
+  const inner = opened ? new URL(opened).searchParams.get('deeplink') : null; // okx://wallet/dapp/url?dappUrl=<encoded page>
+  ok('phone: Connect opens the OKX app link at once', !!opened && opened.startsWith('https://web3.okx.com/download?deeplink=') && /^okx:\/\/wallet\/dapp\/url\?dappUrl=/.test(inner || ''));
+  ok('phone: the link carries this page', !!inner && decodeURIComponent(inner.split('dappUrl=')[1] || '') === pageUrl);
+  await mp.goto('about:blank');
+  await m.close();
+}
 await b.close();

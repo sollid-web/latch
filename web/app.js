@@ -96,19 +96,29 @@ function findWallet() {
 }
 const isMobile = () => /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
 
+/** OKX's App Universal Link: an https link the phone hands to the installed OKX app, which opens this
+ *  page in its DApp browser (where the wallet is injected); without the app it shows OKX's download page.
+ *  A bare okx:// link is often ignored silently by phone browsers, so it is only the inner part. */
+function okxAppLink(url = location.href) {
+  const inner = 'okx://wallet/dapp/url?dappUrl=' + encodeURIComponent(url);
+  return 'https://web3.okx.com/download?deeplink=' + encodeURIComponent(inner);
+}
+
 async function connect() {
   let w = findWallet();
+  if (!w && isMobile()) {
+    // Phone browser without a wallet: leave for the OKX app NOW. Waiting first (as on desktop) loses the
+    // tap, and phone browsers block app-opening redirects that do not come straight from a tap.
+    S.note = 'Opening Latch inside the OKX Wallet app… If nothing happens, tap “Open in OKX Wallet”.';
+    S.appLink = true;
+    render();
+    location.href = okxAppLink();
+    return;
+  }
   if (!w) { await new Promise((r) => setTimeout(r, 900)); w = findWallet(); }
   if (!w) {
-    if (isMobile()) {
-      S.note = 'Opening Latch inside the OKX Wallet app…';
-      render();
-      location.href = 'okx://wallet/dapp/url?dappUrl=' + encodeURIComponent(location.href);
-      setTimeout(() => { S.note = 'No wallet in this browser. Install OKX Wallet, then open this page from its Discover tab.'; render(); }, 2500);
-    } else {
-      S.note = 'No wallet found. Install the OKX Wallet browser extension, then reload this page.';
-      render();
-    }
+    S.note = 'No wallet found. Install the OKX Wallet browser extension, then reload this page.';
+    render();
     return;
   }
   S.provider = w.p; S.walletName = w.name; S.note = '';
@@ -613,7 +623,7 @@ function info() {
 function render() {
   const app = document.getElementById('app');
   const focus = document.activeElement?.id;
-  app.innerHTML = header() + `<main>${hero()}${S.note ? `<p class="wrap note" role="status">${esc(S.note)}</p>` : ''}${dashboard()}${feedView()}${info()}</main>
+  app.innerHTML = header() + `<main>${hero()}${S.note ? `<p class="wrap note" role="status">${esc(S.note)}${S.appLink ? ` <a class="btn primary sm" href="${esc(okxAppLink())}" rel="noopener">Open in OKX Wallet</a>` : ''}</p>` : ''}${dashboard()}${feedView()}${info()}</main>
     <footer class="wrap foot"><span>Latch runs on X Layer and checks every buy with TapeOut circuit #${C.circuitId}.</span><span>${link(C.factory, 'address', 'Factory contract')} · <a href="${C.repo}" target="_blank" rel="noopener">GitHub</a></span></footer>` + wizardView() + dialogView();
   if (focus) document.getElementById(focus)?.focus();
   if (S.dialog && !focus) document.getElementById('dg-v')?.focus();

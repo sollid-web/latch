@@ -130,7 +130,7 @@ budgets; only the circuit and the action change.
 | Independent review #1 (LatchSwap v1), by a separate AI agent | 0 Critical/High; 1 Medium + 4 Low — all fixed or documented: `audit/swap/INDEPENDENT_REVIEW.md` |
 | Independent review #2 (factory + DCA), by a separate AI agent | 0 Critical; 1 High, 2 Medium, Lows — all fixed: `audit/swap/INDEPENDENT_REVIEW_V3.md` (its `factory.review.test.mjs` records the pre-fix behaviour; the fixes are tested in `swap.test.mjs`) |
 | Hosted bot (`keeper-worker/test/local.mjs`) | 19 tests (16 end-to-end on real contracts: DCA, dip, divergence guard, pause, rotation, stolen key; 3 on price-source answers) |
-| Website (`web/e2e.mjs`) | 17 browser checks with a wallet: connect → create → fund → bot buys → dashboard, recent buys and feed → pause → withdraw |
+| Website (`web/e2e.mjs`) | 19 browser checks with a wallet: connect → create → fund → bot buys → dashboard, recent buys and feed → pause → withdraw; on a phone browser, Connect opens the OKX app |
 | Mainnet-fork rehearsal (`scripts/preflight-factory.sh`) | Full lifecycle against the real pool, tokens and circuit before any mainnet deploy |
 
 **Known limits (honest):** the pool is the price source; a pool held at a manipulated but steady price for

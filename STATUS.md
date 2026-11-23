@@ -46,7 +46,7 @@ Config files: `deployments/web-config.json`, `deployments/xlayer-latch.json`, `k
   more), homepage numbers no longer wait for logs, WOKB / fee / AI-review wording, old v1 page + `src/` + `server/`
   removed, LICENSE added, bot price parsing gives clear reasons, broken audit suites and e2e made runnable.
 - **Pending by builder:** merge that branch into `main`, then `npm run deploy` (site) and
-  `cd keeper-worker && npx wrangler deploy` (bot). Phone wallet link (`web/app.js`, `connect()`) still to set.
+  `cd keeper-worker && npx wrangler deploy` (bot). Phone Connect now opens the OKX app via OKX's https universal link (test on a real phone).
 
 ## Gaps to close before submission
 Circuit #1 is 13 NAND and, in a real buy, always receives 0x7e (Solidity rejects first), so the chip never
