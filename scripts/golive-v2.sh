@@ -33,8 +33,9 @@ echo "owner $OWNER · hosted bot $BOT · treasury $TREASURY · pool $POOL"
 step "1. Tape out circuit #2 (dry run first)"
 ( cd keeper && [ -d node_modules ] || npm install --silent ) >/dev/null
 if [ ! -f keeper/tapeout2-state.json ] || ! grep -q circuitId keeper/tapeout2-state.json; then
-  ( cd keeper && node tapeout2.mjs ) || fail "dry run failed — send this output to Claude"
-  yes_or_stop "This mints the NAND gates (0.01 BEM) and tapes out circuit #2 (0.0013 OKB) on mainnet."
+  DRY=$(cd keeper && node tapeout2.mjs 2>&1) || { echo "$DRY"; fail "dry run failed — send this output to Claude"; }
+  echo "$DRY"
+  echo "$DRY" | grep -q "already on chain" || yes_or_stop "This mints the NAND gates (0.01 BEM) and tapes out circuit #2 (0.0013 OKB) on mainnet."
 fi
 TOUT=$(cd keeper && SEND=1 node tapeout2.mjs 2>&1) || { echo "$TOUT"; fail "tapeout stopped — run the same command again to resume, or send this to Claude"; }
 echo "$TOUT"
