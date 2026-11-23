@@ -20,3 +20,4 @@ public/
 .preflight-factory-ok
 .preflight-v2-ok
 keeper/tapeout2-state.json
+.circuit2-verified

@@ -42,8 +42,10 @@ echo "$TOUT"
 CID=$(echo "$TOUT" | awk -F= '/^CIRCUIT2_ID=/{print $2}'); [ -n "$CID" ] || fail "no circuit id"
 
 step "2. Asking mainnet about all 65,536 inputs of circuit #$CID (read-only, a few minutes)"
-BATCH="${BATCH:-100}" node scripts/verify-circuit2.mjs "$RPC" "$PROCESSOR" "$CID" | tail -n 2
-BATCH="${BATCH:-100}" node scripts/verify-circuit2.mjs "$RPC" "$PROCESSOR" "$CID" >/dev/null 2>&1 || fail "circuit #$CID does not match the rules on mainnet — do NOT deploy; send this to Claude"
+if [ "$(cat .circuit2-verified 2>/dev/null)" = "$CID" ]; then echo "already checked on mainnet earlier: CIRCUIT OK"; else
+  node scripts/verify-circuit2.mjs "$RPC" "$PROCESSOR" "$CID" || fail "circuit #$CID does not match the rules on mainnet (or the RPC gave up) — do NOT deploy; send this to Claude"
+  echo "$CID" > .circuit2-verified
+fi
 
 if [ -n "${FACTORY2:-}" ]; then
   FAC="$FACTORY2"; step "Resuming with the already-deployed factory $FAC"
