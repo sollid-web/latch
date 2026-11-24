@@ -1,0 +1,5 @@
+{
+  "name": "latch-plugin",
+  "version": "0.1.0",
+  "description": "Latch on X Layer: buy OKB on dips or take profit on rises from a vault you control; a TapeOut circuit on chain sizes every trade"
+}
