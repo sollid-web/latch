@@ -13,5 +13,11 @@
   "circuitId": 1,
   "repo": "https://github.com/sollid-web/latch",
   "factory2": "0x4Af276338A81DA70e5dA4108FA0A7F6d294381b8",
-  "circuit2Id": 2
+  "circuit2Id": 2,
+  "deweb": {
+    "name": "2.2.435.tape",
+    "url": "https://2-2-435.tapekit.org/",
+    "container": "0x4Cc91cCC7491Eb3eD12bDE9851C9396aD9efC97a",
+    "sha256": "0xd6189211c71638c632c60cda81ef118cc50142e6ddfa3dbcaa68162008c14e4c"
+  }
 }
