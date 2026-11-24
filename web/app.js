@@ -13,7 +13,8 @@ const CID2 = C.circuit2Id ?? 2;
 Object.assign(S, {
   net: null, v1: [], v2: [], hist: {}, feed: null, loading: false, refreshing: false, feedBusy: false,
   c: null, dialog: null, mins: { buy: U6, sell: 10n ** 16n },
-  x: { depth: 3, vol: 0, mode: 2, dir: 0, safety: SAFE, live: null } // chip explorer input
+  x: { depth: 3, vol: 0, mode: 2, dir: 0, safety: SAFE, live: null }, // chip explorer input
+  t: { dir: 0, mode: 2, base: '2', ref: '', limit: '', mkt: null, live: null } // Try it (no wallet)
 });
 
 /* ================================================================ data */
@@ -40,6 +41,21 @@ async function readMarket() {
       S.treasury = t; S.hostedKeeper = k; S.mins = { buy: mb, sell: ms };
     } catch { /* later */ }
   }
+}
+
+/** Live market exactly as a vault sees it: Uniswap's 30-minute average and how far the live price is from it. */
+async function readLive() {
+  const [s0, t0, obs] = await Promise.all([
+    retry(() => pub.readContract({ address: C.pool, abi: POOL, functionName: 'slot0' })),
+    retry(() => pub.readContract({ address: C.pool, abi: POOL, functionName: 'token0' })),
+    retry(() => pub.readContract({ address: C.pool, abi: POOL, functionName: 'observe', args: [[1800, 0]] }))
+  ]);
+  const d = obs[0][1] - obs[0][0];
+  let avgTick = Number(d / 1800n); if (d < 0n && d % 1800n !== 0n) avgTick--;
+  const usdtIs0 = t0.toLowerCase() === C.usdt.toLowerCase();
+  const px = (tick) => { const raw = Math.pow(1.0001, tick); return usdtIs0 ? 1e12 / raw : raw * 1e12; };
+  const spot = Number(s0[1]);
+  return { avg: px(avgTick), spot: px(spot), gap: Math.abs(spot - avgTick), at: Date.now() };
 }
 
 /** Network totals across every vault, v1 and v2 (read from chain). */
@@ -143,7 +159,7 @@ hooks(() => render(), () => refresh());
 
 /* ================================================================ shared bits */
 
-const PAGES = [['home', 'Home'], ['create', 'Create'], ['vaults', 'My vaults'], ['chip', 'The chip'], ['activity', 'Activity'], ['safety', 'Safety']];
+const PAGES = [['home', 'Home'], ['try', 'Try it'], ['create', 'Create'], ['vaults', 'My vaults'], ['chip', 'The chip'], ['activity', 'Activity'], ['safety', 'Safety']];
 const LOGO = `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 3v4M12 3v4M16 3v4M8 17v4M12 17v4M16 17v4M3 8h4M3 12h4M3 16h4M17 8h4M17 12h4M17 16h4" stroke="currentColor" stroke-width="1.6"/><rect x="8.5" y="8.5" width="7" height="7" rx="1" fill="currentColor"/></svg>`;
 const ICON = {
   buy: `<svg viewBox="0 0 48 24" width="48" height="24" aria-hidden="true"><path d="M2 5 L14 8 L22 20 L30 13 L46 6" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="22" cy="20" r="3" fill="currentColor"/></svg>`,
@@ -221,6 +237,7 @@ function pageHome() {
       <h1>Buy OKB on dips. Take profit on rises. A chip decides how much.</h1>
       <p class="lead">Put USDT0 or OKB in a vault only you control. Latch trades for you on Uniswap, and the size of every trade is decided on chain by a 101-gate TapeOut circuit: more when the move is bigger, less when the market is jumpy, nothing when your rules say no. The bot can never withdraw, raise your limits or send money anywhere but your wallet.</p>
       <div class="cta-row"><a class="btn primary lg" href="#/create?buy">Buy OKB automatically</a><a class="btn quiet lg" href="#/create?sell">Take profit automatically</a></div>
+      <p class="fine">No wallet yet? <a href="#/try">Try it: see what a vault would do right now</a>.</p>
       <dl class="facts">
         <div><dt>OKB price</dt><dd class="num">${P(S.price)}</dd></div>
         <div><dt>Trades checked by chip</dt><dd class="num">${n ? n.trades : '…'}</dd></div>
@@ -492,6 +509,57 @@ function pageChip() {
   </section>`;
 }
 
+/* ---------- Try it (no wallet) ---------- */
+/** What a vault with these settings would do at this moment, from the live pool and the real chip. */
+function tryDecision(t) {
+  const m = t.mkt; if (!m) return null;
+  const ref = Number(t.ref), limit = Number(t.limit), base = Number(t.base);
+  const depth = depthOf(m.avg, ref, t.dir);
+  const vol = m.gap < 15 ? 0 : m.gap < 35 ? 1 : m.gap < 60 ? 2 : 3;
+  const priceOk = (t.dir === 0 ? m.avg <= limit : m.avg >= limit) && m.gap <= 100;
+  const input = pack({ safety: priceOk ? SAFE : SAFE & ~8, depth, vol, mode: t.mode });
+  return { depth, vol, priceOk, input, ...evalChip(input), base };
+}
+function pageTry() {
+  const t = S.t; const dir = t.dir; const u = dir === 0 ? 'USDT0' : 'OKB';
+  if (!t.ref && S.price) { t.ref = (Math.round(S.price * (dir === 0 ? 1.12 : 0.9) * 10) / 10).toString(); t.limit = (dir === 0 ? Math.ceil(S.price * 1.2) : Math.floor(S.price * 0.85)).toString(); }
+  const r = tryDecision(t); const m = t.mkt;
+  const seg = (k, list, cur) => `<div class="seg" role="radiogroup">${list.map((l, i) => `<button role="radio" aria-checked="${i === cur}" class="${i === cur ? 'on' : ''}" data-a="t" data-k="${k}" data-v="${i}">${esc(l)}</button>`).join('')}</div>`;
+  let verdict = 'Reading the market…', sub = '';
+  if (m && r) {
+    const amtStr = r.allow ? `${trim(r.base * r.k)} ${u}` : '';
+    verdict = r.allow ? `${dir === 0 ? 'Buy' : 'Sell'} ${r.k}× · ${amtStr}` : 'Wait';
+    sub = !r.priceOk ? (dir === 0 ? `OKB's 30-minute average (${P(m.avg)}) is above your ceiling of ${P(Number(t.limit))}.` : `OKB's 30-minute average (${P(m.avg)}) is under your floor of ${P(Number(t.limit))}.`)
+      : !r.allow ? (r.vol === 3 && t.mode >= 2 ? 'The market is very jumpy right now, so this strategy waits.' : `OKB is ${depthWord(r.depth, dir)} (${P(Number(t.ref))}), so this strategy waits.`)
+      : `OKB is ${depthWord(r.depth, dir)} (${P(Number(t.ref))}) and the market is ${VOLS[r.vol]}, so circuit #${CID2} picks ${r.k}× your base amount.`;
+  }
+  return `<section class="wrap block"><h1 class="pg">Try it: what would my vault do right now?</h1>
+    <p class="lead-s">No wallet needed. Pick a job and a strategy, and see what a Latch vault would do at this moment, using the live Uniswap price and the real chip on X Layer.</p>
+    <div class="split try">
+      <div class="form">
+        <div class="ctl-row"><span class="ctl-l">Job</span>${seg('dir', ['Buy OKB', 'Take profit'], dir)}</div>
+        <div class="ctl-row"><span class="ctl-l">Strategy</span>${seg('mode', MODES[dir].map((x) => x.name), t.mode)}</div>
+        <p class="fine">${esc(MODES[dir][t.mode].line)}</p>
+        <label>Base amount per trade (${u})<input id="t-base" data-t="base" type="number" step="any" inputmode="decimal" value="${esc(t.base)}"></label>
+        <label>Reference price<input id="t-ref" data-t="ref" type="number" step="any" inputmode="decimal" value="${esc(t.ref)}"><small>Moves are measured from here.</small></label>
+        <label>${dir === 0 ? 'Never pay more than' : 'Never sell under'}<input id="t-limit" data-t="limit" type="number" step="any" inputmode="decimal" value="${esc(t.limit)}"></label>
+      </div>
+      <div class="chipw ${r?.allow ? 'allow' : 'deny'}">
+        <dl class="facts">
+          <div><dt>30-minute average</dt><dd class="num">${m ? P(m.avg) : '…'}</dd></div>
+          <div><dt>Live price</dt><dd class="num">${m ? P(m.spot) : '…'}</dd></div>
+          <div><dt>Move vs reference</dt><dd>${r ? esc(r.depth === 0 ? 'none' : DEPTHS[r.depth]) : '…'}</dd></div>
+          <div><dt>Market</dt><dd>${r ? esc(VOLS[r.vol]) : '…'}</dd></div>
+        </dl>
+        ${r ? gateGrid(r.gates, true) : ''}
+        <div class="verdict" aria-live="polite"><p class="verdict-word">${esc(verdict)}</p><p class="verdict-sub">${esc(sub)}</p>
+          ${r ? `<p class="die-sub num">chip input 0x${r.input.toString(16).padStart(4, '0')}</p>` : ''}
+          <div class="row gap" style="flex-wrap:wrap"><button class="btn quiet sm" data-a="tAsk">${t.live === 'asking' ? 'Asking the chain…' : t.live ? `Chain says: ${esc(t.live)}` : 'Ask the real chip'}</button><button class="btn quiet sm" data-a="tRefresh">Refresh price</button><button class="btn primary sm" data-a="tCreate">Create this vault</button></div></div>
+        <p class="fine">Assumes your vault is funded, inside its limits and not paused. A real vault re-checks all of this, plus the worst fill price, at the moment of the trade.</p>
+      </div>
+    </div></section>`;
+}
+
 /* ---------- Activity ---------- */
 function histTable(rows) {
   return `<div class="scroll"><table class="hist"><thead><tr><th>Trade</th><th>Paid</th><th>Received</th><th>Size</th><th>Avg price</th><th>Transaction</th></tr></thead><tbody>${rows.map((x) => `<tr>
@@ -565,7 +633,7 @@ function mobileHelp() {
 function render() {
   const app = document.getElementById('app');
   const focus = document.activeElement?.id;
-  const page = { home: pageHome, create: pageCreate, vaults: pageVaults, chip: pageChip, activity: pageActivity, safety: pageSafety }[S.page] || pageHome;
+  const page = { home: pageHome, try: pageTry, create: pageCreate, vaults: pageVaults, chip: pageChip, activity: pageActivity, safety: pageSafety }[S.page] || pageHome;
   app.innerHTML = header() + `<main id="main">${mobileHelp()}${S.note ? `<p class="wrap note" role="status">${esc(S.note)}</p>` : ''}${page()}</main>
     <footer class="wrap foot"><span>${C.onchain ? 'You are on the on-chain copy of Latch, served from X Layer (DeWEB). ' : ''}Latch runs on X Layer. Every trade is decided by TapeOut circuit #${CID2}${C.circuitId ? ` (classic vaults: #${C.circuitId})` : ''}.${!C.onchain && C.deweb ? ` Also on chain: <a href="${esc(C.deweb.url)}" target="_blank" rel="noopener">${esc(C.deweb.name)}</a>.` : ''}</span><span>${HAS2 ? link(C.factory2, 'address', 'Vault factory') + ' · ' : ''}<a href="${C.repo}" target="_blank" rel="noopener">GitHub</a></span></footer>` + dialogView();
   if (focus) document.getElementById(focus)?.focus();
@@ -584,6 +652,7 @@ function route() {
   else if (page === 'create' && (!S.c || S.c.step === 4) && changed) S.c = newCreate(null);
   render();
   if (changed) window.scrollTo(0, 0);
+  if (page === 'try' && (!S.t.mkt || Date.now() - S.t.mkt.at > 60_000)) readLive().then((m) => { S.t.mkt = m; render(); }).catch(() => {});
 }
 window.addEventListener('hashchange', route);
 
@@ -666,6 +735,28 @@ async function act(a, el) {
       } catch { S.x.live = 'no answer (connection)'; }
       return render();
     }
+    /* try it */
+    case 't': {
+      const k = el.dataset.k; const v = Number(el.dataset.v);
+      if (k === 'dir' && v !== S.t.dir) { S.t.dir = v; S.t.ref = ''; S.t.limit = ''; S.t.base = v === 0 ? '2' : '0.02'; }
+      else S.t[k] = v;
+      S.t.live = null; return render();
+    }
+    case 'tRefresh': S.t.mkt = null; render(); try { S.t.mkt = await readLive(); } catch { S.error = 'Could not read the pool right now.'; } return render();
+    case 'tAsk': {
+      const r = tryDecision(S.t); if (!r) return;
+      S.t.live = 'asking'; render();
+      try {
+        const out = await pub.readContract({ address: C.processor, abi: PROC, functionName: 'eval', args: [BigInt(CID2), '0x' + (r.input & 0xff).toString(16).padStart(2, '0') + (r.input >> 8).toString(16).padStart(2, '0')] });
+        const o = parseInt(out.slice(2, 4), 16);
+        S.t.live = o & 1 ? `${S.t.dir === 0 ? 'buy' : 'sell'} ${(o >> 1) & 3}×` : 'wait';
+      } catch { S.t.live = 'no answer (connection)'; }
+      return render();
+    }
+    case 'tCreate': {
+      const t = S.t; S.c = newCreate(t.dir); S.c.mode = t.mode; S.c.base = t.base; S.c.ref = t.ref; S.c.limit = t.limit; S.c.limitsTouched = false; suggestLimits(S.c);
+      location.hash = '#/create'; return;
+    }
     /* create */
     case 'cdir': c.dir = Number(el.dataset.v); c.limitsTouched = false; setDefaults(c); return render();
     case 'cmode': c.mode = Number(el.dataset.v); suggestLimits(c); return render();
@@ -746,6 +837,7 @@ document.addEventListener('click', (e) => {
 document.addEventListener('input', (e) => {
   const el = e.target;
   if (el.dataset?.a === 'xr') { S.x[el.dataset.k] = Number(el.value); S.x.live = null; render(); document.querySelector('[data-a=xr]')?.focus(); return; }
+  if (el.dataset?.t) { S.t[el.dataset.t] = el.value.trim(); S.t.live = null; return; }
   if (el.dataset?.c && S.c) {
     S.c[el.dataset.c] = el.type === 'checkbox' ? el.checked : el.value.trim();
     if (el.dataset.c === 'perTx' || el.dataset.c === 'daily') S.c.limitsTouched = true;
@@ -754,6 +846,7 @@ document.addEventListener('input', (e) => {
 document.addEventListener('change', (e) => {
   const el = e.target;
   if (el.dataset?.c === 'base' && S.c) { suggestLimits(S.c); render(); }
+  if (el.dataset?.t) render(); // Try it: recompute when a field is done
 });
 document.addEventListener('submit', (e) => { if (e.target.matches('[data-form=dialog]')) { e.preventDefault(); runDialog(); } });
 document.addEventListener('toggle', (e) => { const k = e.target?.dataset?.k; if (k) S.open[k] = e.target.open; }, true);

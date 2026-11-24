@@ -88,7 +88,7 @@ export const ERC20 = parseAbi([
   'function transfer(address to, uint256 amount) returns (bool)'
 ]);
 export const WOKB_ABI = parseAbi(['function deposit() payable', 'function withdraw(uint256 wad)']);
-export const POOL = parseAbi(['function slot0() view returns (uint160,int24,uint16,uint16,uint16,uint8,bool)', 'function token0() view returns (address)']);
+export const POOL = parseAbi(['function slot0() view returns (uint160,int24,uint16,uint16,uint16,uint8,bool)', 'function token0() view returns (address)', 'function observe(uint32[] secondsAgos) view returns (int56[] tickCumulatives, uint160[] secondsPerLiquidityCumulativeX128s)']);
 export const PROC = parseAbi(['function eval(uint256 id, bytes inputs) view returns (bytes)']);
 export const BOUGHT = parseAbiItem('event Bought(address indexed keeper, uint256 amountIn, uint256 amountOut, uint256 fee, uint256 twapPrice, uint8 bits)');
 export const TRADED = parseAbiItem('event Traded(address indexed keeper, uint8 direction, uint256 amountIn, uint256 amountOut, uint256 fee, uint256 twapPrice, uint16 inputs, uint8 multiplier)');

@@ -63,6 +63,20 @@ await page.click('[data-a=x][data-k=vol][data-v="0"]');
 await page.locator('[data-a=xr]').fill('6'); await page.waitForTimeout(200);
 ok('slider to 30–40% → Buy 3×', /Buy 3×/.test(await verdict()), await verdict());
 
+/* ---- Try it (no wallet): live pool + real chip ---- */
+await go('#/try', 2500);
+const tv = () => page.evaluate(() => document.querySelector('.try .verdict').innerText);
+ok('try: smart buy with reference 12% above the price → Buy 2× · 4 USDT0', /Buy 2× · 4 USDT0/.test(await tv()), await tv());
+await page.click('[data-a=tAsk]'); await page.waitForTimeout(1500);
+ok('try: real chip agrees', /Chain says: buy 2×/.test(await tv()), await tv());
+await page.click('[data-a=t][data-k=dir][data-v="1"]'); await page.waitForTimeout(300);
+ok('try: take profit with reference 10% under → Sell 2×', /Sell 2× · 0\.04 OKB/.test(await tv()), await tv());
+await page.fill('#t-limit', '90'); await page.locator('#t-limit').dispatchEvent('change'); await page.waitForTimeout(300);
+ok('try: floor above the price → Wait, with the reason', /^Wait/.test(await tv()) && /under your floor/.test(await tv()), await tv());
+await page.screenshot({ path: shots + '/1b-try.png', fullPage: true });
+await page.click('[data-a=tCreate]'); await page.waitForTimeout(500);
+ok('try → Create carries the settings', /Take profit automatically/.test(await txt()), (await txt()).slice(0, 200));
+
 /* ---- Create a Buy vault (smart, reference 100 → OKB ~21% below → 3×) ---- */
 await page.click('header [data-a=connect]'); await page.waitForTimeout(1500);
 await go('#/create?buy', 600);
