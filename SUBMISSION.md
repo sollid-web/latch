@@ -115,7 +115,7 @@ All of it. The repository started on 2026-11-03 and has 78+ commits since:
 - **v2 contracts:**
   - LatchVault (EIP-1167 clones) + LatchFactory2 (live), with Buy and Take Profit, chip-sized trades and every safety rule enforced in Solidity
   - Uniswap V3 TWAP pricing with a live-price check and worst-fill limits
-- **Verified source:** LatchFactory2, the LatchVault template and the classic LatchFactory are verified on Sourcify with an exact match: https://repo.sourcify.dev/196/0x9C647a631fe59813c430D03330C3A4Da21df6428
+- **Verified source:** LatchFactory2, the LatchVault template and the classic LatchFactory are verified on **OKLink** (https://www.oklink.com/xlayer/address/0x9C647a631fe59813c430D03330C3A4Da21df6428#code) and on Sourcify with an exact match (https://repo.sourcify.dev/196/0x9C647a631fe59813c430D03330C3A4Da21df6428)
 - **Verification:**
   - 47 tests on Uniswap's real V3 + SwapRouter02 code
   - Slither
