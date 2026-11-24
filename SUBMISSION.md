@@ -18,7 +18,7 @@ Buy OKB on dips and take profit on rises from a vault only you control. A 101-ga
   - LatchFactory2 `0x4Af276338A81DA70e5dA4108FA0A7F6d294381b8` (v2 vaults: Buy and Take Profit)
   - LatchFactory `0xc700C9865f237612b0bA86408BB4C182D41ABD11` (classic vaults)
   - Uniswap V3 USDT0/WOKB 0.05% pool `0xe3BE6A0137f1b0602Fc1a4841686f43B340a5082`
-- **Access link:** https://latch.tapeguard.workers.dev. Also fully on chain at `[https://2-2-N.tapekit.org/]` (`tape://[2.2.N].tape`), served from circuit #2's own container.
+- **Access link:** https://latch.tapeguard.workers.dev. Also fully on chain at https://2-2-435.tapekit.org/ (`tape://2.2.435.tape`), served from circuit #2's own container.
 - **Repo:** https://github.com/sollid-web/latch
 - **Demo video:** `[YouTube link]`
 
@@ -92,7 +92,7 @@ Only the owner can withdraw (any time, even while paused), pause, change the str
 - **TapeKit-style circuit explorer:** the website runs the same netlist in the browser (101 gates lighting up) and can ask the live processor for any input ("Ask the real chip").
 - **ERC-6551 container + DeWEB + TapeKit:**
   - The whole app is one self-contained HTML file stored in circuit #2's own container through SiteRegistry, so the chip itself is the website's home.
-  - It is bound as `[2.2.N].tape` through DomainBinding and served by TapeKit gateways.
+  - It is bound as `2.2.435.tape` through DomainBinding and served by TapeKit gateways.
   - It passes TapeKit's "100% on-chain" static rule (`scripts/check-onchain.mjs`) and reads only TapeKit's default X Layer nodes.
 - **On-chain data, no database:** the stats, activity and history pages read the factories, vaults and trade events straight from X Layer.
 - **TapeSend:** `[not integrated yet / or: trade notices to the owner's TapeSend inbox, if shipped]`
@@ -142,6 +142,6 @@ All of it. The repository started on 2026-11-03 and has 78+ commits since:
 | 1:35–1:55 | Take profit vault, Ladder, the sentence; a trade showing "Sold 0.02 OKB, chip 1×". | "The same vault in reverse takes profit as OKB rises, more on bigger rises, never under my floor." |
 | 1:55–2:20 | The chip page: flip "Paused", and the verdict becomes "Wait"; "Ask the real chip"; the full table of answers. | "This is the real netlist, running here and on chain. Every possible answer is public and was checked on all 65,536 inputs." |
 | 2:20–2:40 | Safety page: what a stolen bot key could do. Pause, then Withdraw all. | "If the bot key is stolen, the worst case is a trade I already allowed. I can pause or withdraw any time." |
-| 2:40–3:00 | The on-chain copy at `[2-2-N].tapekit.org` with TapeKit's badge. Footer: "served from X Layer (DeWEB)". | "The app itself lives in the chip's container on X Layer. Latch: automation you don't have to trust." |
+| 2:40–3:00 | The on-chain copy at `2-2-435.tapekit.org` with TapeKit's badge. Footer: "served from X Layer (DeWEB)". | "The app itself lives in the chip's container on X Layer. Latch: automation you don't have to trust." |
 
 Recording notes: fund the demo vaults beforehand so the 3× buy and the take-profit sale happen on camera, or cut to the trade a minute later. Keep the phone and the desktop on the same wallet. Speak slowly. Captions help judges who watch muted.
