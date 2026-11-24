@@ -22,6 +22,7 @@ withdraw, raise a limit, or send money anywhere but the owner's wallet.
 | **TapeOut features used** | **Circuits:** every v2 trade calls `processor.eval(2, inputs)` in the same transaction and is sized by the answer. **DeWEB + TapeKit:** the full app is stored in circuit #2's ERC-6551 container and passes TapeKit's "100% on-chain" rule. **Circuit explorer:** the site runs the same netlist in the browser and can ask the live processor about any input. |
 | **Business** | [Revenue and users](#revenue-model) below and in [SUBMISSION.md](SUBMISSION.md) |
 | **Usage, live** | [Activity](https://latch.tapeguard.workers.dev/#/activity): vaults, trades checked by a chip, OKB bought and profit taken, all read from chain |
+| **Verified source** | All three live contracts verified on [Sourcify](https://repo.sourcify.dev/196/0x4Af276338A81DA70e5dA4108FA0A7F6d294381b8) with an **exact match** (byte-for-byte, including metadata): LatchFactory2, the LatchVault template every vault clones, and the classic LatchFactory |
 | **Assurance** | Circuit #2 checked on all 65,536 inputs, against the live processor too · 47 contract tests on Uniswap's real V3 code · Slither · three independent reviews with every finding answered ([audit/](audit/)) · mainnet-fork rehearsal before every mainnet step |
 | **AI agents** | OKX Plugin Store skill [`latch-plugin`](plugin/latch-plugin) on OKX Agentic Wallet: an agent creates and manages vaults, or acts as a vault's bot, signing with `onchainos wallet contract-call` |
 | **Built during the event** | All of it. First commit 2026-11-03. |
