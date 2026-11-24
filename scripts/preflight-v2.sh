@@ -85,6 +85,11 @@ CV="createVault(uint8,uint8,address,uint256,uint256,uint256,uint256,uint256,uint
 SS="setStrategy(uint256,uint256,uint256,uint256,uint256,uint256,uint8)"
 PV="preview(address)(uint16,uint8,uint256,uint256,uint256,uint256)"
 lastvault(){ cast call "$FAC" "vaultsOf(address)(address[])" "$OWNER" --rpc-url "$F" | tr -d '[] ' | tr ',' '\n' | tail -n1; }
+smartk(){ # expected Smart-mode size from the vault's real inputs: d>=5 → 3, d>=3 → 2, else 1; jumpy → 1; very jumpy → 0
+  python3 -c "
+x=int('$1'); d=(x>>7)&7; v=(x>>10)&3
+k=0 if v==3 else 1 if v==2 else (3 if d>=5 else 2 if d>=3 else 1)
+print(k, ['calm','a little busy','jumpy','very jumpy'][v])"; }
 fund(){ # token amount → owner (real balance if enough, else borrowed from the pool on the copy)
   if ! ge "$(bal "$1" "$OWNER")" "$2"; then
     cast rpc anvil_setBalance "$POOL" 0xDE0B6B3A7640000 --rpc-url "$F" >/dev/null
@@ -98,13 +103,16 @@ echo "  30-min average price: $(py "$P/1e6") USDT0 per OKB"
 tx "$OWNER" "$BV" "$SS" 1000000 3000000 6000000 "$(py "$P*100//88")" "$(py "$P*105//100")" 3600 2
 fund "$USDT" 2050000; tx "$OWNER" "$USDT" "transfer(address,uint256)" "$BV" 2050000
 PREV=$(cast call "$BV" "$PV" "$BOT" --rpc-url "$F" | first | tr '\n' ' '); echo "  preview (inputs, k, amount, fee, minOut, price): $PREV"
-set -- $PREV; [ "$2" = "2" ] && [ "$3" = "2000000" ] || fail "expected the chip to pick 2x = 2 USDT0, got k=$2 amount=$3"
+set -- $PREV; read -r EK MKT <<< "$(smartk "$1")"
+echo "  market right now: $MKT → Smart should pick ${EK}x"
+[ "$EK" != 0 ] || fail "the market is very jumpy right now (Smart waits, correctly). Run the rehearsal again in a few minutes."
+[ "$2" = "$EK" ] && [ "$3" = "$((EK * 1000000))" ] || fail "expected the chip to pick ${EK}x = $EK USDT0, got k=$2 amount=$3"
 mustrevert "stranger trades" "$STRANGER" "$BV" "tick()"
 W0=$(bal "$WOKB" "$USERSAVE")
 GAS=$(cast estimate --from "$BOT" "$BV" "tick()" --rpc-url "$F") || fail "trade simulation failed"
 tx "$BOT" "$BV" "tick()" --gas-limit "$((GAS * 3 / 2))"
 GOT=$(py "$(bal "$WOKB" "$USERSAVE") - $W0"); ge "$GOT" 1 || fail "no OKB arrived"
-ok "bought $(py "$GOT/1e18") OKB for 2 USDT0 (chip: 2x) · gas $GAS"
+ok "bought $(py "$GOT/1e18") OKB for $EK USDT0 (chip: ${EK}x, market $MKT) · gas $GAS"
 mustrevert "second trade within the hour" "$BOT" "$BV" "tick()"
 
 echo "== 5. Take Profit vault: OKB ~13.6% above the reference → chip should pick 2x"
@@ -113,12 +121,15 @@ SV=$(lastvault)
 tx "$OWNER" "$SV" "$SS" 10000000000000000 30000000000000000 100000000000000000 "$(py "$P*88//100")" "$(py "$P*95//100")" 0 2
 fund "$WOKB" 20500000000000000; tx "$OWNER" "$WOKB" "transfer(address,uint256)" "$SV" 20500000000000000
 PREV=$(cast call "$SV" "$PV" "$BOT" --rpc-url "$F" | first | tr '\n' ' '); echo "  preview: $PREV"
-set -- $PREV; [ "$2" = "2" ] && [ "$3" = "20000000000000000" ] || fail "expected 2x = 0.02 OKB, got k=$2 amount=$3"
+set -- $PREV; read -r EK MKT <<< "$(smartk "$1")"
+echo "  market right now: $MKT → Smart should pick ${EK}x"
+[ "$EK" != 0 ] || fail "the market is very jumpy right now (Smart waits, correctly). Run the rehearsal again in a few minutes."
+[ "$2" = "$EK" ] && [ "$3" = "$((EK * 10000000000000000))" ] || fail "expected ${EK}x = 0.0$EK OKB, got k=$2 amount=$3"
 U0=$(bal "$USDT" "$USERSAVE")
 GAS=$(cast estimate --from "$BOT" "$SV" "tick()" --rpc-url "$F") || fail "take-profit simulation failed"
 tx "$BOT" "$SV" "tick()" --gas-limit "$((GAS * 3 / 2))"
 GOT=$(py "$(bal "$USDT" "$USERSAVE") - $U0"); ge "$GOT" 1 || fail "no USDT0 arrived"
-ok "sold 0.02 OKB for $(py "$GOT/1e6") USDT0 (chip: 2x) · gas $GAS"
+ok "sold 0.0$EK OKB for $(py "$GOT/1e6") USDT0 (chip: ${EK}x, market $MKT) · gas $GAS"
 tx "$OWNER" "$SV" "$SS" 10000000000000000 30000000000000000 100000000000000000 "$(py "$P*88//100")" "$(py "$P*120//100")" 0 2
 mustrevert "selling below the owner's floor price" "$BOT" "$SV" "tick()"
 
@@ -139,6 +150,6 @@ tx "$OWNER" "$SV" "withdraw(address,address,uint256)" "$WOKB" "$OWNER" "$(cast m
 
 [ -n "${LOCAL_RPC:-}" ] || date -u > .preflight-v2-ok
 echo
-echo "REHEARSAL OK: circuit #2 taped out and checked on all 65,536 inputs, factory v2, a 2x Buy and a 2x Take Profit"
+echo "REHEARSAL OK: circuit #2 checked on all 65,536 inputs, factory v2, a chip-sized Buy and Take Profit"
 echo "on the real pool, attacks refused, revoke drill, withdrawals. Nothing was sent to mainnet."
 [ "$BEM_OK" = 1 ] || echo "Before going live: get 0.01 BEM into $OWNER on X Layer."
