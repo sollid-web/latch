@@ -18,11 +18,11 @@ withdraw, raise a limit, or send money anywhere but the owner's wallet.
 | **Demo video (≤ 3 min)** | `[YouTube link]` |
 | **TapeOut processor** | `0x3728a5dfE596F6bF7309cA911e61ecaC9b0b6813` (Latch's own processor, X Layer mainnet, chain 196) |
 | **Circuit IDs** | **#2**: strategy chip, 101 NAND, 16 inputs and 3 outputs, sizes every v2 trade · **#1**: safety chip, 13 NAND, approves every classic-vault buy |
-| **Contracts** | LatchFactory2 [`0x4Af2…81b8`](https://www.oklink.com/xlayer/address/0x4Af276338A81DA70e5dA4108FA0A7F6d294381b8) (Buy and Take Profit vaults) · LatchFactory [`0xc700…BD11`](https://www.oklink.com/xlayer/address/0xc700C9865f237612b0bA86408BB4C182D41ABD11) (classic) · Uniswap V3 USDT0/WOKB 0.05% pool [`0xe3BE…5082`](https://www.oklink.com/xlayer/address/0xe3BE6A0137f1b0602Fc1a4841686f43B340a5082) |
+| **Contracts** | LatchFactory2 [`0x9C64…6428`](https://www.oklink.com/xlayer/address/0x9C647a631fe59813c430D03330C3A4Da21df6428) (Buy and Take Profit vaults) · LatchFactory [`0xc700…BD11`](https://www.oklink.com/xlayer/address/0xc700C9865f237612b0bA86408BB4C182D41ABD11) (classic) · Uniswap V3 USDT0/WOKB 0.05% pool [`0xe3BE…5082`](https://www.oklink.com/xlayer/address/0xe3BE6A0137f1b0602Fc1a4841686f43B340a5082) |
 | **TapeOut features used** | **Circuits:** every v2 trade calls `processor.eval(2, inputs)` in the same transaction and is sized by the answer. **DeWEB + TapeKit:** the full app is stored in circuit #2's ERC-6551 container and passes TapeKit's "100% on-chain" rule. **Circuit explorer:** the site runs the same netlist in the browser and can ask the live processor about any input. |
 | **Business** | [Revenue and users](#revenue-model) below and in [SUBMISSION.md](SUBMISSION.md) |
 | **Usage, live** | [Activity](https://latch.tapeguard.workers.dev/#/activity): vaults, trades checked by a chip, OKB bought and profit taken, all read from chain |
-| **Verified source** | All three live contracts verified on [Sourcify](https://repo.sourcify.dev/196/0x4Af276338A81DA70e5dA4108FA0A7F6d294381b8) with an **exact match** (byte-for-byte, including metadata): LatchFactory2, the LatchVault template every vault clones, and the classic LatchFactory. The classic factory is also verified on OKLink. OKX's verifier doesn't yet accept the two via-IR builds (it returns "Fail" on the same files Sourcify matches exactly), and a request is open with OKX. |
+| **Verified source** | All three live contracts verified on [Sourcify](https://repo.sourcify.dev/196/0x9C647a631fe59813c430D03330C3A4Da21df6428) with an **exact match** (byte-for-byte, including metadata): LatchFactory2, the LatchVault template every vault clones, and the classic LatchFactory. All three are also verified on OKLink, X Layer's explorer. (v2 was rebuilt without via-IR on 24 November so OKLink could verify it; the earlier via-IR factory `0x4Af2…81b8` is retired.) |
 | **Assurance** | Circuit #2 checked on all 65,536 inputs, against the live processor too · 47 contract tests on Uniswap's real V3 code · Slither · three independent reviews with every finding answered ([audit/](audit/)) · mainnet-fork rehearsal before every mainnet step |
 | **AI agents** | OKX Plugin Store skill [`latch-plugin`](plugin/latch-plugin) on OKX Agentic Wallet: an agent creates and manages vaults, or acts as a vault's bot, signing with `onchainos wallet contract-call` |
 | **Built during the event** | All of it. First commit 2026-11-03. |
@@ -91,7 +91,7 @@ Latch ships as a skill for the **OKX Plugin Store** ([`plugin/latch-plugin`](plu
 1. **"Buy OKB on dips for me":** a user's assistant sets up and manages a vault from their Agentic Wallet.
 2. **The Agentic Wallet as a vault's own bot:** gas-free on X Layer. Because the vault and the chip enforce every limit, a tricked or confused agent still can't trade more, more often or at a worse price than the owner allowed, and can't send funds anywhere else.
 
-**Live on mainnet:** an OKX Agentic Wallet created vault [`0x7124…0014`](https://www.oklink.com/xlayer/address/0x712476315A79ddf18E3e169A506F23c028Bb0014) this way. Also tested end to end on a local chain with Uniswap's real contract code (`agent/test.mjs`, 24 checks). Any other bot can do the same with `vault.preview(bot)` and `vault.tick()`.
+**Live on mainnet:** an OKX Agentic Wallet created a Latch vault this way: `[new vault link]`. Also tested end to end on a local chain with Uniswap's real contract code (`agent/test.mjs`, 24 checks). Any other bot can do the same with `vault.preview(bot)` and `vault.tick()`.
 
 ## Revenue model
 

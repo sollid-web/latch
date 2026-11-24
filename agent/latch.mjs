@@ -22,7 +22,7 @@ import { createPublicClient, http, parseAbi, encodeFunctionData, parseUnits, for
 const MAINNET = {
   chainId: 196,
   rpc: 'https://rpc.xlayer.tech',
-  factory2: '0x4Af276338A81DA70e5dA4108FA0A7F6d294381b8',
+  factory2: '0x9C647a631fe59813c430D03330C3A4Da21df6428',
   processor: '0x3728a5dfE596F6bF7309cA911e61ecaC9b0b6813',
   circuit2Id: 2,
   usdt: '0x779Ded0c9e1022225f8E0630b35a9b54bE713736',

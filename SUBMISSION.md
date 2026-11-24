@@ -15,7 +15,7 @@ Buy OKB on dips and take profit on rises from a vault only you control. A 101-ga
   - **#2:** strategy chip, 101 NAND, 16 inputs and 3 outputs. It sizes every v2 trade.
   - **#1:** safety chip, 13 NAND. It approves every classic-vault buy.
 - **Other contracts:**
-  - LatchFactory2 `0x4Af276338A81DA70e5dA4108FA0A7F6d294381b8` (v2 vaults: Buy and Take Profit)
+  - LatchFactory2 `0x9C647a631fe59813c430D03330C3A4Da21df6428` (v2 vaults: Buy and Take Profit)
   - LatchFactory `0xc700C9865f237612b0bA86408BB4C182D41ABD11` (classic vaults)
   - Uniswap V3 USDT0/WOKB 0.05% pool `0xe3BE6A0137f1b0602Fc1a4841686f43B340a5082`
 - **Access link:** https://latch.tapeguard.workers.dev. Also fully on chain at https://2-2-435.tapekit.org/ (`tape://2.2.435.tape`), served from circuit #2's own container.
@@ -99,7 +99,7 @@ Only the owner can withdraw (any time, even while paused), pause, change the str
   - An AI agent creates and manages vaults, or acts as a vault's bot, with the `latch` tool, which prepares transactions.
   - The agent's OKX Agentic Wallet signs them with `onchainos wallet contract-call` inside OKX's TEE, after the user confirms.
   - The vault and the chip enforce every limit on chain, so even a tricked agent can't overspend.
-  - **Live proof on mainnet:** an OKX Agentic Wallet (`0xFd6A…721C`) created Latch vault [`0x7124…0014`](https://www.oklink.com/xlayer/address/0x712476315A79ddf18E3e169A506F23c028Bb0014) through the `latch` tool and `onchainos wallet contract-call` (Buy OKB, Smart, Latch's hosted bot trading it).
+  - **Live proof on mainnet:** an OKX Agentic Wallet (`0xFd6A…721C`) created Latch vault `[new vault link]` through the `latch` tool and `onchainos wallet contract-call` (Buy OKB, Smart, Latch's hosted bot trading it).
   - Plugin Store pull request: `[PR link]`.
 - **On-chain data, no database:** the stats, activity and history pages read the factories, vaults and trade events straight from X Layer.
 - **TapeSend:** `[not integrated yet / or: trade notices to the owner's TapeSend inbox, if shipped]`
@@ -115,7 +115,7 @@ All of it. The repository started on 2026-11-03 and has 78+ commits since:
 - **v2 contracts:**
   - LatchVault (EIP-1167 clones) + LatchFactory2 (live), with Buy and Take Profit, chip-sized trades and every safety rule enforced in Solidity
   - Uniswap V3 TWAP pricing with a live-price check and worst-fill limits
-- **Verified source:** LatchFactory2, the LatchVault template and the classic LatchFactory are verified on Sourcify with an exact match: https://repo.sourcify.dev/196/0x4Af276338A81DA70e5dA4108FA0A7F6d294381b8
+- **Verified source:** LatchFactory2, the LatchVault template and the classic LatchFactory are verified on Sourcify with an exact match: https://repo.sourcify.dev/196/0x9C647a631fe59813c430D03330C3A4Da21df6428
 - **Verification:**
   - 47 tests on Uniswap's real V3 + SwapRouter02 code
   - Slither
