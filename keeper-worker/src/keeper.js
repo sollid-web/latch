@@ -80,20 +80,15 @@ export function priceFrom(json, pick) {
 
 export const SOURCES = [
   { venue: 'OKX', get: async () => priceFrom(await getJson('https://www.okx.com/api/v5/market/ticker?instId=OKB-USDT'), (j) => j.data[0].last) },
-  { venue: 'Binance', get: async () => priceFrom(await getJson('https://api.binance.com/api/v3/ticker/price?symbol=OKBUSDT'), (j) => j.price) },
   { venue: 'CoinGecko', get: async () => priceFrom(await getJson('https://api.coingecko.com/api/v3/simple/price?ids=okb&vs_currencies=usd'), (j) => j.okb.usd) },
   { venue: 'Gate', get: async () => priceFrom(await getJson('https://api.gateio.ws/api/v4/spot/tickers?currency_pair=OKB_USDT'), (j) => j[0].last) },
   { venue: 'KuCoin', get: async () => priceFrom(await getJson('https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=OKB-USDT'), (j) => j.data.price) },
-  { venue: 'Bitget', get: async () => priceFrom(await getJson('https://api.bitget.com/api/v2/spot/market/tickers?symbol=OKBUSDT'), (j) => j.data[0].lastPr) },
   { venue: 'MEXC', get: async () => priceFrom(await getJson('https://api.mexc.com/api/v3/ticker/price?symbol=OKBUSDT'), (j) => j.price) },
-  { venue: 'HTX', get: async () => priceFrom(await getJson('https://api.huobi.pro/market/detail/merged?symbol=okbusdt'), (j) => j.tick.close) },
-  // More independent answers from Cloudflare's network (several big exchanges refuse or rate-limit it):
-  { venue: 'CoinPaprika', get: async () => priceFrom(await getJson('https://api.coinpaprika.com/v1/tickers/okb-okb'), (j) => j.quotes.USD.price) },
-  { venue: 'CryptoCompare', get: async () => priceFrom(await getJson('https://min-api.cryptocompare.com/data/price?fsym=OKB&tsyms=USDT'), (j) => j.USDT) },
-  { venue: 'BitMart', get: async () => priceFrom(await getJson('https://api-cloud.bitmart.com/spot/quotation/v3/ticker?symbol=OKB_USDT'), (j) => j.data.last) },
+  // Checked live from Cloudflare (2026-11-24): Gate, MEXC, LBank and XT answer; OKX, CoinGecko and KuCoin are
+  // rate-limited at times. Binance, Bitget (blocked), HTX (no OKB), CoinPaprika, CryptoCompare (paid key), BitMart
+  // and CoinEx (errors) were removed to stay within Cloudflare's free-plan request budget.
   { venue: 'LBank', get: async () => priceFrom(await getJson('https://api.lbkex.com/v2/ticker/24hr.do?symbol=okb_usdt'), (j) => j.data[0].ticker.latest) },
   { venue: 'XT', get: async () => priceFrom(await getJson('https://sapi.xt.com/v4/public/ticker/price?symbol=okb_usdt'), (j) => j.result[0].p) },
-  { venue: 'CoinEx', get: async () => priceFrom(await getJson('https://api.coinex.com/v2/spot/ticker?market=OKBUSDT'), (j) => j.data[0].last) }
 ];
 
 export async function fetchPrices(sources = SOURCES) {
