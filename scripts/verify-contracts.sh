@@ -4,9 +4,9 @@
 #
 #   ./scripts/verify-contracts.sh
 #
-# OKLink needs a free API key: oklink.com → My Account → API management. Put it in keeper/.env as
-#   OKLINK_API_KEY=...
-# Without it, only Sourcify runs (no key needed).
+# OKLink: the X Layer docs (Verifying with Foundry) need only --verifier oklink and the verifier URL. If OKLink
+# ever asks for a key, put OKLINK_API_KEY=... in keeper/.env and it is used automatically.
+# SKIP_SOURCIFY=1 skips Sourcify (already verified).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.foundry/bin:$PATH"
@@ -24,9 +24,12 @@ verify() {
   local common=(--chain 196 --compiler-version 0.8.24 --optimizer-runs 200 --rpc-url "$RPC" "$@")
   [ -n "$args" ] && common+=(--constructor-args "$args")
   for where in sourcify oklink; do
-    if [ "$where" = oklink ] && [ -z "${OKLINK_API_KEY:-}" ]; then results+=("SKIP  $label on OKLink (no OKLINK_API_KEY)"); continue; fi
+    if [ "$where" = sourcify ] && [ "${SKIP_SOURCIFY:-}" = 1 ]; then continue; fi
     local extra=(--verifier sourcify)
-    [ "$where" = oklink ] && extra=(--verifier oklink --verifier-url "$OKLINK_URL" --verifier-api-key "$OKLINK_API_KEY")
+    if [ "$where" = oklink ]; then
+      extra=(--verifier oklink --verifier-url "$OKLINK_URL")   # X Layer docs: no key needed
+      [ -n "${OKLINK_API_KEY:-}" ] && extra+=(--verifier-api-key "$OKLINK_API_KEY")
+    fi
     echo; echo "== $label → $where"
     local out; out=$(forge verify-contract "$addr" "$target" "${common[@]}" "${extra[@]}" --watch 2>&1)
     echo "$out" | tail -n 6
