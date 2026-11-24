@@ -91,7 +91,7 @@ Latch ships as a skill for the **OKX Plugin Store** ([`plugin/latch-plugin`](plu
 1. **"Buy OKB on dips for me":** a user's assistant sets up and manages a vault from their Agentic Wallet.
 2. **The Agentic Wallet as a vault's own bot:** gas-free on X Layer. Because the vault and the chip enforce every limit, a tricked or confused agent still can't trade more, more often or at a worse price than the owner allowed, and can't send funds anywhere else.
 
-**Live on mainnet:** an OKX Agentic Wallet created a Latch vault this way: `[new vault link]`. Also tested end to end on a local chain with Uniswap's real contract code (`agent/test.mjs`, 24 checks). Any other bot can do the same with `vault.preview(bot)` and `vault.tick()`.
+**Live on mainnet:** an OKX Agentic Wallet created a Latch vault this way: [`0x367F…10b7`](https://www.oklink.com/x-layer/address/0x367F3EB73E6C5e7883Aa7D1db76Cb29C11E710b7). Also tested end to end on a local chain with Uniswap's real contract code (`agent/test.mjs`, 24 checks). Any other bot can do the same with `vault.preview(bot)` and `vault.tick()`.
 
 ## Revenue model
 

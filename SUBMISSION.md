@@ -99,7 +99,7 @@ Only the owner can withdraw (any time, even while paused), pause, change the str
   - An AI agent creates and manages vaults, or acts as a vault's bot, with the `latch` tool, which prepares transactions.
   - The agent's OKX Agentic Wallet signs them with `onchainos wallet contract-call` inside OKX's TEE, after the user confirms.
   - The vault and the chip enforce every limit on chain, so even a tricked agent can't overspend.
-  - **Live proof on mainnet:** an OKX Agentic Wallet (`0xFd6A…721C`) created Latch vault `[new vault link]` through the `latch` tool and `onchainos wallet contract-call` (Buy OKB, Smart, Latch's hosted bot trading it).
+  - **Live proof on mainnet:** an OKX Agentic Wallet (`0xFd6A…721C`) created Latch vault [`0x367F…10b7`](https://www.oklink.com/x-layer/address/0x367F3EB73E6C5e7883Aa7D1db76Cb29C11E710b7) through the `latch` tool and `onchainos wallet contract-call` (Buy OKB, Smart, Latch's hosted bot trading it).
   - Plugin Store pull request: `[PR link]`.
 - **On-chain data, no database:** the stats, activity and history pages read the factories, vaults and trade events straight from X Layer.
 - **TapeSend:** `[not integrated yet / or: trade notices to the owner's TapeSend inbox, if shipped]`
