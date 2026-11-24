@@ -59,7 +59,7 @@ Only the owner can withdraw (any time, even while paused), pause, change the str
 
 1. **OKX Wallet users on X Layer who want to build an OKB position or lock in gains** without watching charts or leaving coins on an exchange for its recurring-buy feature. Setup takes about two minutes, on a phone or a computer.
 2. **People who would use a trading bot but won't give one their keys.** Trading bots and bot services get hacked, as with the Telegram bots Unibot (2023) and Banana Gun (2024), and with API keys leaked at 3Commas (2022). With Latch, the worst a compromised bot can do is a trade the owner already allowed, into the owner's wallet.
-3. **Builders of bots and AI agents on X Layer** who need spending limits that an agent can't argue its way around. Their agent becomes a vault's keeper, and the chip and the vault hold the line.
+3. **Builders of bots and AI agents on X Layer** who need spending limits that an agent can't argue its way around. With the OKX Plugin Store skill, an agent on the OKX Agentic Wallet becomes a vault's owner or its bot, and the chip and the vault hold the line.
 
 ### How we reach them
 
@@ -94,6 +94,12 @@ Only the owner can withdraw (any time, even while paused), pause, change the str
   - The whole app is one self-contained HTML file stored in circuit #2's own container through SiteRegistry, so the chip itself is the website's home.
   - It is bound as `2.2.435.tape` through DomainBinding and served by TapeKit gateways.
   - It passes TapeKit's "100% on-chain" static rule (`scripts/check-onchain.mjs`) and reads only TapeKit's default X Layer nodes.
+- **OKX Agentic Wallet + Plugin Store (Onchain OS):**
+  - Latch is packaged as an OKX Plugin Store skill, `latch-plugin`.
+  - An AI agent creates and manages vaults, or acts as a vault's bot, with the `latch` tool, which prepares transactions.
+  - The agent's OKX Agentic Wallet signs them with `onchainos wallet contract-call` inside OKX's TEE, after the user confirms.
+  - The vault and the chip enforce every limit on chain, so even a tricked agent can't overspend.
+  - Plugin Store pull request: `[PR link]`.
 - **On-chain data, no database:** the stats, activity and history pages read the factories, vaults and trade events straight from X Layer.
 - **TapeSend:** `[not integrated yet / or: trade notices to the owner's TapeSend inbox, if shipped]`
 

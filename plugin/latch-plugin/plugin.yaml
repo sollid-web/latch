@@ -23,7 +23,7 @@ components:
 build:
   lang: node
   source_repo: "sollid-web/latch"
-  source_commit: "COMMIT_SHA_FILLED_AT_SUBMISSION"
+  source_commit: "1babae2adaf6d9c41ed158f10310a54e8b466d4c"
   source_dir: "agent"
   main: "latch.mjs"
   binary_name: latch

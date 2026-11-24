@@ -23,6 +23,7 @@ withdraw, raise a limit, or send money anywhere but the owner's wallet.
 | **Business** | [Revenue and users](#revenue-model) below and in [SUBMISSION.md](SUBMISSION.md) |
 | **Usage, live** | [Activity](https://latch.tapeguard.workers.dev/#/activity): vaults, trades checked by a chip, OKB bought and profit taken, all read from chain |
 | **Assurance** | Circuit #2 checked on all 65,536 inputs, against the live processor too · 47 contract tests on Uniswap's real V3 code · Slither · three independent reviews with every finding answered ([audit/](audit/)) · mainnet-fork rehearsal before every mainnet step |
+| **AI agents** | OKX Plugin Store skill [`latch-plugin`](plugin/latch-plugin) on OKX Agentic Wallet: an agent creates and manages vaults, or acts as a vault's bot, signing with `onchainos wallet contract-call` |
 | **Built during the event** | All of it. First commit 2026-11-03. |
 
 ## What it does
@@ -66,16 +67,30 @@ bot calls vault.tick()
   - The bot also refuses when Uniswap disagrees with the major exchanges (Gate, MEXC, LBank, XT and others).
 - **Rules can't be changed by anyone.** Every vault is pinned at creation to the processor, the circuit, the router and the pool, and the factory has no power over funds.
 
-## For AI agents and bot builders
+## For AI agents: OKX Agentic Wallet + Plugin Store
 
-Any address can be a vault's bot ("Use my own bot or AI agent" in the Create flow).
+Latch ships as a skill for the **OKX Plugin Store** ([`plugin/latch-plugin`](plugin/latch-plugin)), built on **OKX Agentic Wallet** (Onchain OS).
 
-**What it calls:**
-- `vault.preview(botAddress)` returns `(inputs, k, amount, fee, minOut, avgPrice)`.
-- If `amount > 0`, the bot sends `vault.tick()`.
-- Nothing else is needed: the vault and the chip decide the size.
+**How it works:**
+- The [`latch`](agent/latch.mjs) command-line tool reads Latch on X Layer and **prepares** transactions.
+- The agent's Agentic Wallet signs each one with `onchainos wallet contract-call` inside OKX's TEE, after the user confirms it.
+- The tool never sees a key.
 
-**What it can't do:** exactly what Latch's hosted bot can't. An agent that is tricked or simply wrong can't trade more, more often or at a worse price than the owner allowed, and can't send funds anywhere else. That makes Latch a safe "spending policy" for agent wallets that hold OKB or USDT0.
+**What it can do:**
+
+| | Command |
+|---|---|
+| OKB price as vaults see it | `latch market` |
+| What a vault would do right now (real chip) | `latch try --dir buy --mode smart --ref 95 --limit 100 --base 2` |
+| Create, fund, pause, change strategy, withdraw | `latch create …`, `latch fund …`, `latch pause …`, `latch strategy …`, `latch withdraw …` |
+| See a vault and why it waits | `latch status --vault 0x…` |
+| Be the vault's bot | `latch tick --vault 0x… --as <agent wallet>` |
+
+**Two uses:**
+1. **"Buy OKB on dips for me":** a user's assistant sets up and manages a vault from their Agentic Wallet.
+2. **The Agentic Wallet as a vault's own bot:** gas-free on X Layer. Because the vault and the chip enforce every limit, a tricked or confused agent still can't trade more, more often or at a worse price than the owner allowed, and can't send funds anywhere else.
+
+Tested end to end on a local chain with Uniswap's real contract code (`agent/test.mjs`, 24 checks). Any other bot can do the same with `vault.preview(bot)` and `vault.tick()`.
 
 ## Revenue model
 
@@ -136,7 +151,10 @@ ONCHAIN=1 node scripts/build-web.mjs && node scripts/check-onchain.mjs   # DeWEB
   - LatchFactory2 live with Buy and Take Profit
   - multi-page site and phone connection via OKX Connect
   - third independent review, all findings fixed
-- **24 November:** the app went on chain on DeWEB (`2.2.435.tape`), and the "Try it" page shows what a vault would do right now with no wallet.
+- **24 November:**
+  - the app went on chain on DeWEB (`2.2.435.tape`)
+  - the "Try it" page shows what a vault would do right now, with no wallet
+  - the OKX Plugin Store skill lets AI agents use Latch through the OKX Agentic Wallet
 
 ---
 
