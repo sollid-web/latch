@@ -3,7 +3,7 @@
   "pool": "0xe3BE6A0137f1b0602Fc1a4841686f43B340a5082",
   "chainId": 196,
   "deployedAt": "2026-11-21T22:20:51.588662Z",
-  "LatchFactory2": "0x4Af276338A81DA70e5dA4108FA0A7F6d294381b8",
+  "LatchFactory2": "0x9C647a631fe59813c430D03330C3A4Da21df6428",
   "circuit2Id": 2,
-  "v2DeployedAt": "2026-11-23T20:37:10.781162Z"
+  "v2DeployedAt": "2026-11-24T17:29:48.884246Z"
 }
