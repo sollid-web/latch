@@ -170,8 +170,30 @@ function useOkxSession(okx, account) {
 /** On load, and whenever you come back to this tab: if you already approved Latch in the OKX Wallet app,
  *  show you as connected. Phones pause or reload the tab while the wallet app is open, so the page cannot
  *  rely on still being there when the approval arrives. */
+const SILENT_OFF = 'latch.disconnected';
+function listen(p) {
+  if (!p.on || p.__latch) return;
+  p.__latch = true;
+  p.on('accountsChanged', (a) => { S.account = a?.[0] ? getAddress(a[0]) : null; refreshFn(); });
+  p.on('chainChanged', (id) => { S.walletChain = Number(id); render(); });
+}
+/** Wallet already approved this site (extension or OKX app browser): show it connected after a reload, without a prompt. */
+async function restoreInjected() {
+  const w = findWallet();
+  if (!w) return false;
+  try { if (localStorage.getItem(SILENT_OFF)) return false; } catch {}
+  try {
+    const a = await w.p.request({ method: 'eth_accounts' });
+    if (!a?.[0] || S.account) return false;
+    S.provider = w.p; S.walletName = w.name; S.account = getAddress(a[0]);
+    S.walletChain = Number(await w.p.request({ method: 'eth_chainId' }).catch(() => C.chainId));
+    listen(w.p);
+    return true;
+  } catch { return false; }
+}
 export async function restoreSession() {
-  if (S.account || window.okxwallet || window.ethereum) return false;
+  if (S.account) return false;
+  if (window.okxwallet || window.ethereum || announced.length) return restoreInjected();
   if (C.onchain || (!okxConnectP && !isMobile())) return false;
   try {
     const okx = await okxConnect();
@@ -261,10 +283,8 @@ export async function connect() {
     S.account = accts?.[0] ? getAddress(accts[0]) : null;
     S.walletChain = Number(await w.p.request({ method: 'eth_chainId' }));
     if (S.walletChain !== C.chainId) await switchChain();
-    if (w.p.on) {
-      w.p.on('accountsChanged', (a) => { S.account = a?.[0] ? getAddress(a[0]) : null; refreshFn(); });
-      w.p.on('chainChanged', (id) => { S.walletChain = Number(id); render(); });
-    }
+    listen(w.p);
+    try { localStorage.removeItem(SILENT_OFF); } catch {}
   } catch (e) {
     S.note = e?.code === 4001 ? 'You rejected the connection in your wallet.'
       : e?.code === -32002 ? 'Your wallet already has a request waiting. Open the wallet and answer it.'
@@ -276,6 +296,7 @@ export async function disconnect() {
   // OKX Connect sessions are ended for real; extension wallets keep the site in their own connected-sites list.
   try { if (okxConnectP) { const okx = await okxConnectP; if (okx.connected()) await okx.disconnect(); } } catch { /* already gone */ }
   S.account = null; S.provider = null;
+  try { localStorage.setItem(SILENT_OFF, '1'); } catch {}
   S.note = 'Disconnected. To remove Latch completely, also remove it from the connected sites list in your wallet.';
 }
 async function switchChain() {

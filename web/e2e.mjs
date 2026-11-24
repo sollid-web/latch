@@ -78,7 +78,7 @@ await page.click('[data-a=tCreate]'); await page.waitForTimeout(500);
 ok('try → Create carries the settings', /Take profit automatically/.test(await txt()), (await txt()).slice(0, 200));
 
 /* ---- Create a Buy vault (smart, reference 100 → OKB ~21% below → 3×) ---- */
-await page.click('header [data-a=connect]'); await page.waitForTimeout(1500);
+ok('wallet that already approved the site shows connected on load, no prompt', !(await page.locator('header [data-a=connect]').count()) && /0x/i.test(await page.locator('header').innerText()), await page.locator('header').innerText());
 await go('#/create?buy', 600);
 ok('create: Buy preset opens on Strategy', /Buy OKB automatically/.test(await txt()) && /Smart/.test(await txt()));
 await page.screenshot({ path: shots + '/2-create-strategy.png', fullPage: true });
@@ -105,9 +105,17 @@ ok('bot: Buy vault bought 6 USDT0 (3×)', row('bought')?.amount === '6000000' &&
 await go('#/create?sell', 600);
 await page.click('[data-a=cmode][data-v="3"]'); await page.click('[data-a=cnext]'); await page.waitForTimeout(200);
 await page.fill('#c-ref', '70'); await page.fill('#c-limit', '72');
+await page.reload(); await page.waitForTimeout(2500); // phone browsers often reload the tab after visiting the wallet app
+ok('create: typed values survive a page reload', (await page.inputValue('#c-ref')) === '70' && (await page.inputValue('#c-limit')) === '72', await page.inputValue('#c-ref'));
 await page.click('[data-a=cnext]'); await page.waitForTimeout(300);
 ok('take profit review: ladder sentence', /Latch sells at most once a day, only on a move: 0\.02 OKB when OKB is 5% or more above 70\.00/.test(await txt()), (await txt()).split('\n').find((l) => /Latch sells/.test(l)));
 await page.click('[data-a=ccreate]'); await page.waitForTimeout(2500);
+await page.evaluate(() => { // pretend the page reloaded before it saw the approval: back on Review, vault count from before
+  const d = JSON.parse(localStorage.getItem('latch.create.v2')); d.c.step = 3; d.c.before = 1; d.c.by = d.c.by || null; d.c.created = undefined;
+  localStorage.setItem('latch.create.v2', JSON.stringify(d));
+});
+await page.reload(); await page.waitForTimeout(4000);
+ok('create: after a reload mid-approval, finds the new vault and shows Add funds', /Your vault is live/.test(await txt()), (await txt()).slice(0, 300));
 await page.fill('#c-deposit', '0.1'); await page.click('[data-a=cdeposit]'); await page.waitForTimeout(3500);
 r = await runOnce(botEnv, { send: true, wait: true, prices: P(78.5) });
 ok('bot: Take Profit vault sold 0.02 OKB (ladder 1×)', r.vaults.some((v) => v.version === 2 && v.kind === 'take-profit' && v.action === 'sold' && v.amount === '20000000000000000'), JSON.stringify(r.vaults));

@@ -145,6 +145,29 @@ async function loadTrades() {
   finally { S.feedBusy = false; }
 }
 
+/* Create draft survives the phone browser reloading the page while the wallet app is open. */
+const DRAFT = 'latch.create.v2';
+function saveDraft() {
+  try { if (S.c) localStorage.setItem(DRAFT, JSON.stringify({ at: Date.now(), c: S.c })); else localStorage.removeItem(DRAFT); } catch {}
+}
+function loadDraft() {
+  try {
+    const d = JSON.parse(localStorage.getItem(DRAFT) || 'null');
+    if (d && d.c && Date.now() - d.at < 86_400_000) return d.c;
+    localStorage.removeItem(DRAFT);
+  } catch {}
+  return null;
+}
+/** If the page reloaded after "Create" was approved, find the new vault and move on to Add funds. */
+async function recoverCreate() {
+  const c = S.c;
+  if (!c || c.step !== 3 || c.before == null || !S.account || !c.by || c.by.toLowerCase() !== S.account.toLowerCase()) return;
+  try {
+    const list = await pub.readContract({ address: C.factory2, abi: FACTORY2, functionName: 'vaultsOf', args: [S.account] });
+    if (list.length > c.before) { c.created = list[list.length - 1]; c.step = 4; c.before = null; render(); }
+  } catch {}
+}
+
 async function refresh() {
   if (S.refreshing) { S.again = true; render(); return; }
   S.refreshing = true; S.loading = true; render();
@@ -153,6 +176,7 @@ async function refresh() {
     await Promise.all([readNetwork().then(render), readMine()]);
   } finally { S.refreshing = false; S.loading = false; render(); }
   if (S.again) { S.again = false; return refresh(); }
+  recoverCreate();
   loadTrades();
 }
 hooks(() => render(), () => refresh());
@@ -631,6 +655,7 @@ function mobileHelp() {
 }
 
 function render() {
+  saveDraft();
   const app = document.getElementById('app');
   const focus = document.activeElement?.id;
   const page = { home: pageHome, try: pageTry, create: pageCreate, vaults: pageVaults, chip: pageChip, activity: pageActivity, safety: pageSafety }[S.page] || pageHome;
@@ -647,9 +672,10 @@ function route() {
   const [p, q] = h.split('?');
   const page = PAGES.some(([id]) => id === p) ? p : 'home';
   const changed = page !== S.page;
+  const first = !S.routed; S.routed = true;
   S.page = page; S.error = '';
   if (page === 'create' && (q === 'buy' || q === 'sell')) { S.c = newCreate(q === 'buy' ? 0 : 1); history.replaceState(null, '', '#/create'); }
-  else if (page === 'create' && (!S.c || S.c.step === 4) && changed) S.c = newCreate(null);
+  else if (page === 'create' && (!S.c || (S.c.step === 4 && !first)) && changed) S.c = newCreate(null);
   render();
   if (changed) window.scrollTo(0, 0);
   if (page === 'try' && (!S.t.mkt || Date.now() - S.t.mkt.at > 60_000)) readLive().then((m) => { S.t.mkt = m; render(); }).catch(() => {});
@@ -769,6 +795,7 @@ async function act(a, el) {
     }
     case 'ccreate': {
       const dec = c.dir === 0 ? 6 : 18;
+      try { c.before = (await pub.readContract({ address: C.factory2, abi: FACTORY2, functionName: 'vaultsOf', args: [S.account] })).length; c.by = S.account; saveDraft(); } catch {}
       const r = await send('Creating your vault', {
         address: C.factory2, abi: FACTORY2, functionName: 'createVault',
         args: [c.dir, c.mode, getAddress(c.savings), parseUnits(c.base, dec), parseUnits(c.perTx, dec), parseUnits(c.daily, dec),
@@ -776,7 +803,7 @@ async function act(a, el) {
       });
       if (!r) return;
       const list = await pub.readContract({ address: C.factory2, abi: FACTORY2, functionName: 'vaultsOf', args: [S.account] });
-      c.created = list[list.length - 1]; c.step = 4;
+      c.created = list[list.length - 1]; c.step = 4; c.before = null;
       await readMine(); return render();
     }
     case 'cwrap': {
@@ -841,6 +868,7 @@ document.addEventListener('input', (e) => {
   if (el.dataset?.c && S.c) {
     S.c[el.dataset.c] = el.type === 'checkbox' ? el.checked : el.value.trim();
     if (el.dataset.c === 'perTx' || el.dataset.c === 'daily') S.c.limitsTouched = true;
+    saveDraft();
   }
 });
 document.addEventListener('change', (e) => {
@@ -852,6 +880,7 @@ document.addEventListener('submit', (e) => { if (e.target.matches('[data-form=di
 document.addEventListener('toggle', (e) => { const k = e.target?.dataset?.k; if (k) S.open[k] = e.target.open; }, true);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.dialog && !S.busy) { S.dialog = null; render(); } });
 
+S.c = loadDraft();
 route();
 refresh();
 restoreSession().then((ok) => { if (ok) refresh(); }); // already approved in the OKX Wallet app → show connected
