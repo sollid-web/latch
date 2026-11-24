@@ -187,3 +187,11 @@ G  honest spot 78.51, attacker front-run to TWAP+79t: vault paid 80.85 (+2.98%),
 | Info: bot must only serve factory vaults, cap gas, back off after a revert | bot update (v2 vaults are listed from `LatchFactory2.vaultsPage`, so only `isVault` vaults are ever served) | bot tests |
 
 Suite: 47/47 on official Uniswap V3 + SwapRouter02 bytecode. Slither: only intentional `== 0` checks remain, annotated.
+
+### 2026-11-24: build without via-IR (for OKLink verification)
+
+OKX's verifiers (OKLink and the X Layer Data API) could not verify the via-IR build. `LatchVault._plan` was split into
+four smaller internal steps (`_market` → `_size` → `_safety` → `_priceOk`) so the contracts compile with the normal
+pipeline (solc 0.8.24, optimizer 200, cancun). The logic and order are unchanged. Re-run: 47/47 vault tests, 29/29
+bot tests, 35/35 browser checks, 24/24 agent-tool checks, the mainnet-rehearsal script, and Slither with 0 findings.
+Sizes: LatchVault 16,175 bytes, LatchFactory2 4,443 bytes (runtime).

@@ -453,52 +453,73 @@ contract LatchVault {
     // --------------------------------------------------------------- internal
 
     /// @dev Builds the chip inputs for a would-be trade, asks the chip, sizes the trade.
-    // slither-disable-next-line timestamp,incorrect-equality (daily window + spacing; 0 = no trade)
+    ///      Split into small steps (market → size → safety facts → chip) so it compiles without via-IR,
+    ///      which lets every explorer verify the source. Same logic, same order as before.
     function _plan(address caller, int24 t, int24 spot)
         internal
         view
         returns (uint16 inputs, uint8 k, uint256 amount, uint256 fee, uint256 minOut)
     {
-        uint256 price = _priceAt(t);
-        uint256 vol = _absDiff(spot, t);
-        uint16 depth = _depth(price);
-        uint16 volBucket = vol < 15 ? 0 : vol < 35 ? 1 : vol < 60 ? 2 : 3;
-
-        // First pass: the chip's multiplier with the facts that do not depend on the size.
-        uint16 base = (depth << 7) | (volBucket << 10) | (uint16(mode) << 12);
-        // Candidate size: try k from the chip assuming the size-dependent facts pass, then verify.
+        uint16 base = _market(t, spot);
+        // Candidate size: k from the chip assuming the size-dependent facts pass, then verify them.
         (bool allowGuess, uint8 kGuess) = _chip(base | 0x7e);
-        uint256 want = baseAmount * kGuess;
-        if (want > perTxCap) want = perTxCap;
-        uint256 left = dailyCap > _spentToday() ? dailyCap - _spentToday() : 0;
-        if (want > left) want = left;
-        uint256 bps = feeBpsNow();
-        uint256 afford = (IERC20V(tokenIn).balanceOf(address(this)) * 10_000) / (10_000 + bps);
-        if (want > afford) want = afford;
-
-        uint256 f = (want * bps) / 10_000;
-        uint256 mo = want == 0 ? 0 : _minOut(t, want);
-        bool priceOk = (direction == BUY ? price <= limitPrice : price >= limitPrice)
-            && vol <= uint256(int256(MAX_TICK_DEVIATION)) && mo > 0 && _fillOk(want, mo) && _spotOk(spot, want, mo);
-
-        uint16 s = 0;
-        if (paused) s |= 1;
-        if (caller == keeper && !_revoked(caller)) s |= 2;
-        s |= 4;
-        if (priceOk) s |= 8;
-        if (want >= minAmount && want <= perTxCap) s |= 16;
-        if (_spentToday() + want <= dailyCap && _spacedOk() && want > 0) s |= 32;
-        if (IERC20V(tokenIn).balanceOf(address(this)) >= want + f && want > 0) s |= 64;
+        (amount, fee) = _size(kGuess);
+        uint16 s;
+        (s, minOut) = _safety(caller, t, spot, amount, fee);
         inputs = base | s;
 
         // One chip call per trade: if every safety fact holds, the inputs are exactly the ones already asked
         // about. If any fact fails, the circuit's answer is "no" for every such input (verified exhaustively),
         // so there is nothing to ask.
         if (inputs != (base | 0x7e)) return (inputs, 0, 0, 0, 0);
-        k = kGuess;
         // slither-disable-next-line incorrect-equality (k = 0 means "no trade")
         if (!allowGuess || kGuess == 0) return (inputs, kGuess, 0, 0, 0);
-        return (inputs, kGuess, want, f, mo);
+        k = kGuess;
+    }
+
+    /// @dev The facts that do not depend on the size: move vs reference, volatility, strategy.
+    function _market(int24 t, int24 spot) internal view returns (uint16 base) {
+        uint256 vol = _absDiff(spot, t);
+        uint16 volBucket = vol < 15 ? 0 : vol < 35 ? 1 : vol < 60 ? 2 : 3;
+        base = (_depth(_priceAt(t)) << 7) | (volBucket << 10) | (uint16(mode) << 12);
+    }
+
+    /// @dev baseAmount x k, capped by the per-trade limit, what is left today and what the vault can pay (with fee).
+    // slither-disable-next-line timestamp (daily window)
+    function _size(uint8 k) internal view returns (uint256 want, uint256 f) {
+        want = baseAmount * k;
+        if (want > perTxCap) want = perTxCap;
+        uint256 spent = _spentToday();
+        uint256 left = dailyCap > spent ? dailyCap - spent : 0;
+        if (want > left) want = left;
+        uint256 bps = feeBpsNow();
+        uint256 afford = (IERC20V(tokenIn).balanceOf(address(this)) * 10_000) / (10_000 + bps);
+        if (want > afford) want = afford;
+        f = (want * bps) / 10_000;
+    }
+
+    /// @dev The 7 safety facts (bits 0-6) for a trade of `want` (+ fee `f`), and the worst output accepted.
+    // slither-disable-next-line timestamp,incorrect-equality (daily window + spacing; 0 = no trade)
+    function _safety(address caller, int24 t, int24 spot, uint256 want, uint256 f)
+        internal
+        view
+        returns (uint16 s, uint256 mo)
+    {
+        mo = want == 0 ? 0 : _minOut(t, want);
+        if (paused) s |= 1;
+        if (caller == keeper && !_revoked(caller)) s |= 2;
+        s |= 4;
+        if (_priceOk(t, spot, want, mo)) s |= 8;
+        if (want >= minAmount && want <= perTxCap) s |= 16;
+        if (_spentToday() + want <= dailyCap && _spacedOk() && want > 0) s |= 32;
+        if (IERC20V(tokenIn).balanceOf(address(this)) >= want + f && want > 0) s |= 64;
+    }
+
+    /// @dev Average inside the owner's limit, market stable, worst fill inside the limit, live price good enough.
+    function _priceOk(int24 t, int24 spot, uint256 want, uint256 mo) internal view returns (bool) {
+        uint256 price = _priceAt(t);
+        return (direction == BUY ? price <= limitPrice : price >= limitPrice)
+            && _absDiff(spot, t) <= uint256(int256(MAX_TICK_DEVIATION)) && mo > 0 && _fillOk(want, mo) && _spotOk(spot, want, mo);
     }
 
     function _chip(uint16 inputs) internal view returns (bool allow, uint8 k) {

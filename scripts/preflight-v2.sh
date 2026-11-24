@@ -77,7 +77,7 @@ ok "every input matches the rules"
 echo "== 3. Deploy LatchFactory2 (copy)"
 POOL=$(cast call "$UNI_FACTORY" "getPool(address,address,uint24)(address)" "$USDT" "$WOKB" "$POOL_FEE" --rpc-url "$F")
 PINS="($PROCESSOR,$CID,$ROUTER,$POOL,$USDT,$WOKB,$TREASURY,$BOT,$TWAP,$SLIPPAGE_BPS,$MIN_BUY,$MIN_SELL)"
-OUT=$(forge create contracts/LatchFactory2.sol:LatchFactory2 --via-ir --optimize --optimizer-runs 200 --evm-version cancun \
+OUT=$(forge create contracts/LatchFactory2.sol:LatchFactory2 --optimize --optimizer-runs 200 --evm-version cancun \
   --rpc-url "$F" --unlocked --from "$OWNER" --broadcast --constructor-args "$PINS" 2>&1) || { echo "$OUT"; fail "factory deploy failed"; }
 FAC=$(echo "$OUT" | awk '/Deployed to/{print $3}'); [ -n "$FAC" ] || { echo "$OUT"; fail "factory deploy failed"; }
 ok "factory $FAC · vault template $(cast call "$FAC" "implementation()(address)" --rpc-url "$F")"

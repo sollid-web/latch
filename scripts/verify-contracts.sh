@@ -13,7 +13,7 @@ export PATH="$HOME/.foundry/bin:$PATH"
 if [ -f keeper/.env ]; then set -a; . ./keeper/.env; set +a; fi
 RPC="${RPC:-https://rpc.xlayer.tech}"
 OKLINK_URL="https://www.oklink.com/api/v5/explorer/contract/verify-source-code-plugin/XLAYER"
-FAC2=0x4Af276338A81DA70e5dA4108FA0A7F6d294381b8
+FAC2="${FACTORY2:-$(python3 -c "import json;print(json.load(open('deployments/web-config.json'))['factory2'])")}"   # the live v2 factory
 FAC1=0xc700C9865f237612b0bA86408BB4C182D41ABD11
 first(){ awk '{print $1}'; }
 ok=0; bad=0; results=()
@@ -53,9 +53,9 @@ ARGS1=$(cast abi-encode 'c(address,uint256,address,address,address,address,addre
   "$(cast call $FAC1 'twapWindow()(uint32)' --rpc-url "$RPC" | first)" "$(cast call $FAC1 'slippageBps()(uint256)' --rpc-url "$RPC" | first)" \
   "$(cast call $FAC1 'minAmount()(uint256)' --rpc-url "$RPC" | first)")
 
-# v2: built with via-IR, cancun (scripts/golive-v2.sh)
-verify "LatchFactory2 $FAC2" "$FAC2" contracts/LatchFactory2.sol:LatchFactory2 "$PINS2" --via-ir --evm-version cancun
-verify "LatchVault template $IMPL" "$IMPL" contracts/LatchVault.sol:LatchVault "" --via-ir --evm-version cancun
+# v2: built without via-IR (optimizer 200, cancun) so OKLink can verify it (scripts/golive-v2.sh)
+verify "LatchFactory2 $FAC2" "$FAC2" contracts/LatchFactory2.sol:LatchFactory2 "$PINS2" --evm-version cancun
+verify "LatchVault template $IMPL" "$IMPL" contracts/LatchVault.sol:LatchVault "" --evm-version cancun
 # v1 classic: built with foundry.toml defaults (no via-IR). Try the EVM versions Foundry has used by default.
 for evm in cancun prague shanghai; do
   before=$bad

@@ -54,7 +54,7 @@ else
   yes_or_stop "Next: deploy LatchFactory2 (circuit #$CID, min Buy 1 USDT0, min Take Profit 0.01 OKB). Gas only."
   step "3. Deploying LatchFactory2"
   PINS="($PROCESSOR,$CID,$ROUTER,$POOL,$USDT,$WOKB,$TREASURY,$BOT,$TWAP,$SLIPPAGE_BPS,$MIN_BUY,$MIN_SELL)"
-  OUT=$(forge create contracts/LatchFactory2.sol:LatchFactory2 --via-ir --optimize --optimizer-runs 200 --evm-version cancun \
+  OUT=$(forge create contracts/LatchFactory2.sol:LatchFactory2 --optimize --optimizer-runs 200 --evm-version cancun \
     --rpc-url "$RPC" --chain "$CHAIN_ID" --private-key "$OWNER_PRIVATE_KEY" --broadcast --constructor-args "$PINS" 2>&1) || { echo "$OUT"; fail "deploy failed"; }
   echo "$OUT" | grep -E "Deployed to|Transaction hash"
   FAC=$(echo "$OUT" | awk '/Deployed to/{print $3}'); [ -n "$FAC" ] || fail "deploy failed"

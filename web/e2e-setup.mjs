@@ -22,7 +22,7 @@ const out = JSON.parse(solc.compile(JSON.stringify({ language: 'Solidity', sourc
   { import: (p) => ({ contents: rd('contracts/' + p.split('/').pop()) }) }));
 const out2 = JSON.parse(solc.compile(JSON.stringify({ language: 'Solidity', sources: {
   'LatchVault.sol': { content: rd('contracts/LatchVault.sol') }, 'UniMath.sol': { content: rd('contracts/UniMath.sol') }, 'LatchFactory2.sol': { content: rd('contracts/LatchFactory2.sol') } },
-  settings: { viaIR: true, optimizer: { enabled: true, runs: 200 }, evmVersion: 'cancun', outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object'] } } } }),
+  settings: { optimizer: { enabled: true, runs: 200 }, evmVersion: 'cancun', outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object'] } } } }),
   { import: (p) => ({ contents: rd('contracts/' + p.split('/').pop()) }) }));
 const Fac2 = { abi: out2.contracts['LatchFactory2.sol'].LatchFactory2.abi, bytecode: '0x' + out2.contracts['LatchFactory2.sol'].LatchFactory2.evm.bytecode.object };
 const art = (f, c) => ({ abi: out.contracts[f][c].abi, bytecode: '0x' + out.contracts[f][c].evm.bytecode.object });

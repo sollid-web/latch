@@ -27,7 +27,7 @@ const out = JSON.parse(solc.compile(JSON.stringify({
     'LatchVault.sol': { content: C('LatchVault.sol') }, 'UniMath.sol': { content: C('UniMath.sol') },
     'LatchFactory2.sol': { content: C('LatchFactory2.sol') }, 'Helpers.sol': { content: src(path.join(swapDir, 'Helpers.sol')) }
   },
-  settings: { viaIR: true, optimizer: { enabled: true, runs: 200 }, evmVersion: 'cancun', outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object'] } } }
+  settings: { optimizer: { enabled: true, runs: 200 }, evmVersion: 'cancun', outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object'] } } }
 }), { import: (p) => ({ contents: C(path.basename(p)) }) }));
 for (const e of out.errors || []) if (e.severity === 'error') { console.error(e.formattedMessage); process.exit(1); }
 const art = (f, c) => ({ abi: out.contracts[f][c].abi, bytecode: '0x' + out.contracts[f][c].evm.bytecode.object });

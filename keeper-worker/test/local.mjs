@@ -29,7 +29,7 @@ for (const e of out.errors || []) if (e.severity === 'error') throw new Error(e.
 const out2 = JSON.parse(solc.compile(JSON.stringify({
   language: 'Solidity',
   sources: { 'LatchVault.sol': { content: read('contracts/LatchVault.sol') }, 'UniMath.sol': { content: read('contracts/UniMath.sol') }, 'LatchFactory2.sol': { content: read('contracts/LatchFactory2.sol') } },
-  settings: { viaIR: true, optimizer: { enabled: true, runs: 200 }, evmVersion: 'cancun', outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object'] } } }
+  settings: { optimizer: { enabled: true, runs: 200 }, evmVersion: 'cancun', outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object'] } } }
 }), { import: (p) => ({ contents: read('contracts/' + path.basename(p)) }) }));
 for (const e of out2.errors || []) if (e.severity === 'error') throw new Error(e.formattedMessage);
 const Vault2 = { abi: out2.contracts['LatchVault.sol'].LatchVault.abi };
