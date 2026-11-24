@@ -18,15 +18,22 @@ Object.assign(S, {
 
 /* ================================================================ data */
 
+const retry = async (fn, n = 3) => { for (let i = 0; ; i++) { try { return await fn(); } catch (e) { if (i >= n - 1) throw e; await new Promise((r) => setTimeout(r, 700 * (i + 1))); } } };
 async function readMarket() {
   try {
     const [s0, t0] = await Promise.all([
-      pub.readContract({ address: C.pool, abi: POOL, functionName: 'slot0' }),
-      pub.readContract({ address: C.pool, abi: POOL, functionName: 'token0' })
+      retry(() => pub.readContract({ address: C.pool, abi: POOL, functionName: 'slot0' })),
+      retry(() => pub.readContract({ address: C.pool, abi: POOL, functionName: 'token0' }))
     ]);
     const raw = Math.pow(1.0001, Number(s0[1]));
     S.price = t0.toLowerCase() === C.usdt.toLowerCase() ? 1e12 / raw : raw * 1e12;
-  } catch { S.price = null; }
+  } catch {
+    // Fall back to the 30-minute average a vault reports (same pool), so the price never stays blank.
+    try {
+      const first = HAS2 ? (await pub.readContract({ address: C.factory2, abi: FACTORY2, functionName: 'vaultsPage', args: [0n, 1n] }))[0] : null;
+      S.price = first ? Number(await pub.readContract({ address: first, abi: VAULT2, functionName: 'twapPrice' })) / 1e6 : (S.price ?? null);
+    } catch { /* keep the last value */ }
+  }
   if (HAS2 && !S.treasury) {
     try {
       const [t, k, mb, ms] = await Promise.all(['treasury', 'hostedKeeper', 'minBuy', 'minSell'].map((f) => pub.readContract({ address: C.factory2, abi: FACTORY2, functionName: f })));
