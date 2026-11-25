@@ -79,6 +79,19 @@ ok('try → Create carries the settings', /Take profit automatically/.test(await
 
 /* ---- Create a Buy vault (smart, reference 100 → OKB ~21% below → 3×) ---- */
 ok('wallet that already approved the site shows connected on load, no prompt', !(await page.locator('header [data-a=connect]').count()) && /0x/i.test(await page.locator('header').innerText()), await page.locator('header').innerText());
+await page.click('header [data-a=disconnect]'); await page.waitForTimeout(800);
+ok('Disconnect → Connect wallet button again', (await page.locator('header [data-a=connect]').count()) === 1);
+await page.reload(); await page.waitForTimeout(2500);
+ok('after Disconnect, a reload stays disconnected (no silent reconnect)', (await page.locator('header [data-a=connect]').count()) === 1);
+await page.click('header [data-a=connect]'); await page.waitForTimeout(600);
+const pick = await page.locator('.picker').innerText().catch(() => '');
+ok('Connect opens the wallet picker: browser wallet + scan with a phone wallet', /Connect a wallet/.test(pick) && /OKX Wallet/.test(pick) && /Scan with a phone wallet/.test(pick) && /X Layer/.test(pick), pick);
+await page.screenshot({ path: shots + '/1c-wallet-picker.png' });
+await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+ok('Escape closes the picker without connecting', !(await page.locator('.picker').count()) && (await page.locator('header [data-a=connect]').count()) === 1);
+await page.click('header [data-a=connect]'); await page.waitForTimeout(400);
+await page.click('.picker [data-a=pick][data-id^="inj:"]'); await page.waitForTimeout(1500);
+ok('picking the browser wallet connects and closes the picker', !(await page.locator('.picker').count()) && /0x/i.test(await page.locator('header').innerText()), await page.locator('header').innerText());
 await go('#/create?buy', 600);
 ok('create: Buy preset opens on Strategy', /Buy OKB automatically/.test(await txt()) && /Smart/.test(await txt()));
 await page.screenshot({ path: shots + '/2-create-strategy.png', fullPage: true });

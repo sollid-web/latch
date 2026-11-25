@@ -20,10 +20,14 @@ for (const k of ['chainId', 'rpc', 'explorer', 'factory', 'usdt', 'wokb', 'pool'
 if (ONCHAIN) {
   config.rpc = ['https://rpc.xlayer.tech', 'https://xlayer.drpc.org']; // TapeKit's default X Layer nodes (allowed on the gateway)
   config.onchain = true;
+  delete config.wcProjectId;
 }
 const stub = {
   name: 'okx-stub',
-  setup(b) { b.onResolve({ filter: /^@okxconnect\/universal-provider$/ }, () => ({ path: path.join(root, 'web/okx-stub.js') })); }
+  setup(b) {
+    b.onResolve({ filter: /^@okxconnect\/universal-provider$/ }, () => ({ path: path.join(root, 'web/okx-stub.js') }));
+    b.onResolve({ filter: /^@walletconnect\/universal-provider$/ }, () => ({ path: path.join(root, 'web/wc-stub.js') }));
+  }
 };
 const res = await build({
   entryPoints: [path.join(root, 'web/app.js')], bundle: true, minify: true, format: 'iife',

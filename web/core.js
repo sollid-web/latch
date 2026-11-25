@@ -1,6 +1,8 @@
 // Latch web core: chain + contracts, wallet connection (extension, in-app browser, OKX Connect on phones),
 // transactions with plain-English errors, event-log search, formatting. Pages live in app.js.
 import { OKXUniversalProvider, ConnectWalletType } from '@okxconnect/universal-provider';
+import UniversalProvider from '@walletconnect/universal-provider';
+import QRCode from 'qrcode';
 import {
   createPublicClient, createWalletClient, custom, fallback, http, parseAbi, parseAbiItem,
   formatUnits, getAddress, decodeErrorResult
@@ -118,17 +120,30 @@ export function hooks(render, refresh) { renderFn = render; refreshFn = refresh;
 const render = () => renderFn();
 
 /* ---------------------------------------------------------------- wallet */
+// Connect shows a picker: wallets found in this browser (each by name, EIP-6963), "scan with a phone wallet"
+// (WalletConnect QR: OKX Wallet, MetaMask, Trust, Bitget and any other WalletConnect wallet that supports
+// X Layer), and on phones the OKX Wallet app (OKX Connect). Nothing connects without the person choosing.
 const announced = [];
-window.addEventListener('eip6963:announceProvider', (e) => { if (e?.detail?.provider) announced.push(e.detail); });
-try { window.dispatchEvent(new Event('eip6963:requestProvider')); } catch { /* old browsers */ }
-function findWallet() {
-  if (window.okxwallet) return { p: window.okxwallet, name: 'OKX Wallet' };
-  const okx = announced.find((d) => /okx|okex/i.test(d.info?.rdns || d.info?.name || ''));
-  if (okx) return { p: okx.provider, name: okx.info.name };
-  if (window.ethereum) return { p: window.ethereum, name: 'Wallet' };
-  if (announced[0]) return { p: announced[0].provider, name: announced[0].info?.name || 'Wallet' };
-  return null;
+window.addEventListener('eip6963:announceProvider', (e) => {
+  const d = e?.detail; if (!d?.provider) return;
+  const id = d.info?.rdns || d.info?.uuid || d.info?.name;
+  if (!announced.some((x) => (x.info?.rdns || x.info?.uuid || x.info?.name) === id)) { announced.push(d); render(); }
+});
+const askWallets = () => { try { window.dispatchEvent(new Event('eip6963:requestProvider')); } catch { /* old browsers */ } };
+askWallets();
+const safeIcon = (u) => (typeof u === 'string' && /^data:image\/(png|svg\+xml|jpeg|webp|gif);/i.test(u) ? u : '');
+/** Wallets in this browser (extensions, or the wallet app's own browser), newest standard first. */
+export function browserWallets() {
+  const list = announced.map((d) => ({ id: 'inj:' + (d.info?.rdns || d.info?.uuid || d.info?.name), name: d.info?.name || 'Browser wallet', icon: safeIcon(d.info?.icon), p: d.provider }));
+  if (!list.length && window.okxwallet) list.push({ id: 'inj:okxwallet', name: 'OKX Wallet', icon: '', p: window.okxwallet });
+  if (!list.length && window.ethereum) list.push({ id: 'inj:ethereum', name: window.ethereum.isMetaMask ? 'MetaMask' : 'Browser wallet', icon: '', p: window.ethereum });
+  return list;
 }
+function findWallet(id) {
+  const all = browserWallets();
+  return (id && all.find((w) => w.id === id)) || all.find((w) => /okx|okex/i.test(w.id + w.name)) || all[0] || null;
+}
+export const hasWalletConnect = () => !C.onchain && !!C.wcProjectId;
 /** OKX's App Universal Link (opens this page in the OKX app's DApp browser). */
 export function okxAppLink(url = location.href) {
   const inner = 'okx://wallet/dapp/url?dappUrl=' + encodeURIComponent(url);
@@ -139,6 +154,31 @@ export function okxWalletLink(url = location.href) {
   return 'okxwallet://wallet/dapp/url?dappUrl=' + encodeURIComponent(url);
 }
 export const isMobile = () => /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') || (navigator.maxTouchPoints > 1 && Math.min(screen.width, screen.height) < 900);
+const XL = 'eip155:' + C.chainId;
+const LAST = 'latch.wallet';      // which kind of wallet you chose last: 'inj:<rdns>', 'wc' or 'okx'
+const SILENT_OFF = 'latch.disconnected';
+const store = {
+  get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k, v) => { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch { /* private mode */ } }
+};
+function connected(provider, name, account, kind) {
+  S.provider = provider; S.walletName = name; S.account = account; S.picker = null; S.note = ''; S.mobileHelp = false;
+  store.set(LAST, kind); store.set(SILENT_OFF, null);
+}
+function wrapSession(request) { // OKX Connect / WalletConnect → the small EIP-1193 surface viem needs
+  return {
+    request: ({ method, params }) => {
+      if (method === 'eth_chainId') return Promise.resolve('0x' + C.chainId.toString(16));
+      if (method === 'wallet_switchEthereumChain') return Promise.resolve(null);
+      return request({ method, params });
+    },
+    on() {}, removeListener() {}
+  };
+}
+const pickAccount = (list) => {
+  const a = (list || []).find((x) => String(x).startsWith(XL + ':')) || null;
+  return a ? getAddress(String(a).split(':').pop()) : null;
+};
 
 /* OKX Connect (OKX's official SDK): from a normal phone browser, asks the standalone OKX Wallet app
    (ConnectWalletType.OKX_WALLET, not the exchange app) to approve, then you come back here connected. */
@@ -146,61 +186,119 @@ let okxConnectP = null;
 function okxConnect() {
   if (!okxConnectP) {
     okxConnectP = OKXUniversalProvider.init({ dappMetaData: { name: 'Latch', icon: location.origin + '/icon.png' } }).then((okx) => {
-      okx.on('session_delete', () => { // disconnected from the wallet app's side
-        if (S.walletName === 'OKX Wallet app') { S.account = null; S.provider = null; refreshFn(); }
-      });
-      okx.on('session_update', () => { const a = sessionAccount(okx); if (a && S.walletName === 'OKX Wallet app') { S.account = a; render(); } });
+      okx.on('session_delete', () => { if (store.get(LAST) === 'okx') { S.account = null; S.provider = null; refreshFn(); } });
+      okx.on('session_update', () => { const a = pickAccount(okx.session?.namespaces?.eip155?.accounts); if (a && store.get(LAST) === 'okx') { S.account = a; render(); } });
       return okx;
     });
   }
   return okxConnectP;
 }
-/** The approved X Layer account from OKX Connect's saved session (no network needed). */
-function sessionAccount(okx) {
-  try {
-    const list = okx.session?.namespaces?.eip155?.accounts || [];
-    const a = list.find((x) => String(x).startsWith(XL + ':')) || list[0];
-    return a ? getAddress(String(a).split(':').pop()) : null;
-  } catch { return null; }
+const useOkx = (okx, a) => connected(wrapSession((x) => okx.request(x, XL)), 'OKX Wallet app', a, 'okx');
+async function connectOkxApp() {
+  const okx = await okxConnect();
+  if (okx.connected()) { try { await Promise.race([okx.disconnect(), new Promise((r) => setTimeout(r, 1500))]); } catch { /* start fresh */ } }
+  const session = await okx.connect({
+    namespaces: { eip155: { chains: [XL], defaultChain: String(C.chainId), rpcMap: { [String(C.chainId)]: C.rpc[0] } } },
+    sessionConfig: { redirect: 'none', connectWalletType: ConnectWalletType.OKX_WALLET }
+  });
+  const a = pickAccount(session?.namespaces?.eip155?.accounts) || pickAccount((session?.namespaces?.eip155?.accounts || []).map((x) => XL + ':' + String(x).split(':').pop()));
+  if (!a) throw new Error('The wallet app did not return an X Layer account.');
+  useOkx(okx, a);
 }
-function useOkxSession(okx, account) {
-  S.provider = okxAsEip1193(okx); S.walletName = 'OKX Wallet app'; S.account = account; S.walletChain = C.chainId;
-  S.note = ''; S.mobileHelp = false;
+
+/* WalletConnect: a QR code any phone wallet can scan (or, on a phone, a link that opens the wallet app). */
+let wcP = null;
+function wcInit() {
+  if (!hasWalletConnect()) return Promise.reject(new Error('Scanning is not set up on this copy of Latch.'));
+  if (!wcP) {
+    wcP = UniversalProvider.init({
+      projectId: C.wcProjectId,
+      metadata: { name: 'Latch', description: 'Rule-bound OKB vaults on X Layer', url: location.origin, icons: [location.origin + '/icon.png'] }
+    }).then((p) => {
+      p.on('display_uri', async (uri) => {
+        if (!S.picker) return;
+        S.picker.uri = uri;
+        try { S.picker.qr = await QRCode.toString(uri, { type: 'svg', margin: 1, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#ffffff' } }); } catch { S.picker.qr = ''; }
+        render();
+      });
+      p.on('session_delete', () => { if (store.get(LAST) === 'wc') { S.account = null; S.provider = null; refreshFn(); } });
+      p.on('accountsChanged', (a) => { if (store.get(LAST) === 'wc' && a?.[0]) { S.account = getAddress(String(a[0]).split(':').pop()); refreshFn(); } });
+      return p;
+    });
+    wcP.catch(() => { wcP = null; });
+  }
+  return wcP;
 }
-/** On load, and whenever you come back to this tab: if you already approved Latch in the OKX Wallet app,
- *  show you as connected. Phones pause or reload the tab while the wallet app is open, so the page cannot
- *  rely on still being there when the approval arrives. */
-const SILENT_OFF = 'latch.disconnected';
+const useWc = (p, a) => connected(wrapSession((x) => p.request(x, XL)), p.session?.peer?.metadata?.name || 'Phone wallet', a, 'wc');
+async function connectWc() {
+  const p = await wcInit();
+  if (p.session) { try { await p.disconnect(); } catch { /* start fresh */ } }
+  const session = await p.connect({
+    optionalNamespaces: {
+      eip155: {
+        chains: [XL],
+        methods: ['eth_sendTransaction', 'personal_sign', 'eth_signTypedData_v4', 'wallet_switchEthereumChain', 'wallet_addEthereumChain'],
+        events: ['accountsChanged', 'chainChanged'],
+        rpcMap: { [String(C.chainId)]: C.rpc[0] }
+      }
+    }
+  });
+  const a = pickAccount(session?.namespaces?.eip155?.accounts);
+  if (!a) {
+    try { await p.disconnect(); } catch { /* ignore */ }
+    throw new Error('That wallet did not share an X Layer account. Use a wallet that supports X Layer (OKX Wallet, Bitget Wallet, MetaMask with X Layer added).');
+  }
+  useWc(p, a);
+}
+export function cancelWc() {
+  if (S.picker) { S.picker.step = 'list'; S.picker.uri = ''; S.picker.qr = ''; S.picker.busy = ''; S.picker.cancelled = true; }
+  wcP?.then((p) => { try { p.abortPairingAttempt?.(); } catch { /* nothing pending */ } }).catch(() => {});
+}
+
+/* Browser wallets: always ask the wallet, so you can pick (or switch) the account each time. */
 function listen(p) {
   if (!p.on || p.__latch) return;
   p.__latch = true;
-  p.on('accountsChanged', (a) => { S.account = a?.[0] ? getAddress(a[0]) : null; refreshFn(); });
-  p.on('chainChanged', (id) => { S.walletChain = Number(id); render(); });
+  p.on('accountsChanged', (a) => { if (S.provider !== p) return; S.account = a?.[0] ? getAddress(a[0]) : null; refreshFn(); });
+  p.on('chainChanged', (id) => { if (S.provider !== p) return; S.walletChain = Number(id); render(); });
 }
-/** Wallet already approved this site (extension or OKX app browser): show it connected after a reload, without a prompt. */
-async function restoreInjected() {
-  const w = findWallet();
-  if (!w) return false;
-  try { if (localStorage.getItem(SILENT_OFF)) return false; } catch {}
+async function connectInjected(w) {
+  try { await w.p.request({ method: 'wallet_requestPermissions', params: [{ eth_accounts: {} }] }); } // shows the account chooser
+  catch (e) { if (e?.code === 4001) throw e; /* wallet without this method: the normal request below */ }
+  const accts = await w.p.request({ method: 'eth_requestAccounts' });
+  if (!accts?.[0]) throw new Error('The wallet did not share an account.');
+  connected(w.p, w.name, getAddress(accts[0]), w.id);
+  S.walletChain = Number(await w.p.request({ method: 'eth_chainId' }));
+  listen(w.p);
+  if (S.walletChain !== C.chainId) await switchChain();
+}
+
+/** Show the wallet you already chose after a reload (no prompt). Never after you pressed Disconnect. */
+export async function restoreSession() {
+  if (S.account || store.get(SILENT_OFF)) return false;
+  const last = store.get(LAST);
   try {
+    if (last === 'wc') {
+      if (!hasWalletConnect()) return false;
+      const p = await wcInit(); const a = p.session && pickAccount(p.session.namespaces?.eip155?.accounts);
+      if (!a || S.account) return false;
+      useWc(p, a); return true;
+    }
+    if (last === 'okx' || (!last && isMobile() && !browserWallets().length)) {
+      if (C.onchain) return false;
+      const okx = await okxConnect();
+      if (!okx.connected()) return false;
+      const a = pickAccount(okx.session?.namespaces?.eip155?.accounts);
+      if (!a || S.account) return false;
+      useOkx(okx, a); return true;
+    }
+    const w = findWallet(last && last.startsWith('inj:') ? last : null);
+    if (!w) return false;
     const a = await w.p.request({ method: 'eth_accounts' });
     if (!a?.[0] || S.account) return false;
-    S.provider = w.p; S.walletName = w.name; S.account = getAddress(a[0]);
+    connected(w.p, w.name, getAddress(a[0]), w.id);
     S.walletChain = Number(await w.p.request({ method: 'eth_chainId' }).catch(() => C.chainId));
     listen(w.p);
-    return true;
-  } catch { return false; }
-}
-export async function restoreSession() {
-  if (S.account) return false;
-  if (window.okxwallet || window.ethereum || announced.length) return restoreInjected();
-  if (C.onchain || (!okxConnectP && !isMobile())) return false;
-  try {
-    const okx = await okxConnect();
-    if (!okx.connected()) return false;
-    const a = sessionAccount(okx);
-    if (!a) return false;
-    useOkxSession(okx, a);
     return true;
   } catch { return false; }
 }
@@ -208,96 +306,72 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || S.account) return;
   setTimeout(() => restoreSession().then((ok) => { if (ok) refreshFn(); }), 800);
 });
-const XL = 'eip155:' + C.chainId;
-function okxAsEip1193(okx) {
-  return {
-    request: ({ method, params }) => {
-      if (method === 'eth_chainId') return Promise.resolve('0x' + C.chainId.toString(16));
-      if (method === 'wallet_switchEthereumChain') return Promise.resolve(null);
-      return okx.request({ method, params }, XL);
-    },
-    on() {}, removeListener() {}
-  };
-}
-async function connectOkxApp() {
-  const okx = await okxConnect();
-  if (okx.connected()) {
-    const a = sessionAccount(okx);
-    if (a) return { okx, account: a };
-    try { await Promise.race([okx.disconnect(), new Promise((r) => setTimeout(r, 1500))]); } catch { /* start fresh below */ }
-  }
-  const session = await okx.connect({
-    namespaces: { eip155: { chains: [XL], defaultChain: String(C.chainId), rpcMap: { [String(C.chainId)]: C.rpc[0] } } },
-    sessionConfig: { redirect: 'none', connectWalletType: ConnectWalletType.OKX_WALLET }
-  });
-  const acct = session?.namespaces?.eip155?.accounts?.find((a) => a.startsWith(XL + ':')) || session?.namespaces?.eip155?.accounts?.[0];
-  if (!acct) throw new Error('The wallet app did not return an X Layer account.');
-  return { okx, account: getAddress(acct.split(':').pop()) };
-}
-if (typeof window !== 'undefined' && !C.onchain && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') && !window.okxwallet && !window.ethereum) {
+if (typeof window !== 'undefined' && !C.onchain && isMobile() && !window.okxwallet && !window.ethereum) {
   okxConnect().catch(() => {}); // warm up, so the tap opens the app without delay (iOS blocks slow hand-offs)
 }
 
+/** "Connect wallet": inside a wallet app's own browser, connect to it; everywhere else, show the picker. */
 export async function connect() {
-  let w = findWallet();
-  if (!w && isMobile() && C.onchain) {
-    // On-chain copy (DeWEB): OKX Connect's relay is off-chain, so open this page inside the OKX Wallet app instead.
-    S.note = ''; S.mobileHelp = true; render();
-    return;
+  S.note = ''; S.mobileHelp = false;
+  if (isMobile()) {
+    for (let i = 0; !browserWallets().length && (window.okxwallet || window.ethereum) && i < 4; i++) { askWallets(); await new Promise((r) => setTimeout(r, 300)); }
+    const list = browserWallets();
+    if (list.length === 1) return choose(list[0].id); // the wallet app's own browser: one wallet, nothing to pick
   }
-  if (!w && isMobile() && !window.okxwallet && !window.ethereum) {
-    S.note = 'Opening the OKX Wallet app… approve the connection there, then come back to this page.'; S.mobileHelp = false; render();
-    // If the app has not opened after a few seconds (page still on screen), say so plainly.
-    const watch = setTimeout(() => {
-      if (!S.account && document.visibilityState === 'visible') {
-        S.note = 'The OKX Wallet app did not open by itself. Tap "Open in OKX Wallet app" below.'; S.mobileHelp = true; render();
-      }
-    }, 6000);
-    try {
-      const r = await connectOkxApp();
-      clearTimeout(watch);
-      useOkxSession(r.okx, r.account);
-      await refreshFn();
-      return;
-    } catch (e) {
-      clearTimeout(watch);
-      if (await restoreSession()) { await refreshFn(); return; } // approved while this tab was paused
-      S.note = 'Could not connect through the OKX Wallet app (' + plain(e) + '). Use the steps below instead.';
-      S.mobileHelp = true; render();
-      return;
+  askWallets();
+  S.picker = { step: 'list', busy: '', error: '', uri: '', qr: '' };
+  render();
+}
+export function closePicker() { if (S.picker?.step === 'wc') cancelWc(); S.picker = null; render(); }
+
+/** Picker choice: 'inj:<id>', 'wc' or 'okx'. */
+export async function choose(id) {
+  if (!S.picker) S.picker = { step: 'list', busy: '', error: '', uri: '', qr: '' };
+  const pk = S.picker; pk.error = '';
+  try {
+    if (id === 'wc') {
+      pk.step = 'wc'; pk.busy = 'Making a code'; pk.cancelled = false; render();
+      const slow = setTimeout(() => { // the relay never answered: say so instead of spinning forever
+        if (S.picker === pk && pk.step === 'wc' && !pk.uri) { cancelWc(); pk.error = 'Could not reach WalletConnect to make a code. Check your internet connection and try again.'; render(); }
+      }, 20000);
+      try { await connectWc(); } finally { clearTimeout(slow); }
+    } else if (id === 'okx') {
+      if (C.onchain) { S.picker = null; S.mobileHelp = true; render(); return; }
+      pk.busy = 'Opening the OKX Wallet app'; render();
+      const watch = setTimeout(() => {
+        if (!S.account && S.picker && document.visibilityState === 'visible') { S.picker.error = 'The OKX Wallet app did not open by itself. Use "Open Latch inside your wallet app" below.'; S.picker.busy = ''; render(); }
+      }, 6000);
+      try { await connectOkxApp(); } finally { clearTimeout(watch); }
+    } else {
+      const w = browserWallets().find((x) => x.id === id);
+      if (!w) throw new Error('That wallet is no longer available in this browser. Reload the page and try again.');
+      pk.busy = 'Approve in ' + w.name; render();
+      await connectInjected(w);
     }
-  }
-  for (let i = 0; !w && i < 6; i++) { // in-app wallet browsers can inject their provider a little late
-    try { window.dispatchEvent(new Event('eip6963:requestProvider')); } catch { /* old browsers */ }
-    await new Promise((r) => setTimeout(r, 500));
-    w = findWallet();
-  }
-  if (!w) {
-    S.mobileHelp = true; S.note = isMobile() ? '' : 'No wallet found in this browser. On a computer, install the OKX Wallet extension and reload. On a phone, follow the steps below.';
+  } catch (e) {
+    if (S.account) return refreshFn();
+    if (S.picker !== pk || (id === 'wc' && pk.cancelled)) return; // you closed the picker or went back: nothing to report
+    if (id === 'okx' && await restoreSession()) return refreshFn(); // approved while this tab was paused
+    S.picker.busy = '';
+    if (id === 'wc') { S.picker.step = 'list'; S.picker.uri = ''; S.picker.qr = ''; }
+    S.picker.error = e?.code === 4001 || /reject|denied|cancel/i.test(e?.message || '') ? 'You declined in your wallet. Pick a wallet to try again.'
+      : e?.code === -32002 ? 'Your wallet already has a request waiting. Open the wallet and answer it.'
+      : /expired|proposal/i.test(e?.message || '') ? 'The code expired. Pick "Scan with a phone wallet" again for a new one.'
+      : plain(e);
     render();
     return;
   }
-  S.provider = w.p; S.walletName = w.name; S.note = '';
-  try {
-    const accts = await w.p.request({ method: 'eth_requestAccounts' });
-    S.account = accts?.[0] ? getAddress(accts[0]) : null;
-    S.walletChain = Number(await w.p.request({ method: 'eth_chainId' }));
-    if (S.walletChain !== C.chainId) await switchChain();
-    listen(w.p);
-    try { localStorage.removeItem(SILENT_OFF); } catch {}
-  } catch (e) {
-    S.note = e?.code === 4001 ? 'You rejected the connection in your wallet.'
-      : e?.code === -32002 ? 'Your wallet already has a request waiting. Open the wallet and answer it.'
-      : plain(e);
-  }
   await refreshFn();
 }
+
 export async function disconnect() {
-  // OKX Connect sessions are ended for real; extension wallets keep the site in their own connected-sites list.
-  try { if (okxConnectP) { const okx = await okxConnectP; if (okx.connected()) await okx.disconnect(); } } catch { /* already gone */ }
-  S.account = null; S.provider = null;
-  try { localStorage.setItem(SILENT_OFF, '1'); } catch {}
-  S.note = 'Disconnected. To remove Latch completely, also remove it from the connected sites list in your wallet.';
+  const last = store.get(LAST); const p = S.provider;
+  S.account = null; S.provider = null; S.picker = null;
+  store.set(SILENT_OFF, '1'); store.set(LAST, null);
+  try { if (okxConnectP && last === 'okx') { const okx = await okxConnectP; if (okx.connected()) await okx.disconnect(); } } catch { /* already gone */ }
+  try { if (wcP && last === 'wc') { const w = await wcP; if (w.session) await w.disconnect(); } } catch { /* already gone */ }
+  try { if (p && last?.startsWith('inj:')) await p.request({ method: 'wallet_revokePermissions', params: [{ eth_accounts: {} }] }); } catch { /* not supported by every wallet */ }
+  S.note = 'Disconnected. Connect wallet will ask which wallet to use.';
 }
 async function switchChain() {
   const hex = '0x' + C.chainId.toString(16);

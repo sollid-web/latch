@@ -3,7 +3,8 @@
 import { parseUnits, formatUnits, getAddress, isAddress } from 'viem';
 import {
   C, U6, E18, MAX, ZERO, pub, FACTORY1, VAULT1, FACTORY2, VAULT2, ERC20, WOKB_ABI, POOL, PROC, S, hooks,
-  connect, disconnect, restoreSession, send, plain, tradesOf, okxAppLink, okxWalletLink,
+  connect, disconnect, restoreSession, choose, closePicker, cancelWc, browserWallets, hasWalletConnect, isMobile,
+  send, plain, tradesOf, okxAppLink, okxWalletLink,
   esc, usd, okb, short, link, when, spacingText
 } from './core.js';
 import { evalChip, pack, MODES, DEPTHS, depthWord, VOLS, SAFETY, curve, depthOf, GATE_COUNT, SAFE } from './strategy.js';
@@ -647,6 +648,40 @@ function dialogView() {
   </form></div>`;
 }
 
+const WALLET_ICON = `<svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><rect x="3" y="6" width="18" height="13" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3 9h15a3 3 0 0 1 3 3" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="16.5" cy="13.5" r="1.3" fill="currentColor"/></svg>`;
+const SCAN_ICON = `<svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M4 9V5h4M16 5h4v4M20 15v4h-4M8 19H4v-4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="8" y="8" width="3" height="3" fill="currentColor"/><rect x="13" y="8" width="3" height="3" fill="currentColor"/><rect x="8" y="13" width="3" height="3" fill="currentColor"/><rect x="13" y="13" width="3" height="3" fill="currentColor"/></svg>`;
+const PHONE_ICON = `<svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.5 18.5h3" stroke="currentColor" stroke-width="1.6"/></svg>`;
+function pickerView() {
+  const pk = S.picker; if (!pk) return '';
+  const mobile = isMobile();
+  const option = (id, icon, name, hint) => `<li><button class="wopt" data-a="pick" data-id="${esc(id)}" ${pk.busy ? 'disabled' : ''}>
+      <span class="wico">${icon}</span><span class="wtxt"><b>${esc(name)}</b>${hint ? `<small>${hint}</small>` : ''}</span></button></li>`;
+  let body;
+  if (pk.step === 'wc') {
+    body = `<p class="dlg-text">Open your wallet app on your phone and scan this code with its scanner. It works with OKX Wallet, Bitget Wallet, MetaMask, Trust Wallet and other WalletConnect wallets that support X Layer.</p>
+      <div class="qr" aria-label="WalletConnect code">${pk.qr || `<span class="muted">${esc(pk.busy || 'Making a code')}…</span>`}</div>
+      ${pk.uri ? `<div class="row gap wrapr">${mobile ? `<a class="btn primary sm" href="${esc(pk.uri)}">Open wallet app</a>` : ''}<button class="btn quiet sm" data-a="copyWc">${pk.copied ? 'Copied' : 'Copy code as a link'}</button></div>
+        <p class="fine">After you approve in the wallet, this page connects by itself. ${mobile ? 'On this phone, “Open wallet app” asks which wallet to use.' : ''}</p>` : ''}
+      <div class="row between"><button class="btn quiet sm" data-a="wcBack">Back</button></div>`;
+  } else {
+    const inj = browserWallets();
+    const list = inj.map((w) => option(w.id, w.icon ? `<img src="${esc(w.icon)}" alt="" width="28" height="28">` : WALLET_ICON, w.name, '')).join('');
+    const scan = hasWalletConnect() ? option('wc', SCAN_ICON, mobile ? 'Other wallet apps' : 'Scan with a phone wallet', mobile ? 'Bitget, MetaMask, Trust and other WalletConnect wallets' : 'QR code for OKX Wallet, Bitget, MetaMask, Trust and other WalletConnect wallets') : '';
+    const okxApp = mobile && !C.onchain ? option('okx', PHONE_ICON, 'OKX Wallet app', 'Opens the app to approve, then brings you back') : '';
+    body = `${inj.length ? `<h3 class="wgrp">In this browser</h3><ul class="wlist">${list}</ul>` : `<p class="fine">${mobile ? 'No wallet in this browser.' : 'No wallet extension found in this browser. Install OKX Wallet, MetaMask or another wallet extension and reload, or scan with your phone.'}</p>`}
+      ${scan || okxApp ? `<h3 class="wgrp">${mobile ? 'Wallet apps' : 'On your phone'}</h3><ul class="wlist">${okxApp}${scan}</ul>` : ''}
+      ${mobile ? `<details class="wmore"><summary>Open Latch inside your wallet app instead</summary>
+        <p class="fine">Open the wallet app, go to its browser (Discover), and open this page there. Then tap Connect wallet.</p>
+        <div class="row gap wrapr"><a class="btn quiet sm" href="${esc(okxWalletLink())}" rel="noopener">OKX Wallet app</a><a class="btn quiet sm" href="${esc(okxAppLink())}" rel="noopener">OKX app</a><button class="btn quiet sm" data-a="copyLink">${S.copied ? 'Link copied' : 'Copy page link'}</button></div></details>` : ''}
+      <p class="fine">Latch runs on X Layer (chain 196). Your wallet needs to support it. Connecting only shares your address; every action asks you to approve it in your wallet.</p>`;
+  }
+  return `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="pk-t"><div class="sheet small picker">
+    <div class="row between"><h2 id="pk-t">${pk.step === 'wc' ? 'Scan with your wallet' : 'Connect a wallet'}</h2><button type="button" class="x" data-a="closePicker" aria-label="Close">×</button></div>
+    ${pk.busy && pk.step !== 'wc' ? `<p class="note-in" role="status">${esc(pk.busy)}…</p>` : ''}
+    ${pk.error ? `<p class="err" role="alert">${esc(pk.error)}</p>` : ''}
+    ${body}</div></div>`;
+}
+
 function mobileHelp() {
   if (!S.mobileHelp) return '';
   return `<section class="wrap note" role="status"><p><b>Open Latch inside your wallet app.</b> Phone browsers can't connect to a wallet directly.</p>
@@ -660,7 +695,7 @@ function render() {
   const focus = document.activeElement?.id;
   const page = { home: pageHome, try: pageTry, create: pageCreate, vaults: pageVaults, chip: pageChip, activity: pageActivity, safety: pageSafety }[S.page] || pageHome;
   app.innerHTML = header() + `<main id="main">${mobileHelp()}${S.note ? `<p class="wrap note" role="status">${esc(S.note)}</p>` : ''}${page()}</main>
-    <footer class="wrap foot"><span>${C.onchain ? 'You are on the on-chain copy of Latch, served from X Layer (DeWEB). ' : ''}Latch runs on X Layer. Every trade is decided by TapeOut circuit #${CID2}${C.circuitId ? ` (classic vaults: #${C.circuitId})` : ''}.${!C.onchain && C.deweb ? ` Also on chain: <a href="${esc(C.deweb.url)}" target="_blank" rel="noopener">${esc(C.deweb.name)}</a>.` : ''}</span><span>${HAS2 ? link(C.factory2, 'address', 'Vault factory') + ' · ' : ''}<a href="${C.repo}" target="_blank" rel="noopener">GitHub</a></span></footer>` + dialogView();
+    <footer class="wrap foot"><span>${C.onchain ? 'You are on the on-chain copy of Latch, served from X Layer (DeWEB). ' : ''}Latch runs on X Layer. Every trade is decided by TapeOut circuit #${CID2}${C.circuitId ? ` (classic vaults: #${C.circuitId})` : ''}.${!C.onchain && C.deweb ? ` Also on chain: <a href="${esc(C.deweb.url)}" target="_blank" rel="noopener">${esc(C.deweb.name)}</a>.` : ''}</span><span>${HAS2 ? link(C.factory2, 'address', 'Vault factory') + ' · ' : ''}<a href="${C.repo}" target="_blank" rel="noopener">GitHub</a></span></footer>` + dialogView() + pickerView();
   if (focus) document.getElementById(focus)?.focus();
   if (S.dialog && !focus) document.querySelector('.sheet input, .sheet select')?.focus();
 }
@@ -853,6 +888,13 @@ async function act(a, el) {
         text: `${esc(what)} goes back to your wallet ${esc(short(S.account))}. Pause first if you also want trading to stop.` });
     }
     case 'closeDialog': S.dialog = null; return render();
+    case 'pick': return choose(el.dataset.id);
+    case 'closePicker': return closePicker();
+    case 'wcBack': cancelWc(); return render();
+    case 'copyWc': {
+      try { await navigator.clipboard.writeText(S.picker.uri); S.picker.copied = true; } catch { window.prompt('Copy this link:', S.picker.uri); }
+      return render();
+    }
   }
 }
 
@@ -878,7 +920,11 @@ document.addEventListener('change', (e) => {
 });
 document.addEventListener('submit', (e) => { if (e.target.matches('[data-form=dialog]')) { e.preventDefault(); runDialog(); } });
 document.addEventListener('toggle', (e) => { const k = e.target?.dataset?.k; if (k) S.open[k] = e.target.open; }, true);
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.dialog && !S.busy) { S.dialog = null; render(); } });
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (S.picker) return closePicker();
+  if (S.dialog && !S.busy) { S.dialog = null; render(); }
+});
 
 S.c = loadDraft();
 route();

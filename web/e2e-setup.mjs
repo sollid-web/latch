@@ -57,6 +57,6 @@ await tx(proc, Proc.abi, 'tape', [2n, JSON.parse(rd('circuits/circuit2.json')).n
 const fac2 = await dep(Fac2, [{ processor: proc, circuitId: 2n, router, pool, quoteToken: usdt, baseToken: wokb, treasury: admin.address,
   hostedKeeper: bot.address, twapWindow: 1800, slippageBps: 100n, minBuy: 1_000_000n, minSell: 10n ** 16n }]);
 await pub.request({ method: 'evm_increaseTime', params: [2100] }); await pub.request({ method: 'evm_mine', params: [] });
-fs.writeFileSync(path.join(UI, 'web-local.json'), JSON.stringify({ chainId: 196, rpc: [RPC], explorer: 'https://www.oklink.com/xlayer', factory: fac, factory2: fac2, circuit2Id: 2, usdt, wokb, pool, processor: proc, circuitId: 1, router, uniFactory: uf, repo: 'https://github.com/sollid-web/latch', user }));
+fs.writeFileSync(path.join(UI, 'web-local.json'), JSON.stringify({ chainId: 196, rpc: [RPC], explorer: 'https://www.oklink.com/xlayer', factory: fac, factory2: fac2, circuit2Id: 2, usdt, wokb, pool, processor: proc, circuitId: 1, router, uniFactory: uf, repo: 'https://github.com/sollid-web/latch', wcProjectId: 'e2e-test', user }));
 console.log('READY', fac);
 await new Promise(() => {});
