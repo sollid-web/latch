@@ -238,7 +238,7 @@ function chipWidget(full) {
       <div class="die">
         ${gateGrid(r.gates, !full)}
         <p class="die-name">TapeOut circuit #${CID2} · ${GATE_COUNT} NAND gates</p>
-        <p class="die-sub num">input 0x${input.toString(16).padStart(4, '0')} → output 0b${(r.k << 1 | (r.allow ? 1 : 0)).toString(2).padStart(3, '0')}</p>
+        <p class="die-sub hex">input 0x${input.toString(16).padStart(4, '0')} → output 0b${(r.k << 1 | (r.allow ? 1 : 0)).toString(2).padStart(3, '0')}</p>
       </div>
       <div class="verdict" aria-live="polite">
         <p class="verdict-word">${verdict}</p>
@@ -578,7 +578,7 @@ function pageTry() {
         </dl>
         ${r ? gateGrid(r.gates, true) : ''}
         <div class="verdict" aria-live="polite"><p class="verdict-word">${esc(verdict)}</p><p class="verdict-sub">${esc(sub)}</p>
-          ${r ? `<p class="die-sub num">chip input 0x${r.input.toString(16).padStart(4, '0')}</p>` : ''}
+          ${r ? `<p class="die-sub hex">chip input 0x${r.input.toString(16).padStart(4, '0')}</p>` : ''}
           <div class="row gap" style="flex-wrap:wrap"><button class="btn quiet sm" data-a="tAsk">${t.live === 'asking' ? 'Asking the chain…' : t.live ? `Chain says: ${esc(t.live)}` : 'Ask the real chip'}</button><button class="btn quiet sm" data-a="tRefresh">Refresh price</button><button class="btn primary sm" data-a="tCreate">Create this vault</button></div></div>
         <p class="fine">Assumes your vault is funded, inside its limits and not paused. A real vault re-checks all of this, plus the worst fill price, at the moment of the trade.</p>
       </div>
@@ -593,14 +593,14 @@ function histTable(rows) {
 }
 function feedList(rows) {
   return `<ul class="feed">${rows.map((f) => `<li><span class="tag ${f.dir === 0 ? 'buy' : 'sell'}">${f.dir === 0 ? 'Bought' : 'Sold'}</span>
-    <span class="num">${f.dir === 0 ? okb(f.out, 4) + ' OKB' : okb(f.inn, 4) + ' OKB'}</span><span class="muted">${f.dir === 0 ? 'for ' + usd(f.inn) + ' USDT0' : 'for ' + usd(f.out) + ' USDT0'}</span>
-    <span class="num">${f.version === 2 ? 'chip: ' + f.k + '×' : 'chip: yes'}</span>${link(f.hash, 'tx', 'transaction')}</li>`).join('')}</ul>`;
+    <span class="what"><b class="num">${f.dir === 0 ? okb(f.out, 4) : okb(f.inn, 4)} OKB</b> <span class="muted">for <span class="num">${f.dir === 0 ? usd(f.inn) : usd(f.out)}</span> USDT0</span></span>
+    <span class="meta"><span class="kx">${f.version === 2 ? 'chip ' + f.k + '×' : 'chip checked'}</span>${link(f.hash, 'tx', 'transaction')}</span></li>`).join('')}</ul>`;
 }
 function pageActivity() {
   const n = S.net;
   return `<section class="wrap block"><h1 class="pg">Activity</h1>
     <dl class="facts wide">
-      <div><dt>Trades checked by a chip</dt><dd class="num">${n ? n.trades : '…'}</dd></div>
+      <div><dt>Trades checked by chip</dt><dd class="num">${n ? n.trades : '…'}</dd></div>
       <div><dt>OKB bought</dt><dd class="num">${n ? okb(n.okb, 4) : '…'}</dd></div>
       <div><dt>USDT0 spent on OKB</dt><dd class="num">${n ? usd(n.usdtIn) : '…'}</dd></div>
       <div><dt>Profit taken (USDT0)</dt><dd class="num">${n ? usd(n.profit) : '…'}</dd></div>
@@ -613,14 +613,14 @@ function pageActivity() {
 
 /* ---------- Safety ---------- */
 function pageSafety() {
-  return `<section class="wrap block split"><div><h1 class="pg">Safety</h1>
-      <h2>What a stolen bot key could do</h2>
+  return `<section class="wrap block"><h1 class="pg">Safety</h1><div class="split">
+    <div><h2>What a stolen bot key could do</h2>
       <p>Most trading bots hold your keys. If they are hacked, your account is emptied. With Latch, the worst a stolen bot key can do is trigger the trades your own rules already allow, at your prices, into your own wallet. Latch can also switch a bot key off for every vault at once; that switch can only stop trades, never move funds.</p>
       <p>The vault refuses a trade if Uniswap's live price is more than about 1% away from its 30-minute average, or if the worst accepted fill would break your ceiling or floor. The bot also refuses when Uniswap disagrees with the major exchanges.</p></div>
     <div><h2>What only you can do</h2>
       <ul class="plain"><li>Withdraw everything, any time, even while paused</li><li>Pause and resume</li><li>Change the strategy, reference price, ceiling or floor, and spacing</li><li>Lower your limits (they can never be raised) or switch to your own bot or AI agent</li></ul>
       <h2 class="sub">Checked and open</h2><p>Open-source contracts. Tests against Uniswap's real contract code (47 for the vault, 29 for the bot), Slither static analysis, and three independent reviews by separate AI agents, with every finding fixed or answered in writing. This is not a professional audit: start small.</p>
-      <p><a href="${C.repo}" target="_blank" rel="noopener">Read the code, tests and reviews</a></p></div></section>
+      <p><a href="${C.repo}" target="_blank" rel="noopener">Read the code, tests and reviews</a></p></div></div></section>
   <section class="wrap block split">
     <div><h2>Fees</h2><p>1% of each trade, falling to 0.75%, 0.5% and 0.25% as your vault's volume passes 1,000, 5,000 and 20,000 USDT0. Uniswap's pool keeps its own 0.05%. No sign-up, deposit or withdrawal fees. Latch's bot pays the gas.</p></div>
     <div><h2>Risks</h2><p>OKB's price can keep falling after you buy, or keep rising after you sell. USDT0's issuer can freeze addresses. Smart contracts can have bugs. Prices come from one Uniswap pool, protected by the 30-minute average and the live-price check.</p></div></section>
@@ -628,7 +628,7 @@ function pageSafety() {
     <details><summary>Can Latch take my money?</summary><p>No. Only the wallet that created the vault can withdraw. Latch's bot can only trigger trades within your rules, into your wallet.</p></details>
     <details><summary>Why WOKB and not OKB?</summary><p>Uniswap trades the wrapped form of OKB. Each WOKB is always worth 1 OKB and can be unwrapped any time. Add the WOKB token in your wallet to see it.</p></details>
     <details><summary>What is the reference price?</summary><p>The price your strategy measures moves from. A Buy vault with reference 85 sees OKB at 76 as "10% below"; a Take Profit vault with reference 85 sees 98 as "15% above". You can change it any time.</p></details>
-    <details><summary>Which wallet do I need?</summary><p>OKX Wallet: the browser extension on a computer, or the OKX Wallet app on a phone (Latch asks the app to connect, or open this page in the app's Discover tab).</p></details>
+    <details><summary>Which wallet do I need?</summary><p>Any wallet that supports X Layer. On a computer: a wallet extension such as OKX Wallet or MetaMask, or scan the code with a wallet app on your phone. On a phone: the OKX Wallet app, another WalletConnect wallet, or open this page in your wallet app's browser.</p></details>
     <details><summary>What happens when the market is jumpy?</summary><p>Smart and ladder strategies trade only the base amount when the live price is 0.35–0.6% away from the 30-minute average, and pause beyond that. Every strategy stops at about 1%.</p></details>
   </section>`;
 }

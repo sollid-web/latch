@@ -161,7 +161,7 @@ ok('chip page: paused safety bit → Wait', /^Wait/.test(await verdict()) && /sa
 await page.screenshot({ path: shots + '/6-chip.png', fullPage: true });
 await go('#/activity', 6000);
 const act = await txt();
-ok('activity: totals + trades with chip sizes', /Trades checked by a chip\s*\n?\s*2/.test(act) && /chip: 3×/.test(act) && /chip: 1×/.test(act), act.slice(0, 600));
+ok('activity: totals + trades with chip sizes', /Trades checked by chip\s*\n?\s*2/.test(act) && /chip 3×/.test(act) && /chip 1×/.test(act), act.slice(0, 600));
 await page.screenshot({ path: shots + '/7-activity.png', fullPage: true });
 await go('#/safety', 500);
 ok('safety page', /What a stolen bot key could do/.test(await txt()) && /Questions/.test(await txt()));
