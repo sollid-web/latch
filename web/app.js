@@ -125,14 +125,34 @@ async function readMine() {
 }
 
 /** Recent trades: yours (My vaults) and the whole network (Activity, Home). Loaded after the numbers. */
+/** Full trade history, recorded by the Latch bot (the public RPC only lets a page search ~100 blocks
+ *  at a time, so a page alone can find just each vault's latest trade). Every row has its tx hash,
+ *  so anyone can check it on OKLink. Not used by the on-chain copy (no off-chain calls there). */
+async function indexedTrades() {
+  if (!C.keeperUrl) return null;
+  try {
+    const r = await fetch(C.keeperUrl + '/trades', { cache: 'no-store' });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return (j.trades || []).map((t) => ({ vault: t.vault, version: t.version, hash: t.hash, block: BigInt(t.block), dir: t.dir,
+      inn: BigInt(t.inn), out: BigInt(t.out), fee: BigInt(t.fee), price: BigInt(t.price), k: t.k }));
+  } catch { return null; }
+}
+const mergeTrades = (...lists) => {
+  const seen = new Set(), out = [];
+  for (const t of lists.flat()) { const id = t.hash + ':' + t.vault.toLowerCase(); if (!seen.has(id)) { seen.add(id); out.push(t); } }
+  return out.sort((a, b) => (b.block > a.block ? 1 : b.block < a.block ? -1 : 0));
+};
 async function loadTrades() {
   if (S.feedBusy) return;
   S.feedBusy = true;
   try {
-    const head = await pub.getBlock();
+    const [head, idx] = await Promise.all([pub.getBlock(), indexedTrades()]);
+    const of = (v) => (idx || []).filter((t) => t.vault.toLowerCase() === v.toLowerCase());
     for (const d of [...S.v2, ...S.v1]) {
       const last = d.version === 2 ? d.lastTradeAt : d.lastBuyAt;
-      try { S.hist[d.address] = await tradesOf(d.address, d.version, last, head); } catch { if (S.hist[d.address] === undefined) S.hist[d.address] = null; }
+      try { S.hist[d.address] = mergeTrades(of(d.address), await tradesOf(d.address, d.version, last, head)).slice(0, 50); }
+      catch { S.hist[d.address] = idx ? mergeTrades(of(d.address)).slice(0, 50) : S.hist[d.address] === undefined ? null : S.hist[d.address]; }
       render();
     }
     const recent = (S.netVaults || []).filter((x) => x.last > 0n).sort((a, b) => (b.last > a.last ? 1 : -1)).slice(0, 8);
@@ -140,7 +160,7 @@ async function loadTrades() {
     for (const x of recent) {
       try { feed.push(...(await tradesOf(x.vault, x.version, x.last, head, 0n)).slice(0, 3)); } catch { /* skip */ }
     }
-    S.feed = feed.sort((a, b) => (b.block > a.block ? 1 : -1)).slice(0, 12);
+    S.feed = mergeTrades(idx || [], feed).slice(0, 20);
     render();
   } catch { /* keep the last values */ }
   finally { S.feedBusy = false; }
@@ -493,6 +513,7 @@ function vaultCard1(d) {
       <div><dt>Buys</dt><dd class="num">${d.buys}</dd></div>
     </dl>
     <div class="actions">
+      <button class="btn primary sm" data-a="vadd" ${busy}>Add USDT0</button>
       <button class="btn quiet sm" data-a="${d.paused ? 'vresume' : 'vpause'}" ${busy}>${d.paused ? 'Resume' : 'Pause'}</button>
       <button class="btn quiet sm" data-a="vwithdraw" ${busy}>Withdraw all</button>
     </div>

@@ -21,6 +21,7 @@ if (ONCHAIN) {
   config.rpc = ['https://rpc.xlayer.tech', 'https://xlayer.drpc.org']; // TapeKit's default X Layer nodes (allowed on the gateway)
   config.onchain = true;
   delete config.wcProjectId;
+  delete config.keeperUrl;
 }
 const stub = {
   name: 'okx-stub',

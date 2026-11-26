@@ -211,6 +211,7 @@ export async function runOnce(env, opts = {}) {
     return { ...report, action: 'skip', why: 'could not read the factory: ' + short(err) };
   }
   report.vaultCount = all1.length + all2.length;
+  if (opts.onVaults) opts.onVaults(all1, all2); // the trade recorder reuses this list
   if (!report.vaultCount) return { ...report, action: 'idle', why: 'no vaults yet' };
   const offset = opts.offset ?? Math.floor(Date.now() / 60000) * cfg.maxChecks;
   const list1 = windowOf(all1, cfg.maxChecks, offset), list2 = windowOf(all2, cfg.maxChecks, offset);

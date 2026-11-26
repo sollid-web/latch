@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { createPublicClient, createWalletClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { runOnce, marketCheck, priceFrom } from '../src/keeper.js';
+import { recordTrades, readTrades } from '../src/trades.js';
 
 const require = createRequire(import.meta.url);
 const solc = require('solc');
@@ -184,6 +185,23 @@ try {
   r = await runOnce(env3, { send: false, prices: P(45) });
   check('v2: empty vault → "not enough money in the vault"', /not enough money/.test(row(r, vDip).why), row(r, vDip));
   check('optional fee-covers-gas filter holds tiny trades when gas is dear', ['hold', 'later'].includes(row(r, vSell).action) || row(r, vSell).action === 'sold', row(r, vSell));
+
+  /* ---- trade recorder: full history in KV, walked in small windows like the public RPC forces ---- */
+  const store = new Map(); let puts = 0;
+  const kv = { get: async (k, t) => (store.has(k) ? (t === 'json' ? JSON.parse(store.get(k)) : store.get(k)) : null), put: async (k, v) => { puts++; store.set(k, v); } };
+  const v1s = await rd(fac, Fac.abi, 'vaultsPage', [0n, 100n]), v2s = await rd(fac2, Fac2.abi, 'vaultsPage', [0n, 100n]);
+  const all = [...v1s, ...v2s];
+  const real = (await pub.getLogs({ address: all, events: (await import('../src/trades.js')).EVENTS, fromBlock: 0n, toBlock: 'latest' })).length;
+  await fetch(RPC, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'anvil_mine', params: ['0x5'] }) });
+  let rec, steps = 0;
+  do { rec = await recordTrades({ kv, rpc: RPC, factories: [fac, fac2], vaults1: v1s, vaults2: v2s, windowSize: 3, perBatch: 4, batches: 2, now: 1e12 + steps }); steps++; } while (rec.cursor <= rec.head && steps < 500);
+  const got = await readTrades(kv);
+  check('recorder: walks from the first factory to the tip in many small windows', steps > 2 && got.complete, { steps, rec });
+  check('recorder: finds every trade on chain (classic + v2), each once', real > 3 && got.trades.length === real, { real, got: got.trades.length });
+  check('recorder: v2 rows carry direction and chip size; classic rows are version 1', got.trades.some((t) => t.version === 2 && t.k >= 1 && t.dir === 1) && got.trades.some((t) => t.version === 1), got.trades.slice(0, 3));
+  const before = puts; rec = await recordTrades({ kv, rpc: RPC, factories: [fac, fac2], vaults1: v1s, vaults2: v2s, windowSize: 3, now: 1e12 + steps + 1000 });
+  check('recorder: re-running finds no duplicates and does not write when nothing changed', rec.found === 0 && puts === before && (await readTrades(kv)).trades.length === real, { rec, puts, before });
+  check('recorder: no KV binding → skipped, never throws', (await recordTrades({ kv: null, rpc: RPC, factories: [fac] })).skipped);
 } catch (err) {
   console.error('TEST CRASHED:', err); failures++;
 } finally { anvil.kill(); }

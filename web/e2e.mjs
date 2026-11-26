@@ -152,6 +152,9 @@ ok('Buy vault paused', /Paused/.test(await page.evaluate(() => document.querySel
 await page.click('.vault[data-ver="2"] >> nth=0 >> [data-a=vwithdraw]'); await page.waitForTimeout(300);
 await page.click('.sheet [type=submit]'); await page.waitForTimeout(3500);
 ok('withdraw all → USDT0 left 0.00', /USDT0 left\s*\n?\s*0\.00/.test(await txt()), (await txt()).slice(0, 400));
+await page.click('.vault[data-ver="2"] >> nth=0 >> [data-a=vadd]'); await page.waitForTimeout(300);
+await page.fill('#dg-amt', '1.5'); await page.click('.sheet [type=submit]'); await page.waitForTimeout(3500);
+ok('after withdrawing, Add USDT0 refunds the same vault → USDT0 left 1.50', /USDT0 left\s*\n?\s*1\.50/.test(await txt()), (await txt()).slice(0, 400));
 
 /* ---- The chip, Activity, Safety ---- */
 await go('#/chip', 800);
