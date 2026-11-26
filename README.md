@@ -70,7 +70,13 @@ bot calls vault.tick()
 
 ## For AI agents: OKX Agentic Wallet + Plugin Store
 
-Latch ships as a skill for the **OKX Plugin Store** ([`plugin/latch-plugin`](plugin/latch-plugin)), built on **OKX Agentic Wallet** (Onchain OS).
+Latch ships as a skill in the **OKX Plugin Store** format ([`plugin/latch-plugin`](plugin/latch-plugin)), built on **OKX Agentic Wallet** (Onchain OS).
+
+The OKX Plugin Store currently adds plugins only by its own curation, not by outside submission, so the skill installs straight from this repo, next to OKX's own Onchain OS skills:
+
+```
+npx skills add sollid-web/latch
+```
 
 **How it works:**
 - The [`latch`](agent/latch.mjs) command-line tool reads Latch on X Layer and **prepares** transactions.
