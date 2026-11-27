@@ -204,7 +204,7 @@ hooks(() => render(), () => refresh());
 
 /* ================================================================ shared bits */
 
-const PAGES = [['home', 'Home'], ['try', 'Try it'], ['create', 'Create'], ['vaults', 'My vaults'], ['chip', 'The chip'], ['activity', 'Activity'], ['agents', 'Agents'], ['safety', 'Safety']];
+const PAGES = [['home', 'Home'], ['demo', 'Demo'], ['try', 'Try it'], ['create', 'Create'], ['vaults', 'My vaults'], ['chip', 'The chip'], ['activity', 'Activity'], ['agents', 'Agents'], ['safety', 'Safety']];
 const LOGO = `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 3v4M12 3v4M16 3v4M8 17v4M12 17v4M16 17v4M3 8h4M3 12h4M3 16h4M17 8h4M17 12h4M17 16h4" stroke="currentColor" stroke-width="1.6"/><rect x="8.5" y="8.5" width="7" height="7" rx="1" fill="currentColor"/></svg>`;
 const ICON = {
   buy: `<svg viewBox="0 0 48 24" width="48" height="24" aria-hidden="true"><path d="M2 5 L14 8 L22 20 L30 13 L46 6" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="22" cy="20" r="3" fill="currentColor"/></svg>`,
@@ -282,7 +282,7 @@ function pageHome() {
       <h1>Buy OKB on dips. Take profit on rises. A chip decides how much.</h1>
       <p class="lead">Put USDT0 or OKB in a vault only you control. Latch trades for you on Uniswap, and the size of every trade is decided on chain by a 101-gate TapeOut circuit: more when the move is bigger, less when the market is jumpy, nothing when your rules say no. The bot can never withdraw, raise your limits or send money anywhere but your wallet.</p>
       <div class="cta-row"><a class="btn primary lg" href="#/create?buy">Buy OKB automatically</a><a class="btn quiet lg" href="#/create?sell">Take profit automatically</a></div>
-      <p class="fine">No wallet yet? <a href="#/try">Try it: see what a vault would do right now</a>.</p>
+      <p class="fine">No wallet yet? <a href="#/demo">Try the whole journey in Demo mode</a> with play money, or <a href="#/try">see what a vault would do right now</a>.</p>
       <dl class="facts">
         <div><dt>OKB price</dt><dd class="num">${P(S.price)}</dd></div>
         <div><dt>Trades checked by chip</dt><dd class="num">${n ? n.trades : '…'}</dd></div>
@@ -610,6 +610,149 @@ function pageTry() {
     </div></section>`;
 }
 
+/* ---------- Demo mode: the whole journey with play money, nothing on chain ----------
+ * Same rules as a real vault, run in the browser: the live OKB price from Uniswap on X Layer, and the very
+ * netlist of circuit #2 (101 NAND gates) to size each trade. Saved in this browser only. */
+const DEMO_KEY = 'latch.demo.v1';
+const demoFresh = () => ({ usdt: 100, okb: 1, vaults: [], log: [], shift: 0, mood: -1, nextId: 1, day: 1,
+  form: { dir: 0, mode: 2, base: '2', ref: '', limit: '', perTx: '', daily: '' } });
+function demoState() {
+  if (!S.demo) { try { S.demo = JSON.parse(localStorage.getItem(DEMO_KEY) || 'null'); } catch { S.demo = null; } }
+  if (!S.demo || !S.demo.form) S.demo = demoFresh();
+  return S.demo;
+}
+const demoSave = () => { try { localStorage.setItem(DEMO_KEY, JSON.stringify(S.demo)); } catch { /* private mode: keep in memory */ } };
+const volOfGap = (gap) => (gap < 15 ? 0 : gap < 35 ? 1 : gap < 60 ? 2 : 3);
+function demoMarket() {
+  const D = demoState(), m = S.t.mkt; if (!m) return null;
+  const price = m.avg * (1 + D.shift / 100);
+  return { live: m.avg, price, vol: D.mood >= 0 ? D.mood : volOfGap(m.gap) };
+}
+const dAmt = (n, dir) => (dir === 0 ? P(n) + ' USDT0' : trim(Math.round(n * 1e4) / 1e4) + ' OKB');
+/** One vault, one check: exactly the order a real vault follows (rules → chip → limits → fill). */
+function demoCheck(v, mk) {
+  const ref = v.ref, dir = v.dir;
+  if (v.paused) return { allow: false, why: 'Paused by you.', gates: null };
+  const priceOk = dir === 0 ? mk.price <= v.limit : mk.price >= v.limit;
+  const depth = depthOf(mk.price, ref, dir);
+  const input = pack({ safety: priceOk ? SAFE : SAFE & ~8, depth, vol: mk.vol, mode: v.mode });
+  const r = evalChip(input);
+  const base = { input, gates: r.gates, depth, vol: mk.vol, k: r.k };
+  if (!priceOk) return { ...base, allow: false, why: dir === 0 ? `OKB (${P(mk.price)}) is above your ceiling of ${P(v.limit)}.` : `OKB (${P(mk.price)}) is under your floor of ${P(v.limit)}.` };
+  if (!r.allow || !r.k) return { ...base, allow: false, why: mk.vol === 3 && v.mode >= 2 ? 'The market is very jumpy, so this strategy waits.' : `OKB is ${depthWord(depth, dir)} (${P(ref)}), so this strategy waits.` };
+  const want = Math.min(v.base * r.k, v.perTx, v.daily - v.spent, v.balance);
+  if (v.daily - v.spent < v.base) return { ...base, allow: false, why: 'Today’s limit is used up. Tap “Next day”.' };
+  if (v.balance < v.base) return { ...base, allow: false, why: 'Not enough money in the vault. Add some.' };
+  return { ...base, allow: true, amount: want, why: `OKB is ${depthWord(depth, dir)} and the market is ${VOLS[mk.vol]}: the chip says ${r.k}×.` };
+}
+function demoRun() {
+  const D = demoState(), mk = demoMarket(); if (!mk) return;
+  let traded = 0;
+  for (const v of D.vaults) {
+    const c = demoCheck(v, mk); v.last = { ...c, gates: undefined, at: Date.now() };
+    if (!c.allow) continue;
+    const fee = c.amount * 0.01, net = c.amount - fee;
+    if (v.dir === 0) { const got = net / mk.price; v.balance -= c.amount; v.out += got; D.okb += got; D.log.unshift({ id: v.id, dir: 0, k: c.k, inn: c.amount, out: got, price: mk.price, day: D.day }); }
+    else { const got = net * mk.price; v.balance -= c.amount; v.out += got; D.usdt += got; D.log.unshift({ id: v.id, dir: 1, k: c.k, inn: c.amount, out: got, price: mk.price, day: D.day }); }
+    v.spent += c.amount; v.trades++; traded++;
+  }
+  D.log = D.log.slice(0, 30);
+  D.note = traded ? `Latch's agent made ${traded} trade${traded > 1 ? 's' : ''}.` : 'Latch’s agent checked: no trade right now. Each vault says why.';
+  demoSave();
+}
+function pageDemo() {
+  const D = demoState(), f = D.form, m = S.t.mkt, mk = demoMarket(), dir = f.dir;
+  const u = dir === 0 ? 'USDT0' : 'OKB';
+  if (m && !f.ref) { f.ref = (Math.round(m.avg * 10) / 10).toString(); f.limit = (dir === 0 ? Math.ceil(m.avg * 1.2) : Math.floor(m.avg * 0.85)).toString(); }
+  const seg = (k, list, cur) => `<div class="seg" role="radiogroup">${list.map((l, i) => `<button role="radio" aria-checked="${i === cur}" class="${i === cur ? 'on' : ''}" data-a="dm" data-k="${k}" data-v="${i}">${esc(l)}</button>`).join('')}</div>`;
+  const card = (v) => {
+    const c = mk ? demoCheck(v, mk) : null;
+    return `<article class="vault demo-v"><header class="vault-head"><span class="vault-icon">${v.dir === 0 ? ICON.buy : ICON.sell}</span>
+      <div><h3>Demo vault ${v.id} · ${v.dir === 0 ? 'Buy OKB' : 'Take profit'} · ${esc(MODES[v.dir][v.mode].name)}</h3>
+      <p class="muted">${esc(describe(v.dir, v.mode, String(v.base), v.ref, v.limit, '0'))}</p></div>
+      <span class="status ${v.paused ? 'paused' : v.balance >= v.base ? 'live' : 'wait'}">${v.paused ? 'Paused' : v.balance >= v.base ? 'On' : 'Empty'}</span></header>
+      <dl class="vault-stats">
+        <div><dt>${v.dir === 0 ? 'USDT0' : 'OKB'} left</dt><dd class="num">${v.dir === 0 ? P(v.balance) : trim(Math.round(v.balance * 1e4) / 1e4)}</dd></div>
+        <div><dt>${v.dir === 0 ? 'OKB bought' : 'USDT0 taken'}</dt><dd class="num">${v.dir === 0 ? trim(Math.round(v.out * 1e6) / 1e6) : P(v.out)}</dd></div>
+        <div><dt>Trades</dt><dd class="num">${v.trades}</dd></div>
+        <div><dt>Used today (${v.dir === 0 ? 'USDT0' : 'OKB'})</dt><dd class="num">${v.dir === 0 ? P(v.spent) : trim(v.spent)} of ${v.dir === 0 ? P(v.daily) : trim(v.daily)}</dd></div>
+      </dl>
+      ${c ? `<div class="demo-dec ${c.allow ? 'allow' : 'deny'}"><div><p class="verdict-word">${c.allow ? `${v.dir === 0 ? 'Buy' : 'Sell'} ${c.k}× · ${dAmt(c.amount, v.dir)}` : 'Wait'}</p><p class="verdict-sub">${esc(c.why)}</p></div>${c.gates ? gateGrid(c.gates, true) : ''}</div>` : ''}
+      ${v.balance < v.base ? `<p class="empty-note">This vault is empty. Add ${v.dir === 0 ? 'USDT0' : 'OKB'} to start.</p>` : ''}
+      <div class="actions">
+        <button class="btn primary sm" data-a="dmAdd" data-id="${v.id}">Add ${v.dir === 0 ? '10 USDT0' : '0.1 OKB'}</button>
+        <button class="btn quiet sm" data-a="dmPause" data-id="${v.id}">${v.paused ? 'Resume' : 'Pause'}</button>
+        <button class="btn quiet sm" data-a="dmWithdraw" data-id="${v.id}">Withdraw all</button>
+      </div></article>`;
+  };
+  return `<section class="wrap block">
+    <div class="demo-banner" role="note"><b>Demo mode.</b> Play money, no wallet, nothing is sent on chain. The OKB price is live from Uniswap on X Layer, and every trade is sized by the same circuit #${CID2} netlist that is on chain.</div>
+    <div class="row between wrapr"><h1 class="pg">Try the whole journey</h1><button class="btn quiet sm" data-a="dmReset">Start over</button></div>
+    <dl class="facts wide demo-wallet"><div><dt>Your play wallet</dt><dd class="num">${P(D.usdt)} USDT0</dd></div><div><dt>&nbsp;</dt><dd class="num">${trim(Math.round(D.okb * 1e4) / 1e4)} OKB</dd></div><div><dt>Day</dt><dd class="num">${D.day}</dd></div></dl>
+    <div class="split">
+      <div class="form"><h2>1. Make a vault</h2>
+        <div class="ctl-row"><span class="ctl-l">Job</span>${seg('dir', ['Buy OKB', 'Take profit'], dir)}</div>
+        <div class="ctl-row"><span class="ctl-l">Strategy</span>${seg('mode', MODES[dir].map((x) => x.name), f.mode)}</div>
+        <p class="fine">${esc(MODES[dir][f.mode].line)}</p>
+        <label>Base amount per trade (${u})<input data-dm="base" type="number" step="any" inputmode="decimal" value="${esc(f.base)}"></label>
+        <label>Reference price<input data-dm="ref" type="number" step="any" inputmode="decimal" value="${esc(f.ref)}"><small>Moves are measured from here. It starts at today's price.</small></label>
+        <label>${dir === 0 ? 'Never pay more than' : 'Never sell under'}<input data-dm="limit" type="number" step="any" inputmode="decimal" value="${esc(f.limit)}"></label>
+        <button class="btn primary" data-a="dmCreate">Create demo vault</button>
+        <p class="fine">It starts with ${dir === 0 ? '20 USDT0' : '0.5 OKB'} from your play wallet. Most per trade: 3× the base; most per day: 6× the base.</p>
+      </div>
+      <div><h2>2. Move the market</h2>
+        <dl class="facts"><div><dt>Live OKB price (30-min average)</dt><dd class="num">${m ? P(m.avg) : '…'}</dd></div><div><dt>Price your vaults see</dt><dd class="num">${mk ? P(mk.price) : '…'}</dd></div></dl>
+        <label class="form">Pretend OKB moves: <b class="num">${D.shift > 0 ? '+' : ''}${D.shift}%</b><input type="range" min="-45" max="45" step="1" value="${D.shift}" data-a="dmShift" aria-label="Pretend OKB moves by this percent"></label>
+        <div class="ctl-row"><span class="ctl-l">Market</span>${seg('mood', ['Live', ...VOLS], D.mood + 1)}</div>
+        <h2 class="sub">3. Let Latch's agent check</h2>
+        <p class="fine">A real vault is checked every minute. Here you press the button.</p>
+        <div class="row gap wrapr"><button class="btn primary" data-a="dmRun" ${D.vaults.length ? '' : 'disabled'}>Let the agent check now</button><button class="btn quiet" data-a="dmDay">Next day</button></div>
+        ${D.note ? `<p class="note-in" role="status">${esc(D.note)}</p>` : ''}
+      </div>
+    </div></section>
+  ${D.vaults.length ? `<section class="wrap block"><h2>Your demo vaults</h2>${D.vaults.map(card).join('')}</section>` : ''}
+  ${D.log.length ? `<section class="wrap block"><h2>Demo trades</h2><ul class="feed">${D.log.map((t) => `<li><span class="tag ${t.dir === 0 ? 'buy' : 'sell'}">${t.dir === 0 ? 'Bought' : 'Sold'}</span>
+    <span class="what"><b class="num">${t.dir === 0 ? trim(Math.round(t.out * 1e6) / 1e6) : trim(Math.round(t.inn * 1e4) / 1e4)} OKB</b> <span class="muted">for <span class="num">${t.dir === 0 ? P(t.inn) : P(t.out)}</span> USDT0 at ${P(t.price)}</span></span>
+    <span class="meta"><span class="kx">chip ${t.k}×</span><span>vault ${t.id} · day ${t.day}</span></span></li>`).join('')}</ul>
+    <p class="fine">1% Latch fee included. Real trades also pay Uniswap's 0.05% pool fee and get the pool's real fill.</p></section>` : ''}
+  <section class="wrap block"><p>Ready to do it for real? <a href="#/create">Create a vault</a> with your wallet, or see <a href="#/activity">real trades on X Layer</a>.</p></section>`;
+}
+function demoAct(a, el) {
+  const D = demoState(), f = D.form, mk = demoMarket();
+  const v = D.vaults.find((x) => x.id === Number(el.dataset.id));
+  switch (a) {
+    case 'dm': {
+      const k = el.dataset.k, val = Number(el.dataset.v);
+      if (k === 'mood') D.mood = val - 1;
+      else { f[k] = val; if (k === 'dir') { f.mode = Math.min(f.mode, MODES[val].length - 1); f.ref = ''; f.limit = ''; f.base = val === 0 ? '2' : '0.05'; } }
+      break;
+    }
+    case 'dmCreate': {
+      const base = Number(f.base), ref = Number(f.ref), limit = Number(f.limit), dir = f.dir;
+      if (!(base > 0) || !(ref > 0) || !(limit > 0)) { D.note = 'Enter a base amount, a reference price and a limit above 0.'; break; }
+      const start = dir === 0 ? 20 : 0.5;
+      if ((dir === 0 ? D.usdt : D.okb) < start) { D.note = 'Your play wallet is too low. Withdraw from a vault or start over.'; break; }
+      if (dir === 0) D.usdt -= start; else D.okb -= start;
+      D.vaults.unshift({ id: D.nextId++, dir, mode: f.mode, base, ref, limit, perTx: base * 3, daily: base * 6, balance: start, out: 0, spent: 0, trades: 0, paused: false });
+      D.note = `Demo vault ${D.nextId - 1} is live with ${dir === 0 ? '20 USDT0' : '0.5 OKB'}. Now move the market and let the agent check.`;
+      break;
+    }
+    case 'dmRun': demoRun(); break;
+    case 'dmDay': D.day++; D.vaults.forEach((x) => { x.spent = 0; }); D.note = `Day ${D.day}: daily limits reset.`; break;
+    case 'dmAdd': if (!v) break; {
+      const n = v.dir === 0 ? 10 : 0.1, have = v.dir === 0 ? D.usdt : D.okb;
+      if (have < n) { D.note = 'Not enough in your play wallet.'; break; }
+      if (v.dir === 0) D.usdt -= n; else D.okb -= n; v.balance += n; D.note = `Added ${dAmt(n, v.dir)} to vault ${v.id}.`;
+      break;
+    }
+    case 'dmPause': if (v) { v.paused = !v.paused; D.note = v.paused ? `Vault ${v.id} paused: nothing trades until you resume.` : `Vault ${v.id} resumed.`; } break;
+    case 'dmWithdraw': if (v) { if (v.dir === 0) D.usdt += v.balance; else D.okb += v.balance; D.note = `Withdrew ${dAmt(v.balance, v.dir)} from vault ${v.id} back to your play wallet. Only the owner can do this, any time.`; v.balance = 0; } break;
+    case 'dmReset': S.demo = demoFresh(); break;
+    default: return false;
+  }
+  demoSave(); render(); return true;
+}
+
 /* ---------- Activity ---------- */
 function histTable(rows) {
   return `<div class="scroll"><table class="hist"><thead><tr><th>Trade</th><th>Paid</th><th>Received</th><th>Size</th><th>Avg price</th><th>Transaction</th></tr></thead><tbody>${rows.map((x) => `<tr>
@@ -753,7 +896,7 @@ function render() {
   saveDraft();
   const app = document.getElementById('app');
   const focus = document.activeElement?.id;
-  const page = { home: pageHome, try: pageTry, create: pageCreate, vaults: pageVaults, chip: pageChip, activity: pageActivity, agents: pageAgents, safety: pageSafety }[S.page] || pageHome;
+  const page = { home: pageHome, demo: pageDemo, try: pageTry, create: pageCreate, vaults: pageVaults, chip: pageChip, activity: pageActivity, agents: pageAgents, safety: pageSafety }[S.page] || pageHome;
   app.innerHTML = header() + `<main id="main">${mobileHelp()}${S.note ? `<p class="wrap note" role="status">${esc(S.note)}</p>` : ''}${page()}</main>
     <footer class="wrap foot"><span>${C.onchain ? 'You are on the on-chain copy of Latch, served from X Layer (DeWEB). ' : ''}Latch runs on X Layer. Every trade is decided by TapeOut circuit #${CID2}${C.circuitId ? ` (classic vaults: #${C.circuitId})` : ''}.${!C.onchain && C.deweb ? ` Also on chain: <a href="${esc(C.deweb.url)}" target="_blank" rel="noopener">${esc(C.deweb.name)}</a>.` : ''}</span><span>${HAS2 ? link(C.factory2, 'address', 'Vault factory') + ' · ' : ''}<a href="${C.repo}" target="_blank" rel="noopener">GitHub</a></span></footer>` + dialogView() + pickerView();
   if (focus) document.getElementById(focus)?.focus();
@@ -773,7 +916,7 @@ function route() {
   else if (page === 'create' && (!S.c || (S.c.step === 4 && !first)) && changed) S.c = newCreate(null);
   render();
   if (changed) window.scrollTo(0, 0);
-  if (page === 'try' && (!S.t.mkt || Date.now() - S.t.mkt.at > 60_000)) readLive().then((m) => { S.t.mkt = m; render(); }).catch(() => {});
+  if ((page === 'try' || page === 'demo') && (!S.t.mkt || Date.now() - S.t.mkt.at > 60_000)) readLive().then((m) => { S.t.mkt = m; render(); }).catch(() => {});
 }
 window.addEventListener('hashchange', route);
 
@@ -856,6 +999,7 @@ async function act(a, el) {
   const d = [...S.v2, ...S.v1].find((x) => x.address === v);
   S.error = '';
   const c = S.c;
+  if (a.startsWith('dm') && a !== 'dmShift' && demoAct(a, el)) return;
   switch (a) {
     case 'connect': return connect();
     case 'refresh': return refresh();
@@ -1005,6 +1149,8 @@ document.addEventListener('input', (e) => {
   const el = e.target;
   if (el.dataset?.a === 'xr') { S.x[el.dataset.k] = Number(el.value); S.x.live = null; render(); document.querySelector('[data-a=xr]')?.focus(); return; }
   if (el.dataset?.t) { S.t[el.dataset.t] = el.value.trim(); S.t.live = null; return; }
+  if (el.dataset?.dm) { demoState().form[el.dataset.dm] = el.value.trim(); demoSave(); return; }
+  if (el.dataset?.a === 'dmShift') { demoState().shift = Number(el.value); demoSave(); render(); document.querySelector('[data-a=dmShift]')?.focus(); return; }
   if (el.dataset?.c && S.c) {
     S.c[el.dataset.c] = el.type === 'checkbox' ? el.checked : el.value.trim();
     if (el.dataset.c === 'perTx' || el.dataset.c === 'daily') S.c.limitsTouched = true;

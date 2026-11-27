@@ -109,7 +109,7 @@ ok('review sentence in plain English', /Latch buys 2 USDT0 of OKB at most once a
 await page.screenshot({ path: shots + '/4-create-review.png', fullPage: true });
 await page.click('[data-a=ccreate]'); await page.waitForTimeout(2500);
 ok('vault created → Add funds step', /Your vault is live/.test(await txt()), (await txt()).slice(0, 300));
-await page.fill('#c-deposit', '20'); await page.click('[data-a=cdeposit]'); await page.waitForTimeout(3500);
+await page.fill('#c-deposit', '20'); await page.click('[data-a=cdeposit]'); await page.waitForFunction(() => location.hash === '#/vaults', null, { timeout: 20000 }).catch(() => {}); await page.waitForTimeout(2500);
 ok('after funding: on My vaults with the Buy vault', /My vaults/.test(await txt()) && /Buy OKB · Smart/.test(await txt()), (await txt()).slice(0, 300));
 ok('My vaults: chip decision shows buy 3×', /buy 3×/.test(await txt()), (await txt()).match(/Decision[^\n]*\n[^\n]*/)?.[0]);
 
@@ -133,7 +133,7 @@ await page.evaluate(() => { // pretend the page reloaded before it saw the appro
 });
 await page.reload(); await page.waitForTimeout(4000);
 ok('create: after a reload mid-approval, finds the new vault and shows Add funds', /Your vault is live/.test(await txt()), (await txt()).slice(0, 300));
-await page.fill('#c-deposit', '0.1'); await page.click('[data-a=cdeposit]'); await page.waitForTimeout(3500);
+await page.fill('#c-deposit', '0.1'); await page.click('[data-a=cdeposit]'); await page.waitForFunction(() => location.hash === '#/vaults', null, { timeout: 20000 }).catch(() => {}); await page.waitForTimeout(1500);
 r = await runOnce(botEnv, { send: true, wait: true, prices: P(78.5) });
 ok('bot: Take Profit vault sold 0.02 OKB (ladder 1×)', r.vaults.some((v) => v.version === 2 && v.kind === 'take-profit' && v.action === 'sold' && v.amount === '20000000000000000'), JSON.stringify(r.vaults));
 
@@ -173,6 +173,25 @@ await go('#/activity', 6000);
 const act = await txt();
 ok('activity: totals + trades with chip sizes', /Trades checked by chip\s*\n?\s*2/.test(act) && /chip 3×/.test(act) && /chip 1×/.test(act), act.slice(0, 600));
 await page.screenshot({ path: shots + '/7-activity.png', fullPage: true });
+/* ---- Demo mode: whole journey with play money ---- */
+await go('#/demo', 3000);
+ok('demo: banner says play money, nothing on chain', /Play money, no wallet, nothing is sent on chain/.test(await txt()));
+await page.click('[data-a=dmReset]'); await page.waitForTimeout(400);
+await page.click('[data-a=dmCreate]'); await page.waitForTimeout(400);
+ok('demo: vault created with 20 USDT0 from the play wallet (100 → 80)', /Demo vault 1 · Buy OKB · Smart/.test(await txt()) && /80\.00 USDT0/.test(await txt()), (await txt()).slice(0, 600));
+await page.evaluate(() => { const r = document.querySelector('[data-a=dmShift]'); r.value = '-25'; r.dispatchEvent(new Event('input', { bubbles: true })); });
+await page.click('[data-a=dm][data-k=mood][data-v="1"]'); await page.waitForTimeout(300);
+ok('demo: OKB 25% under the reference, calm market → the chip says Buy 3×', /Buy 3× · 6\.00 USDT0/.test(await txt()), (await txt()).slice(0, 900));
+await page.click('[data-a=dmRun]'); await page.waitForTimeout(400);
+let dt = await txt();
+ok('demo: the agent bought (log shows chip 3×), vault 20 → 14 USDT0, used today 6 of 12', /Bought/.test(dt) && /chip 3×/.test(dt) && /14\.00/.test(dt) && /6\.00 of 12\.00/.test(dt), dt.slice(0, 1200));
+await page.screenshot({ path: shots + '/8-demo.png', fullPage: true });
+await page.click('[data-a=dmPause]'); await page.waitForTimeout(200); await page.click('[data-a=dmRun]'); await page.waitForTimeout(300);
+ok('demo: paused vault does not trade', (await page.locator('.feed li').count()) === 1 && /Paused by you/.test(await txt()));
+await page.click('[data-a=dmWithdraw]'); await page.waitForTimeout(300);
+ok('demo: Withdraw all returns 14 USDT0 to the play wallet (80 → 94)', /94\.00 USDT0/.test(await txt()), (await txt()).slice(0, 500));
+await page.click('[data-a=dm][data-k=mood][data-v="4"]'); await page.click('[data-a=dmPause]'); await page.click('[data-a=dmAdd]'); await page.waitForTimeout(300);
+ok('demo: very jumpy market → Smart waits, and says why', /very jumpy, so this strategy waits/.test(await txt()), (await txt()).slice(0, 900));
 await go('#/agents', 500);
 ok('agents page: Latch agent + AI agents with the Agentic Wallet, install command, live vault', /Latch's agent runs your vault/.test(await txt()) && /npx skills add sollid-web\/latch/.test(await txt()) && /OKX Agentic Wallet/.test(await txt()));
 await page.screenshot({ path: shots + '/7b-agents.png', fullPage: true });

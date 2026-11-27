@@ -13,7 +13,7 @@ withdraw, raise a limit, or send money anywhere but the owner's wallet.
 
 | | |
 |---|---|
-| **Live app** | https://latch.tapeguard.workers.dev · **try it with no wallet:** [/#/try](https://latch.tapeguard.workers.dev/#/try) |
+| **Live app** | https://latch.tapeguard.workers.dev · **no wallet needed:** [Demo mode](https://latch.tapeguard.workers.dev/#/demo) runs the whole journey (create, market moves, the agent trades, pause, withdraw) with play money, the live OKB price and the real circuit #2 netlist · [Try it](https://latch.tapeguard.workers.dev/#/try) previews one decision |
 | **On DeWEB** | https://2-2-435.tapekit.org/ (`2.2.435.tape`, stored in circuit #2's own container, served by TapeKit) |
 | **Demo video (≤ 3 min)** | `[YouTube link]` |
 | **TapeOut processor** | `0x3728a5dfE596F6bF7309cA911e61ecaC9b0b6813` (Latch's own processor, X Layer mainnet, chain 196) |
