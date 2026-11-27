@@ -112,40 +112,63 @@ export async function recordTrades(opts) {
   // Adaptive: the window (blocks per eth_getLogs) and the batch size (windows per HTTP request) start large
   // and halve when the RPC refuses, down to 100 blocks and one window per request. Remembered between runs.
   const minWin = BigInt(opts.minWindow || 100);
+  if (!state.rangeHit && state.window != null && state.window < (opts.windowSize || 2000)) state.window = null; // only a real range refusal may keep it small
   let win = BigInt(state.window || opts.windowSize || 2000); if (win < minWin) win = minWin;
   let per = state.perBatch ?? (opts.perBatch || 25);
   const requests = opts.requests || 6;
   const v2set = new Set(vaults2.map((a) => a.toLowerCase()));
   const seen = new Set(state.trades.map((t) => t.id));
 
-  // plan this run's windows, grouped into requests, all sent in parallel
-  const groups = []; let c = BigInt(state.cursor);
-  for (let r = 0; r < requests && c <= head; r++) {
-    const g = [];
-    for (let i = 0; i < Math.max(per, 1) && c <= head; i++) { const to = c + win - 1n < head ? c + win - 1n : head; g.push([c, to]); c = to + 1n; }
-    groups.push(g);
-  }
+  // Paced: send `par` requests at a time (spread over the RPC endpoints), keep the contiguous prefix that
+  // answered, and adapt: rate limit → halve the pace and pause; a clean wave → one more next time.
+  let rpcs = (opts.rpcs && opts.rpcs.length ? [...opts.rpcs] : [rpc]);
+  const maxPar = opts.maxParallel || 8;
+  let par = Math.min(state.par || opts.parallel || 2, maxPar);
   const q = (a, b) => ({ method: 'eth_getLogs', params: [{ address: addrs, topics: [TOPICS], fromBlock: numberToHex(a), toBlock: numberToHex(b) }] });
-  const settled = await Promise.allSettled(groups.map((g) => (g.length === 1 && per <= 1 ? one(rpc, 'eth_getLogs', q(...g[0]).params, fetchFn).then((x) => [x]) : rpcBatch(rpc, g.map((w) => q(...w)), fetchFn))));
-
-  // keep the contiguous prefix that answered; the cursor never skips a window
-  let cursor = BigInt(state.cursor), found = 0;
+  const urlOf = (i) => rpcs[i % rpcs.length];
+  const send = (g, i) => { const url = urlOf(i); return per <= 1 && g.length === 1 ? one(url, 'eth_getLogs', q(...g[0]).params, fetchFn).then((x) => [x]) : rpcBatch(url, g.map((w) => q(...w)), fetchFn); };
+  let cursor = BigInt(state.cursor), found = 0, used = 0, waves = 0, rr = state.rr || 0;
   delete state.error;
-  for (let i = 0; i < groups.length; i++) {
-    const r = settled[i];
-    if (r.status !== 'fulfilled') {
-      const msg = String(r.reason?.message || r.reason);
-      if (/batch/i.test(msg) && per > 1) state.perBatch = Math.max(1, Math.floor(per / 2));
-      else if (/range|limit|exceed|too (many|large|big)|max|block/i.test(msg) && win > minWin) state.window = Number(win / 2n < minWin ? minWin : win / 2n);
-      else state.error = msg.slice(0, 200);
-      break;
+  outer: while (used < requests && cursor <= head) {
+    const groups = []; let c = cursor;
+    for (let r = 0; r < par && used + groups.length < requests && c <= head; r++) {
+      const g = [];
+      for (let i = 0; i < Math.max(per, 1) && c <= head; i++) { const to = c + win - 1n < head ? c + win - 1n : head; g.push([c, to]); c = to + 1n; }
+      groups.push(g);
     }
-    for (const logs of r.value) for (const l of logs || []) {
-      const t = decode(l, v2set);
-      if (t && !seen.has(t.id)) { seen.add(t.id); state.trades.push(t); found++; }
+    used += groups.length; waves++;
+    const settled = await Promise.allSettled(groups.map((g, i) => send(g, rr + i)));
+    rr += groups.length;
+    for (let i = 0; i < groups.length; i++) {
+      const r = settled[i];
+      if (r.status !== 'fulfilled') {
+        const msg = String(r.reason?.message || r.reason);
+        if (/rate.?limit|too many requests|429|-32016|-32005|capacity|throttl/i.test(msg)) {
+          par = Math.max(1, Math.floor(par / 2)); state.par = par; state.rateLimited = (state.rateLimited || 0) + 1;
+          await new Promise((res) => setTimeout(res, opts.pauseMs ?? 1500));
+          continue outer; // carry on from the last window that answered, slower
+        }
+        if (/batch/i.test(msg) && per > 1) { state.perBatch = Math.max(1, Math.floor(per / 2)); break outer; }
+        if (/range|exceed|too (large|big)|max.*block|block.*(limit|range)/i.test(msg) && win > minWin) { state.window = Number(win / 2n < minWin ? minWin : win / 2n); state.rangeHit = true; break outer; }
+        if (rpcs.length > 1) { // that endpoint is down or refuses: drop it for this run, carry on with the others
+          const bad = urlOf(rr - groups.length + i); rpcs = rpcs.filter((u) => u !== bad);
+          state.skipped = bad + ': ' + msg.slice(0, 120);
+          continue outer;
+        }
+        state.error = msg.slice(0, 200);
+        break outer;
+      }
+      for (const logs of r.value) for (const l of logs || []) {
+        const t = decode(l, v2set);
+        if (t && !seen.has(t.id)) { seen.add(t.id); state.trades.push(t); found++; }
+      }
+      cursor = groups[i][groups[i].length - 1][1] + 1n;
     }
-    cursor = groups[i][groups[i].length - 1][1] + 1n;
+    if (settled.every((x) => x.status === 'fulfilled')) { par = Math.min(maxPar, par + 1); state.par = par; }
   }
+  state.rr = rr % 1000;
+  if (state.window == null) state.window = Number(win);   // report the block window actually in use
+  if (state.perBatch == null) state.perBatch = per;
   state.cursor = Number(cursor);
   state.head = Number(head);
   state.trades.sort((a, b) => b.block - a.block);
@@ -179,5 +202,5 @@ export async function readTrades(kv) {
   const s = kv ? await kv.get(KEY, 'json') : null;
   if (!s) return { complete: false, trades: [], note: 'nothing recorded yet: the agent records on its next runs' };
   return { complete: s.cursor != null && s.cursor >= (s.head ?? s.cursor) - 50, start: s.start, scannedTo: s.cursor, head: s.head,
-    blocksPerRequest: s.window || 2000, windowsPerRequest: s.perBatch ?? 25, error: s.error, trades: s.trades };
+    blocksPerRequest: s.window || 2000, windowsPerRequest: s.perBatch ?? 25, parallel: s.par, rateLimitedRuns: s.rateLimited, lastSkippedEndpoint: s.skipped, error: s.error, trades: s.trades };
 }

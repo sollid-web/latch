@@ -16,7 +16,9 @@ export default {
       if (!env.TRADES) return;
       try {
         const t = await recordTrades({ kv: env.TRADES, rpc: env.RPC_URL || 'https://rpc.xlayer.tech',
-          factories: [env.FACTORY_ADDRESS, env.FACTORY2_ADDRESS], requests: Number(env.TRADE_SCAN_REQUESTS || 40) });
+          factories: [env.FACTORY_ADDRESS, env.FACTORY2_ADDRESS], requests: Number(env.TRADE_SCAN_REQUESTS || 40),
+          // other public X Layer endpoints first, so the history reader leans less on the trading agent's RPC
+          rpcs: String(env.TRADE_RPC_URLS || 'https://xlayerrpc.okx.com,https://xlayer.drpc.org,https://rpc.xlayer.tech').split(',').map((x) => x.trim()).filter(Boolean) });
         console.log(JSON.stringify({ trades: t }));
       } catch (err) {
         console.error('trade recorder failed:', (err && (err.shortMessage || err.message)) || err);

@@ -226,6 +226,26 @@ try {
     check('recorder: RPC with a block-range limit → window shrinks (80 → ' + got4.blocksPerRequest + '), still finds every trade', got4.blocksPerRequest <= LIMIT && got4.trades.length === real, { n, got4: { ...got4, trades: got4.trades.length } });
     check('recorder: with no vault list given, reads both factories itself', got4.trades.length === real);
   }
+  { // like the public X Layer RPC on mainnet: "over rate limit" when hit with too many requests at once
+    let inFlight = 0, refused = 0;
+    const limited = async (url, init) => {
+      if (url.includes('dead.invalid')) throw new Error('fetch failed (dns)');
+      inFlight++;
+      try {
+        if (inFlight > 2) { refused++; return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -32016, message: 'over rate limit' } }), { status: 200 }); }
+        await new Promise((r) => setTimeout(r, 5));
+        return await fetch(url, init);
+      } finally { inFlight--; }
+    };
+    const kv5 = { m: new Map(), get: async (k) => (kv5.m.has(k) ? JSON.parse(kv5.m.get(k)) : null), put: async (k, v) => { kv5.m.set(k, v); } };
+    let r5, n = 0;
+    do { r5 = await recordTrades({ kv: kv5, rpc: RPC, rpcs: ['http://dead.invalid:1', RPC], factories: [fac, fac2], windowSize: 6, minWindow: 6, perBatch: 2, requests: 12, parallel: 8, pauseMs: 0, since: '2000-01-01T00:00:00Z', fetchFn: limited, now: 8e12 + n }); n++; }
+    while (r5.cursor <= r5.head && n < 300);
+    const got5 = await readTrades(kv5);
+    check('recorder: "over rate limit" → slows down (8 → ' + got5.parallel + ' at a time) and still finds every trade', refused > 0 && got5.parallel <= 4 && got5.trades.length === real, { n, refused, got5: { ...got5, trades: got5.trades.length } });
+    check('recorder: a rate limit is not mistaken for a block-range limit (window stays 6)', got5.blocksPerRequest === 6, got5.blocksPerRequest);
+    check('recorder: a dead endpoint in the list is dropped, the others carry on', /dead\.invalid/.test(got5.lastSkippedEndpoint || '') && !got5.error, got5.lastSkippedEndpoint);
+  }
   check('recorder: no KV binding → skipped, never throws', (await recordTrades({ kv: null, rpc: RPC, factories: [fac] })).skipped);
 } catch (err) {
   console.error('TEST CRASHED:', err); failures++;
