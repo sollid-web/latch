@@ -34,7 +34,11 @@ await ctx.addInitScript(({ rpc, user }) => { // mock OKX wallet: the local chain
       if (method === 'eth_requestAccounts' || method === 'eth_accounts') return [user];
       if (method === 'eth_chainId') return '0xc4';
       if (method === 'wallet_switchEthereumChain') return null;
-      if (method === 'eth_sendTransaction') { params[0].from = user; }
+      if (method === 'eth_sendTransaction') {
+        params[0].from = user;
+        // like the OKX app on X Layer: a plain USDT0 transfer goes through its free-gas service, which can fail
+        if (window.__freeGasDown && String(params[0].data || '').startsWith('0xa9059cbb') && !params[0].gas) { const e = new Error('Network error, try again later'); e.code = -32603; throw e; }
+      }
       return call(method, params || []);
     },
     on() {}
@@ -152,8 +156,15 @@ ok('Buy vault paused', /Paused/.test(await page.evaluate(() => document.querySel
 await page.click('.vault[data-ver="2"] >> nth=0 >> [data-a=vwithdraw]'); await page.waitForTimeout(300);
 await page.click('.sheet [type=submit]'); await page.waitForTimeout(3500);
 ok('withdraw all → USDT0 left 0.00', /USDT0 left\s*\n?\s*0\.00/.test(await txt()), (await txt()).slice(0, 400));
+await page.evaluate(() => { window.__freeGasDown = true; });
 await page.click('.vault[data-ver="2"] >> nth=0 >> [data-a=vadd]'); await page.waitForTimeout(300);
-await page.fill('#dg-amt', '1.5'); await page.click('.sheet [type=submit]'); await page.waitForTimeout(3500);
+ok('Add funds box explains both ways, with the full vault address to copy', /Two ways to add money/.test(await page.locator('.sheet').innerText()) && /0x[0-9a-fA-F]{40}/.test(await page.locator('.sheet').innerText()));
+await page.screenshot({ path: shots + '/5a-add-howto.png' });
+await page.fill('#dg-amt', '1.5'); await page.click('.sheet [type=submit]'); await page.waitForTimeout(2500);
+const sheet = await page.locator('.sheet').innerText().catch(() => '');
+ok('wallet "network error" on Add funds → offers "Try again with a normal fee", keeps the amount', /Try again with a normal fee/.test(sheet) && (await page.inputValue('#dg-amt')) === '1.5', sheet);
+await page.screenshot({ path: shots + '/5b-add-retry.png' });
+await page.click('.sheet [type=submit]'); await page.waitForTimeout(3500);
 ok('after withdrawing, Add USDT0 refunds the same vault → USDT0 left 1.50', /USDT0 left\s*\n?\s*1\.50/.test(await txt()), (await txt()).slice(0, 400));
 
 /* ---- The chip, Activity, Safety ---- */

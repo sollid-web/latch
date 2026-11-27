@@ -397,25 +397,36 @@ export function plain(e) {
   return String(e?.shortMessage || e?.message || e).split('\n')[0];
 }
 /** Simulate (shows the real reason before the wallet pops up), send, wait. Returns the receipt or null. */
-export async function send(label, req) {
+/** opts.normalFee: fill in gas limit and price ourselves, so the wallet sends a regular paid transaction
+ *  (a fraction of a cent of OKB) instead of routing it through its own free-gas service. */
+export async function send(label, req, opts = {}) {
+  S.sendErr = null;
   if (!S.account) { await connect(); if (!S.account) return null; }
   if (S.walletChain !== C.chainId) { try { await switchChain(); } catch (e) { S.error = plain(e); render(); return null; } }
   S.busy = label; S.error = ''; render();
   try {
     await pub.simulateContract({ account: S.account, ...req });
-    const hash = await wallet().writeContract({ ...req, chain });
+    let fee = {};
+    if (opts.normalFee) {
+      const [gas, gasPrice] = await Promise.all([pub.estimateContractGas({ account: S.account, ...req }), pub.getGasPrice()]);
+      fee = { gas: (gas * 13n) / 10n + 5000n, gasPrice: (gasPrice * 12n) / 10n };
+    }
+    const hash = await wallet().writeContract({ ...req, ...fee, chain });
     S.txs.unshift({ label, hash, state: 'sent' }); render();
     const r = await pub.waitForTransactionReceipt({ hash, timeout: 120_000 });
     S.txs[0].state = r.status === 'success' ? 'done' : 'failed';
     if (r.status !== 'success') throw new Error(label + ' failed on chain');
     return r;
   } catch (e) {
+    S.sendErr = e;
     S.error = label + ': ' + plain(e);
     return null;
   } finally {
     S.busy = ''; render();
   }
 }
+/** True when the person said no in their wallet (not a failure worth offering another route for). */
+export const declined = (e) => e?.code === 4001 || /reject|denied|cancel/i.test(String(e?.shortMessage || e?.message || e?.details || ''));
 
 /* ---------------------------------------------------------------- event logs
  * The public X Layer RPC refuses eth_getLogs over more than 100 blocks, so searches are split into 100-block

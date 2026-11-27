@@ -4,7 +4,7 @@ import { parseUnits, formatUnits, getAddress, isAddress } from 'viem';
 import {
   C, U6, E18, MAX, ZERO, pub, FACTORY1, VAULT1, FACTORY2, VAULT2, ERC20, WOKB_ABI, POOL, PROC, S, hooks,
   connect, disconnect, restoreSession, choose, closePicker, cancelWc, browserWallets, hasWalletConnect, isMobile,
-  send, plain, tradesOf, okxAppLink, okxWalletLink,
+  send, declined, plain, tradesOf, okxAppLink, okxWalletLink,
   esc, usd, okb, short, link, when, spacingText
 } from './core.js';
 import { evalChip, pack, MODES, DEPTHS, depthWord, VOLS, SAFETY, curve, depthOf, GATE_COUNT, SAFE } from './strategy.js';
@@ -490,13 +490,14 @@ function vaultCard2(d) {
       <p class="chip-line">Chip input <span class="num">0x${d.inputs.toString(16).padStart(4, '0')}</span> · ${link(C.processor, 'address', 'circuit #' + CID2 + ' on chain')}</p>` : ''}
     </details>
     <details data-k="${d.address}:hist" ${S.open[d.address + ':hist'] ? 'open' : ''}><summary>Recent trades</summary>${hist}</details>
+    ${d.balance === 0n ? `<p class="empty-note">This vault is empty. Add ${unitIn} to start ${dir === 0 ? 'buying' : 'taking profit'}.</p>` : ''}
     <div class="actions">
       <button class="btn primary sm" data-a="vadd" ${busy}>Add ${unitIn}</button>
       <button class="btn quiet sm" data-a="${d.paused ? 'vresume' : 'vpause'}" ${busy}>${d.paused ? 'Resume' : 'Pause'}</button>
       <button class="btn quiet sm" data-a="vstrategy" ${busy}>Change strategy</button>
       <button class="btn quiet sm" data-a="vwithdraw" ${busy}>Withdraw all</button>
     </div>
-    <p class="fine">Vault ${link(d.address)} · output to ${link(d.savings)} · bot ${d.keeper && S.hostedKeeper && d.keeper.toLowerCase() === S.hostedKeeper.toLowerCase() ? 'Latch hosted' : link(d.keeper)} · fee ${(Number(d.feeBpsNow) / 100).toFixed(2)}%</p>
+    <p class="fine">Vault <span class="hex">${esc(short(d.address))}</span> <button type="button" class="linkbtn" data-a="copyAddr" data-addr="${d.address}">${S.copiedAddr === d.address ? 'Copied' : 'Copy address'}</button> (${link(d.address, 'address', 'OKLink')}) · output to ${link(d.savings)} · bot ${d.keeper && S.hostedKeeper && d.keeper.toLowerCase() === S.hostedKeeper.toLowerCase() ? 'Latch hosted' : link(d.keeper)} · fee ${(Number(d.feeBpsNow) / 100).toFixed(2)}%</p>
   </article>`;
 }
 function vaultCard1(d) {
@@ -512,12 +513,13 @@ function vaultCard1(d) {
       <div><dt>USDT0 left</dt><dd class="num">${usd(d.balance)}</dd></div>
       <div><dt>Buys</dt><dd class="num">${d.buys}</dd></div>
     </dl>
+    ${d.balance === 0n ? '<p class="empty-note">This vault is empty. Add USDT0 to start buying.</p>' : ''}
     <div class="actions">
       <button class="btn primary sm" data-a="vadd" ${busy}>Add USDT0</button>
       <button class="btn quiet sm" data-a="${d.paused ? 'vresume' : 'vpause'}" ${busy}>${d.paused ? 'Resume' : 'Pause'}</button>
       <button class="btn quiet sm" data-a="vwithdraw" ${busy}>Withdraw all</button>
     </div>
-    <p class="fine">Vault ${link(d.address)} · OKB to ${link(d.savings)}</p>
+    <p class="fine">Vault <span class="hex">${esc(short(d.address))}</span> <button type="button" class="linkbtn" data-a="copyAddr" data-addr="${d.address}">${S.copiedAddr === d.address ? 'Copied' : 'Copy address'}</button> (${link(d.address, 'address', 'OKLink')}) · OKB to ${link(d.savings)}</p>
   </article>`;
 }
 function pageVaults() {
@@ -665,6 +667,7 @@ function dialogView() {
     <div class="row between"><h2 id="dg-t">${esc(g.title)}</h2><button type="button" class="x" data-a="closeDialog" aria-label="Close">×</button></div>
     ${g.text ? `<p class="dlg-text">${g.text}</p>` : ''}<div class="form">${fields}</div>
     ${S.error ? `<p class="err" role="alert">${esc(S.error)}</p>` : ''}
+    ${g.kind === 'add' ? fundSteps(g.d) : ''}
     <div class="row end gap"><button type="button" class="btn quiet" data-a="closeDialog">Cancel</button><button type="submit" class="btn ${g.danger ? 'danger' : 'primary'}" ${S.busy ? 'disabled' : ''}>${S.busy ? esc(S.busy) + '…' : esc(g.ok)}</button></div>
   </form></div>`;
 }
@@ -759,6 +762,23 @@ function validateCreate(c) {
   if (c.ownBot && !isAddress(c.botAddr)) return 'Your bot address is not valid.';
   return '';
 }
+/** The two ways to put money in a vault, spelled out. */
+function fundSteps(d) {
+  const tok = d.version === 2 && d.dir === 1 ? 'WOKB' : 'USDT0';
+  const alias = tok === 'USDT0' ? ' (some wallets call it USDT)' : ' (wrapped OKB)';
+  return `<div class="howto">
+    <p class="howto-t">Two ways to add money</p>
+    <p class="howto-s"><b>1. From this page:</b> enter an amount above and tap <i>Add ${tok}</i>. Your wallet asks you to approve; nothing moves until you do.</p>
+    <p class="howto-s"><b>2. From your wallet app:</b></p>
+    <ol class="howto-l">
+      <li>Copy this vault's address:<span class="addrbox"><span class="hex">${esc(d.address)}</span><button type="button" class="btn quiet sm" data-a="copyVault">${S.copiedVault ? 'Copied' : 'Copy'}</button></span></li>
+      <li>In your wallet app, tap <b>Send</b> and pick <b>${tok}</b>${alias} on the <b>X Layer</b> network.</li>
+      <li>Paste the address, enter the amount, and confirm.</li>
+      <li>Come back here and tap <b>Refresh</b>. The balance shows within a minute.</li>
+    </ol>
+    <p class="fine">Send only ${tok} on X Layer. Money sent on another network does not reach the vault. Only you can take it out again, with <i>Withdraw all</i>.</p>
+  </div>`;
+}
 function openDialog(d) { S.error = ''; S.dialog = d; render(); }
 const dlg = (id) => document.getElementById('dg-' + id)?.value?.trim();
 
@@ -766,7 +786,15 @@ async function runDialog() {
   const g = S.dialog; if (!g) return;
   const d = g.d; let r = null;
   try {
-    if (g.kind === 'add') r = await send('Adding funds', { address: d.version === 2 ? d.tokenIn : C.usdt, abi: ERC20, functionName: 'transfer', args: [d.address, parseUnits(dlg('amt') || '0', d.version === 2 && d.dir === 1 ? 18 : 6)] });
+    if (g.kind === 'add') {
+      g.fields[0].value = dlg('amt') || '0'; // keep what was typed through re-renders
+      r = await send('Adding funds', { address: d.version === 2 ? d.tokenIn : C.usdt, abi: ERC20, functionName: 'transfer', args: [d.address, parseUnits(g.fields[0].value, d.version === 2 && d.dir === 1 ? 18 : 6)] }, { normalFee: !!g.retry });
+      if (!r && S.sendErr && !declined(S.sendErr)) { // e.g. the wallet's free-gas service answered "network error"
+        if (!g.retry) { g.retry = true; g.ok = 'Try again with a normal fee'; S.error = 'Your wallet could not send it. Try again with a normal network fee (a fraction of a cent in OKB), or send from your wallet app with the vault address below.'; }
+        else S.error = 'Your wallet still could not send it. Copy the vault address below and send ' + (d.version === 2 && d.dir === 1 ? 'WOKB' : 'USDT0') + ' on X Layer from your wallet app; it lands in the vault the same way.';
+        return render();
+      }
+    }
     if (g.kind === 'strategy') {
       const dec = d.dir === 0 ? 6 : 18;
       const base = parseUnits(dlg('base') || '0', dec);
@@ -796,6 +824,18 @@ async function act(a, el) {
     case 'refresh': return refresh();
     case 'disconnect': await disconnect(); S.v1 = []; S.v2 = []; S.dialog = null; render(); return refresh();
     case 'hideHelp': S.mobileHelp = false; return render();
+    case 'copyAddr': {
+      const addr = el.dataset.addr;
+      try { await navigator.clipboard.writeText(addr); S.copiedAddr = addr; } catch { window.prompt('Copy the vault address:', addr); }
+      setTimeout(() => { S.copiedAddr = null; render(); }, 2500);
+      return render();
+    }
+    case 'copyVault': {
+      const addr = S.dialog?.d?.address; if (!addr) return;
+      try { await navigator.clipboard.writeText(addr); S.copiedVault = true; } catch { window.prompt('Copy the vault address:', addr); }
+      setTimeout(() => { S.copiedVault = false; render(); }, 2500);
+      return render();
+    }
     case 'copyLink': {
       try { await navigator.clipboard.writeText(location.href); S.copied = true; } catch { window.prompt('Copy this link:', location.href); }
       return render();
