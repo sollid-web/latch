@@ -792,13 +792,13 @@ function pageAgents() {
       </div>
       <div><h2>Your AI agent can manage vaults for you</h2>
         <p>With the <b>OKX Agentic Wallet</b>, an AI assistant (Claude Code, Cursor, Codex and others) creates and manages Latch vaults when you ask in plain words. The wallet keeps the keys; the AI never sees them, and you confirm every step that moves money.</p>
-        <p class="fine">Live on mainnet: an OKX Agentic Wallet created vault ${link(AGENT_VAULT)} this way.</p>
+        <p class="fine">Live on mainnet: an OKX Agentic Wallet created vault ${link(AGENT_VAULT)} this way, and GitHub Copilot, given only the skill, created vault ${link('0xB7e0B824Da8C744A55a6950cC7863960B1A33F65')}.</p>
       </div>
     </div>
     <h2 class="sub">Set it up</h2>
     <ol class="steps-l">
       <li>Set up the OKX Agentic Wallet (OKX's Onchain OS) with your AI assistant.</li>
-      <li>Add the Latch skill:${cmd('npx skills add sollid-web/latch')}</li>
+      <li>Add the Latch skill:${cmd('npx skills add sollid-web/latch')}It installs the <code>latch</code> tool from npm (<a href="https://www.npmjs.com/package/latch-xlayer" target="_blank" rel="noopener">latch-xlayer</a>) the first time.</li>
       <li>Ask in plain words. For example:</li>
     </ol>
     <div class="chat">

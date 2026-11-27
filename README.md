@@ -82,7 +82,7 @@ npx skills add sollid-web/latch
 The skill then installs the `latch` tool once from npm ([`latch-xlayer`](https://www.npmjs.com/package/latch-xlayer): `npm install -g latch-xlayer`, or `npx latch-xlayer <command>`) and signs with the OKX Agentic Wallet (`onchainos`).
 
 **How it works:**
-- The [`latch`](agent/latch.mjs) command-line tool reads Latch on X Layer and **prepares** transactions.
+- The [`latch`](agent/latch.mjs) command-line tool ([`latch-xlayer` on npm](https://www.npmjs.com/package/latch-xlayer)) reads Latch on X Layer and **prepares** transactions.
 - The agent's Agentic Wallet signs each one with `onchainos wallet contract-call` inside OKX's TEE, after the user confirms it.
 - The tool never sees a key.
 

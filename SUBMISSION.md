@@ -127,10 +127,11 @@ Only the owner can withdraw (any time, even while paused), pause, change the str
   - It passes TapeKit's "100% on-chain" static rule (`scripts/check-onchain.mjs`) and reads only TapeKit's default X Layer nodes.
 - **OKX Agentic Wallet + Plugin Store (Onchain OS):**
   - Latch is packaged as a skill in the OKX Plugin Store format, `latch-plugin`. The Plugin Store adds plugins only by OKX's own curation right now, so it installs from our repo with `npx skills add sollid-web/latch`, alongside OKX's Onchain OS skills.
-  - An AI agent creates and manages vaults, or acts as a vault's own agent, with the `latch` tool, which prepares transactions.
+  - An AI agent creates and manages vaults, or acts as a vault's own agent, with the `latch` tool, which prepares transactions. The tool is published on npm as [`latch-xlayer`](https://www.npmjs.com/package/latch-xlayer) (`npx latch-xlayer market`), so agents install it without cloning anything.
   - The agent's OKX Agentic Wallet signs them with `onchainos wallet contract-call` inside OKX's TEE, after the user confirms.
   - The vault and the chip enforce every limit on chain, so even a tricked agent can't overspend.
   - **Live proof on mainnet:** an OKX Agentic Wallet (`0xFd6A…721C`) created Latch vault [`0x367F…10b7`](https://www.oklink.com/x-layer/address/0x367F3EB73E6C5e7883Aa7D1db76Cb29C11E710b7) through the `latch` tool and `onchainos wallet contract-call` (Buy OKB, Smart, Latch's hosted agent trading it).
+  - **Independent agent test:** GitHub Copilot, given only the skill, installed the tool, checked the wallet and market, asked the user for each setting, and created vault [`0xB7e0…3F65`](https://www.oklink.com/x-layer/address/0xB7e0B824Da8C744A55a6950cC7863960B1A33F65) on mainnet ([tx](https://www.oklink.com/x-layer/tx/0x455bfa51f940d9b7cd9b8e44426771d7f3399f3a777bf3c9a09a1479e71a9a45)).
 - **On-chain data, no database:** the stats, activity and history pages read the factories, vaults and trade events straight from X Layer.
 
 ### What was built during the event
@@ -164,12 +165,12 @@ All of it. The repository started on 2026-11-03 and has 129 commits since:
   - step-by-step funding help, copy-address buttons, and drafts that survive the phone reloading the page
   - 53 browser checks
   - an on-chain DeWEB copy
-- **AI-agent tool:** the `latch` CLI and skill for the OKX Agentic Wallet, 22 checks; a mainnet vault created by an Agentic Wallet
+- **AI-agent tool:** the `latch` CLI (published on npm as `latch-xlayer`) and skill for the OKX Agentic Wallet, 22 checks; mainnet vaults created by an Agentic Wallet, including one by GitHub Copilot from the skill alone
 
 ### Traction (honest)
 
 - As of 2026-11-27 (Activity page): 2 vaults, 2 trades checked by a chip, 0.0246 OKB bought for 2.00 USDT0, 0 USDT0 of profit taken. `[update on submission day]`
-- Both vaults are the builder's own (one created by an OKX Agentic Wallet, to prove the agent path). No outside users yet; we are inviting X Layer and TapeOut builders to try it with a few dollars. `[update with real users, if any]`
+- These vaults are the builder's own (the Agentic Wallet ones prove the agent path). No outside users yet; we are inviting X Layer and TapeOut builders to try it with a few dollars. `[update with real users, if any]`
 
 ---
 

@@ -75,8 +75,8 @@ Make sure "Send the OKB to" is **not** your fee wallet `0xb4bD…23a4`: use anot
 
 ### 7. AI agent (terminal, optional)
 
-- [ ] `cd ~/latch/agent && node latch.mjs market` → live price and chip answer
-- [ ] `node latch.mjs vaults --owner 0xFd6Afa2b7b7F50Be33050d5adB118fcD85b3721C` → the Agentic Wallet vault
+- [ ] `npx -y latch-xlayer market` → live price (the npm package, no clone)
+- [ ] `npx -y latch-xlayer vaults --owner 0xFd6Afa2b7b7F50Be33050d5adB118fcD85b3721C` → the Agentic Wallet vaults
 
 ---
 
