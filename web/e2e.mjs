@@ -160,12 +160,8 @@ await page.evaluate(() => { window.__freeGasDown = true; });
 await page.click('.vault[data-ver="2"] >> nth=0 >> [data-a=vadd]'); await page.waitForTimeout(300);
 ok('Add funds box explains both ways, with the full vault address to copy', /Two ways to add money/.test(await page.locator('.sheet').innerText()) && /0x[0-9a-fA-F]{40}/.test(await page.locator('.sheet').innerText()));
 await page.screenshot({ path: shots + '/5a-add-howto.png' });
-await page.fill('#dg-amt', '1.5'); await page.click('.sheet [type=submit]'); await page.waitForTimeout(2500);
-const sheet = await page.locator('.sheet').innerText().catch(() => '');
-ok('wallet "network error" on Add funds → offers "Try again with a normal fee", keeps the amount', /Try again with a normal fee/.test(sheet) && (await page.inputValue('#dg-amt')) === '1.5', sheet);
-await page.screenshot({ path: shots + '/5b-add-retry.png' });
-await page.click('.sheet [type=submit]'); await page.waitForTimeout(3500);
-ok('after withdrawing, Add USDT0 refunds the same vault → USDT0 left 1.50', /USDT0 left\s*\n?\s*1\.50/.test(await txt()), (await txt()).slice(0, 400));
+await page.fill('#dg-amt', '1.5'); await page.click('.sheet [type=submit]'); await page.waitForTimeout(5000);
+ok('wallet refuses plain token transfers (like OKX on X Layer): Add USDT0 still works through the deposit helper (approve once + deposit) → USDT0 left 1.50', /USDT0 left\s*\n?\s*1\.50/.test(await txt()), (await txt()).slice(0, 400));
 
 /* ---- The chip, Activity, Safety ---- */
 await go('#/chip', 800);

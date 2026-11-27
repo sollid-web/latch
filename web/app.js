@@ -4,7 +4,7 @@ import { parseUnits, formatUnits, getAddress, isAddress } from 'viem';
 import {
   C, U6, E18, MAX, ZERO, pub, FACTORY1, VAULT1, FACTORY2, VAULT2, ERC20, WOKB_ABI, POOL, PROC, S, hooks,
   connect, disconnect, restoreSession, choose, closePicker, cancelWc, browserWallets, hasWalletConnect, isMobile,
-  send, declined, plain, tradesOf, okxAppLink, okxWalletLink,
+  send, addFunds, declined, plain, tradesOf, okxAppLink, okxWalletLink,
   esc, usd, okb, short, link, when, spacingText
 } from './core.js';
 import { evalChip, pack, MODES, DEPTHS, depthWord, VOLS, SAFETY, curve, depthOf, GATE_COUNT, SAFE } from './strategy.js';
@@ -804,7 +804,7 @@ function fundSteps(d) {
   const alias = tok === 'USDT0' ? ' (some wallets call it USDT)' : ' (wrapped OKB)';
   return `<div class="howto">
     <p class="howto-t">Two ways to add money</p>
-    <p class="howto-s"><b>1. From this page:</b> enter an amount above and tap <i>Add ${tok}</i>. Your wallet asks you to approve; nothing moves until you do. If your wallet answers with an error, use way 2.</p>
+    <p class="howto-s"><b>1. From this page:</b> enter an amount above and tap <i>Add ${tok}</i>. Your wallet asks you to approve; nothing moves until you do.${C.depositor ? ` The first time, it also asks once to let Latch's deposit helper move your ${tok}: the helper only moves your own ${tok}, only into Latch vaults, and only when you ask.` : ''} If your wallet answers with an error, use way 2.</p>
     <p class="howto-s"><b>2. From your wallet app:</b></p>
     <ol class="howto-l">
       <li>Copy this vault's own address. Every vault has its own, and this is not your wallet's address:<span class="addrbox"><span class="hex">${esc(d.address)}</span><button type="button" class="btn quiet sm" data-a="copyAddr" data-addr="${d.address}">${S.copiedAddr === d.address ? 'Copied' : 'Copy'}</button></span></li>
@@ -824,7 +824,7 @@ async function runDialog() {
   try {
     if (g.kind === 'add') {
       g.fields[0].value = dlg('amt') || '0'; // keep what was typed through re-renders
-      r = await send('Adding funds', { address: d.version === 2 ? d.tokenIn : C.usdt, abi: ERC20, functionName: 'transfer', args: [d.address, parseUnits(g.fields[0].value, d.version === 2 && d.dir === 1 ? 18 : 6)] }, { normalFee: !!g.retry });
+      r = await addFunds(d.address, d.version === 2 ? d.tokenIn : C.usdt, parseUnits(g.fields[0].value, d.version === 2 && d.dir === 1 ? 18 : 6), { normalFee: !!g.retry });
       if (!r && S.sendErr && !declined(S.sendErr)) { // e.g. the wallet's free-gas service answered "network error"
         if (!g.retry) { g.retry = true; g.ok = 'Try again with a normal fee'; S.error = 'Your wallet could not send it. Try again with a normal network fee (a fraction of a cent in OKB), or send from your wallet app with the vault address below.'; }
         else S.error = 'Your wallet still could not send it. Copy the vault address below and send ' + (d.version === 2 && d.dir === 1 ? 'WOKB' : 'USDT0') + ' on X Layer from your wallet app; it lands in the vault the same way.';
@@ -953,7 +953,7 @@ async function act(a, el) {
       const dec = c.dir === 0 ? 6 : 18;
       let amount; try { amount = parseUnits(c.deposit || '0', dec); } catch { amount = 0n; }
       if (amount <= 0n) { S.error = 'Enter an amount above 0.'; return render(); }
-      const r = await send('Adding funds', { address: c.dir === 0 ? C.usdt : C.wokb, abi: ERC20, functionName: 'transfer', args: [c.created, amount] });
+      const r = await addFunds(c.created, c.dir === 0 ? C.usdt : C.wokb, amount);
       if (r) { S.c = null; location.hash = '#/vaults'; await refresh(); }
       return;
     }

@@ -87,8 +87,11 @@ export const VAULT2 = parseAbi([
 ]);
 export const ERC20 = parseAbi([
   'function balanceOf(address) view returns (uint256)',
-  'function transfer(address to, uint256 amount) returns (bool)'
+  'function transfer(address to, uint256 amount) returns (bool)',
+  'function allowance(address owner, address spender) view returns (uint256)',
+  'function approve(address spender, uint256 amount) returns (bool)'
 ]);
+export const DEPOSIT = parseAbi(['function deposit(address token, address vault, uint256 amount)']);
 export const WOKB_ABI = parseAbi(['function deposit() payable', 'function withdraw(uint256 wad)']);
 export const POOL = parseAbi(['function slot0() view returns (uint160,int24,uint16,uint16,uint16,uint8,bool)', 'function token0() view returns (address)', 'function observe(uint32[] secondsAgos) view returns (int56[] tickCumulatives, uint160[] secondsPerLiquidityCumulativeX128s)']);
 export const PROC = parseAbi(['function eval(uint256 id, bytes inputs) view returns (bytes)']);
@@ -424,6 +427,20 @@ export async function send(label, req, opts = {}) {
   } finally {
     S.busy = ''; render();
   }
+}
+/** Put `amount` of `token` into `vault`. With the deposit helper (C.depositor), this is a normal contract call
+ *  after a one-time approval; some wallets (OKX Wallet on X Layer) refuse a plain token transfer that a website
+ *  asks for, but accept contract calls. The helper only moves the caller's own tokens, only into Latch vaults. */
+export async function addFunds(vault, token, amount, opts = {}) {
+  if (!C.depositor) return send('Adding funds', { address: token, abi: ERC20, functionName: 'transfer', args: [vault, amount] }, opts);
+  if (!S.account) { await connect(); if (!S.account) return null; }
+  let allowed = 0n;
+  try { allowed = await pub.readContract({ address: token, abi: ERC20, functionName: 'allowance', args: [S.account, C.depositor] }); } catch { /* ask for approval */ }
+  if (allowed < amount) {
+    const a = await send('Approving deposits (one time)', { address: token, abi: ERC20, functionName: 'approve', args: [C.depositor, 2n ** 256n - 1n] }, opts);
+    if (!a) return null;
+  }
+  return send('Adding funds', { address: C.depositor, abi: DEPOSIT, functionName: 'deposit', args: [token, vault, amount] }, opts);
 }
 /** True when the person said no in their wallet (not a failure worth offering another route for). */
 export const declined = (e) => e?.code === 4001 || /reject|denied|cancel/i.test(String(e?.shortMessage || e?.message || e?.details || ''));

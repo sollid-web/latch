@@ -24,6 +24,10 @@ const out2 = JSON.parse(solc.compile(JSON.stringify({ language: 'Solidity', sour
   'LatchVault.sol': { content: rd('contracts/LatchVault.sol') }, 'UniMath.sol': { content: rd('contracts/UniMath.sol') }, 'LatchFactory2.sol': { content: rd('contracts/LatchFactory2.sol') } },
   settings: { optimizer: { enabled: true, runs: 200 }, evmVersion: 'cancun', outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object'] } } } }),
   { import: (p) => ({ contents: rd('contracts/' + p.split('/').pop()) }) }));
+const out3 = JSON.parse(solc.compile(JSON.stringify({ language: 'Solidity', sources: { 'LatchDeposit.sol': { content: rd('contracts/LatchDeposit.sol') } },
+  settings: { optimizer: { enabled: true, runs: 200 }, evmVersion: 'cancun', outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object'] } } } })));
+if (out3.errors?.some((e) => e.severity === 'error')) throw new Error(JSON.stringify(out3.errors));
+const Dep = { abi: out3.contracts['LatchDeposit.sol'].LatchDeposit.abi, bytecode: '0x' + out3.contracts['LatchDeposit.sol'].LatchDeposit.evm.bytecode.object };
 const Fac2 = { abi: out2.contracts['LatchFactory2.sol'].LatchFactory2.abi, bytecode: '0x' + out2.contracts['LatchFactory2.sol'].LatchFactory2.evm.bytecode.object };
 const art = (f, c) => ({ abi: out.contracts[f][c].abi, bytecode: '0x' + out.contracts[f][c].evm.bytecode.object });
 const Fac = art('LatchFactory.sol', 'LatchFactory'), ERC = art('Helpers.sol', 'TestERC20'), Proc = art('Helpers.sol', 'NetlistProcessor'), Driver = art('Helpers.sol', 'PoolDriver');
@@ -56,7 +60,8 @@ const fac = await dep(Fac, [proc, 1n, usdt, wokb, router, pool, admin.address, b
 await tx(proc, Proc.abi, 'tape', [2n, JSON.parse(rd('circuits/circuit2.json')).netlist, 16, 3]);
 const fac2 = await dep(Fac2, [{ processor: proc, circuitId: 2n, router, pool, quoteToken: usdt, baseToken: wokb, treasury: admin.address,
   hostedKeeper: bot.address, twapWindow: 1800, slippageBps: 100n, minBuy: 1_000_000n, minSell: 10n ** 16n }]);
+const depositor = await dep(Dep, [fac, fac2, usdt]);
 await pub.request({ method: 'evm_increaseTime', params: [2100] }); await pub.request({ method: 'evm_mine', params: [] });
-fs.writeFileSync(path.join(UI, 'web-local.json'), JSON.stringify({ chainId: 196, rpc: [RPC], explorer: 'https://www.oklink.com/xlayer', factory: fac, factory2: fac2, circuit2Id: 2, usdt, wokb, pool, processor: proc, circuitId: 1, router, uniFactory: uf, repo: 'https://github.com/sollid-web/latch', wcProjectId: 'e2e-test', user }));
+fs.writeFileSync(path.join(UI, 'web-local.json'), JSON.stringify({ chainId: 196, rpc: [RPC], explorer: 'https://www.oklink.com/xlayer', factory: fac, factory2: fac2, depositor, circuit2Id: 2, usdt, wokb, pool, processor: proc, circuitId: 1, router, uniFactory: uf, repo: 'https://github.com/sollid-web/latch', wcProjectId: 'e2e-test', user }));
 console.log('READY', fac);
 await new Promise(() => {});
