@@ -12,7 +12,7 @@
  * or at most every ~30 minutes otherwise. Re-scanning a window after a restart is harmless
  * (entries are keyed by tx hash + log index).
  */
-import { decodeEventLog, parseAbi, toEventSelector, numberToHex } from 'viem';
+import { decodeEventLog, parseAbi, toEventSelector, numberToHex, encodeFunctionData } from 'viem';
 
 export const EVENTS = parseAbi([
   'event Bought(address indexed keeper, uint256 amountIn, uint256 amountOut, uint256 fee, uint256 twapPrice, uint8 bits)',
@@ -39,7 +39,7 @@ async function rpcBatch(url, calls, fetchFn = fetch) {
 /** A block at or before unix time `ts`, from block timestamps (every node keeps headers; old state it may not).
  *  A few estimate-and-correct steps from the average block time: about 6 requests. */
 async function blockAtTime(url, ts, head, fetchFn) {
-  const timeOf = async (n) => { const [b] = await rpcBatch(url, [{ method: 'eth_getBlockByNumber', params: [numberToHex(n), false] }], fetchFn); return Number(BigInt(b.timestamp)); };
+  const timeOf = async (n) => { const b = await one(url, 'eth_getBlockByNumber', [numberToHex(n), false], fetchFn); return Number(BigInt(b.timestamp)); };
   const tHead = await timeOf(head);
   if (ts >= tHead) return head;
   let probe = head > 200_000n ? head - 200_000n : 0n;
@@ -79,51 +79,72 @@ function decode(log, v2set) {
  * opts: { kv, rpc, factories, windowSize=100, perBatch=25, batches=6, fetchFn, now }
  */
 export async function recordTrades(opts) {
-  const { kv, rpc, factories, vaults1 = [], vaults2 = [] } = opts;
-  const windowSize = BigInt(opts.windowSize || 100), perBatch = opts.perBatch || 25, batches = opts.batches || 6;
+  const { kv, rpc } = opts;
   const fetchFn = opts.fetchFn || fetch;
   if (!kv) return { skipped: 'no TRADES KV binding' };
-  const addrs = [...vaults1, ...vaults2].map((a) => a.toLowerCase());
   const state = (await kv.get(KEY, 'json')) || { cursor: null, start: null, trades: [], savedAt: 0 };
-  const [headHex] = await rpcBatch(rpc, [{ method: 'eth_blockNumber', params: [] }], fetchFn);
-  const head = BigInt(headHex) - 2n; // stay a couple of blocks behind the tip
+  // vault lists: given by the caller, or read from the factories (only new entries each run)
+  let vaults1 = opts.vaults1, vaults2 = opts.vaults2;
+  if (!vaults1 || !vaults2) {
+    state.v1 = state.v1 || []; state.v2 = state.v2 || [];
+    for (const [f, key] of [[opts.factories?.[0], 'v1'], [opts.factories?.[1], 'v2']]) {
+      if (!f) continue;
+      const n = Number(BigInt(await call(rpc, f, 'vaultCount', [], fetchFn)));
+      for (let i = state[key].length; i < n; i++) state[key].push(decodeAddr(await call(rpc, f, 'vaults', [BigInt(i)], fetchFn)).toLowerCase());
+    }
+    vaults1 = state.v1; vaults2 = state.v2;
+  }
+  const addrs = [...vaults1, ...vaults2].map((a) => a.toLowerCase());
+  const head = BigInt(await one(rpc, 'eth_blockNumber', [], fetchFn)) - 2n; // stay a couple of blocks behind the tip
   if (state.cursor === null) {
     try {
       // Latch's first factory went live on 21 November 2026; nothing to find before that.
       const since = Math.floor(Date.parse(opts.since || '2026-11-21T00:00:00Z') / 1000);
-      const start = await blockAtTime(rpc, since, head, fetchFn);
-      state.start = Number(start); state.cursor = Number(start);
+      const startBlock = await blockAtTime(rpc, since, head, fetchFn);
+      state.start = Number(startBlock); state.cursor = Number(startBlock);
     } catch (err) {
       state.error = 'could not find the start block: ' + String(err.message || err).slice(0, 160);
       return save(kv, state, true, 0, opts.now);
     }
   }
-  if (!addrs.length) { state.cursor = Number(head); return save(kv, state, true, 0); }
+  if (!addrs.length) { state.cursor = Number(head) + 1; state.head = Number(head); return save(kv, state, true, 0, opts.now); }
 
+  // Adaptive: the window (blocks per eth_getLogs) and the batch size (windows per HTTP request) start large
+  // and halve when the RPC refuses, down to 100 blocks and one window per request. Remembered between runs.
+  const minWin = BigInt(opts.minWindow || 100);
+  let win = BigInt(state.window || opts.windowSize || 2000); if (win < minWin) win = minWin;
+  let per = state.perBatch ?? (opts.perBatch || 25);
+  const requests = opts.requests || 6;
   const v2set = new Set(vaults2.map((a) => a.toLowerCase()));
-  const per = state.noBatch ? 1 : perBatch; // some RPCs refuse JSON-RPC batches: then one window per request
   const seen = new Set(state.trades.map((t) => t.id));
+
+  // plan this run's windows, grouped into requests, all sent in parallel
+  const groups = []; let c = BigInt(state.cursor);
+  for (let r = 0; r < requests && c <= head; r++) {
+    const g = [];
+    for (let i = 0; i < Math.max(per, 1) && c <= head; i++) { const to = c + win - 1n < head ? c + win - 1n : head; g.push([c, to]); c = to + 1n; }
+    groups.push(g);
+  }
+  const q = (a, b) => ({ method: 'eth_getLogs', params: [{ address: addrs, topics: [TOPICS], fromBlock: numberToHex(a), toBlock: numberToHex(b) }] });
+  const settled = await Promise.allSettled(groups.map((g) => (g.length === 1 && per <= 1 ? one(rpc, 'eth_getLogs', q(...g[0]).params, fetchFn).then((x) => [x]) : rpcBatch(rpc, g.map((w) => q(...w)), fetchFn))));
+
+  // keep the contiguous prefix that answered; the cursor never skips a window
   let cursor = BigInt(state.cursor), found = 0;
-  for (let b = 0; b < batches && cursor <= head; b++) {
-    const calls = [];
-    for (let i = 0; i < per && cursor <= head; i++) {
-      const to = cursor + windowSize - 1n < head ? cursor + windowSize - 1n : head;
-      calls.push({ method: 'eth_getLogs', params: [{ address: addrs, topics: [TOPICS], fromBlock: numberToHex(cursor), toBlock: numberToHex(to) }] });
-      cursor = to + 1n;
-    }
-    let results;
-    try { results = await rpcBatch(rpc, calls, fetchFn); }
-    catch (err) { // keep what we have; the cursor only moves past windows that answered
-      cursor = BigInt(calls[0].params[0].fromBlock);
-      if (/batch/i.test(String(err.message)) && calls.length > 1) state.noBatch = true;
-      state.error = String(err.message || err).slice(0, 200);
+  delete state.error;
+  for (let i = 0; i < groups.length; i++) {
+    const r = settled[i];
+    if (r.status !== 'fulfilled') {
+      const msg = String(r.reason?.message || r.reason);
+      if (/batch/i.test(msg) && per > 1) state.perBatch = Math.max(1, Math.floor(per / 2));
+      else if (/range|limit|exceed|too (many|large|big)|max|block/i.test(msg) && win > minWin) state.window = Number(win / 2n < minWin ? minWin : win / 2n);
+      else state.error = msg.slice(0, 200);
       break;
     }
-    for (const logs of results) for (const l of logs || []) {
+    for (const logs of r.value) for (const l of logs || []) {
       const t = decode(l, v2set);
       if (t && !seen.has(t.id)) { seen.add(t.id); state.trades.push(t); found++; }
     }
-    delete state.error;
+    cursor = groups[i][groups[i].length - 1][1] + 1n;
   }
   state.cursor = Number(cursor);
   state.head = Number(head);
@@ -131,7 +152,21 @@ export async function recordTrades(opts) {
   if (state.trades.length > MAX_KEEP) state.trades.length = MAX_KEEP;
   const catchingUp = BigInt(state.cursor) < head - 5n;
   const due = (opts.now ?? Date.now()) - (state.savedAt || 0) > 30 * 60 * 1000;
-  return save(kv, state, found > 0 || catchingUp || due, found, opts.now);
+  return save(kv, state, found > 0 || catchingUp || due || !!state.error, found, opts.now);
+}
+
+const FACT = parseAbi(['function vaultCount() view returns (uint256)', 'function vaults(uint256) view returns (address)']);
+async function call(rpc, to, fn, args, fetchFn) {
+  return one(rpc, 'eth_call', [{ to, data: encodeFunctionData({ abi: FACT, functionName: fn, args }) }, 'latest'], fetchFn);
+}
+const decodeAddr = (hex) => '0x' + hex.slice(-40);
+/** One JSON-RPC request (not a batch: some RPCs refuse batches). */
+async function one(url, method, params, fetchFn = fetch) {
+  const r = await fetchFn(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
+  if (!r.ok) throw new Error('rpc http ' + r.status);
+  const j = await r.json();
+  if (j.error) throw new Error('rpc error: ' + JSON.stringify(j.error).slice(0, 160));
+  return j.result;
 }
 
 async function save(kv, state, write, found, now = Date.now()) {
@@ -143,5 +178,6 @@ async function save(kv, state, write, found, now = Date.now()) {
 export async function readTrades(kv) {
   const s = kv ? await kv.get(KEY, 'json') : null;
   if (!s) return { complete: false, trades: [], note: 'nothing recorded yet: the agent records on its next runs' };
-  return { complete: s.cursor != null && s.cursor >= (s.head ?? s.cursor) - 50, start: s.start, scannedTo: s.cursor, head: s.head, error: s.error, trades: s.trades };
+  return { complete: s.cursor != null && s.cursor >= (s.head ?? s.cursor) - 50, start: s.start, scannedTo: s.cursor, head: s.head,
+    blocksPerRequest: s.window || 2000, windowsPerRequest: s.perBatch ?? 25, error: s.error, trades: s.trades };
 }
