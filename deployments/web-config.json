@@ -21,5 +21,6 @@
     "sha256": "0xd6189211c71638c632c60cda81ef118cc50142e6ddfa3dbcaa68162008c14e4c"
   },
   "wcProjectId": "c23e291f18c0545d8d61a3bfecf457e6",
-  "keeperUrl": "https://latch-keeper.tapeguard.workers.dev"
+  "keeperUrl": "https://latch-keeper.tapeguard.workers.dev",
+  "depositor": "0x948ea5060786167f1d9f7fdfbF3301c59893E3D4"
 }
