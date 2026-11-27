@@ -1,6 +1,6 @@
 {
   "name": "latch-xlayer",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Latch on X Layer for AI agents: buy OKB on dips / take profit on rises from a vault the owner controls; a TapeOut chip sizes every trade. Prepares transactions for the OKX Agentic Wallet (onchainos wallet contract-call); never handles keys.",
   "type": "module",
   "bin": {

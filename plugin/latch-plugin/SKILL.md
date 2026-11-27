@@ -86,7 +86,7 @@ Every command prints JSON. Commands that change anything return a `transactions`
 | Command | Notes |
 |---|---|
 | `latch create --dir buy\|sell --mode <mode> --savings <address> --base <amount> --ref <price> --limit <price> [--per-trade <amount>] [--daily <amount>] [--every any\|hour\|day\|week] [--keeper <address>]` | `--base` is in USDT0 for `buy` (at least 1) and OKB for `sell` (at least 0.01). `--limit` is the ceiling for buys and the floor for sells. `--per-trade` and `--daily` default to the strategy's largest size. `--every` defaults to `day`. Leave out `--keeper` to use Latch's hosted agent. |
-| `latch fund --vault <vault> --amount <amount>` | USDT0 for Buy vaults, WOKB for Take Profit vaults |
+| `latch fund --vault <vault> --amount <amount>` | USDT0 for Buy vaults, WOKB for Take Profit vaults. Usually **two** transactions: allow Latch's deposit helper to move exactly that amount, then the deposit (OKX wallets refuse a plain USDT0 transfer on X Layer). The helper can only pay into Latch vaults. |
 | `latch wrap --amount <okb>` | OKB → WOKB (1:1). Needed before funding a Take Profit vault from plain OKB. |
 | `latch pause --vault <vault>` / `latch resume --vault <vault>` | Owner only |
 | `latch strategy --vault <vault> [--mode] [--base] [--ref] [--limit] [--every]` | Owner only. Limits can't be raised; `--base` must stay at or under the per-trade limit. |
@@ -112,7 +112,7 @@ For each entry of `transactions`, **in order**:
 2. `latch try --dir buy --mode smart --ref <ref> --limit 100 --base 5` to show what it would do right now.
 3. `latch create --dir buy --mode smart --savings <user wallet> --base 5 --ref <ref> --limit 100 --every week`, then sign.
 4. `latch vaults --owner <wallet>` to find the new vault.
-5. `latch fund --vault <vault> --amount <USDT0>`, then sign.
+5. `latch fund --vault <vault> --amount <USDT0>`, then sign each transaction in order (allow, then deposit).
 6. Tell the user: Latch's agent checks every minute; the OKB arrives in `<user wallet>`; the page is `https://okblatch.xyz/#/vaults`.
 
 **"Take profit as OKB rises":** the same, with `--dir sell` and `--limit` as the floor. First `latch wrap` if the wallet holds only OKB.

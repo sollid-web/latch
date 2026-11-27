@@ -9,7 +9,7 @@
 //   latch vaults --owner 0x…                       an owner's vaults
 //   latch status --vault 0x…                       one vault: settings, balance, what the chip sees, next action
 //   latch create --dir buy --mode smart --savings 0x… --base 2 --ref 95 --limit 100 [--per-trade 6 --daily 6 --every day --keeper 0x…]
-//   latch fund --vault 0x… --amount 10 [--from 0x…] add USDT0 (Buy vault) or WOKB (Take Profit vault); checks the payer's balance first
+//   latch fund --vault 0x… --amount 10 [--from 0x…] add USDT0 (Buy vault) or WOKB (Take Profit vault); checks the payer's balance first; allow + deposit through Latch's helper
 //   latch wrap --amount 0.1                        OKB → WOKB (Take Profit vaults hold WOKB)
 //   latch pause|resume --vault 0x…
 //   latch strategy --vault 0x… [--mode --base --ref --limit --every]
@@ -28,6 +28,7 @@ const MAINNET = {
   usdt: '0x779Ded0c9e1022225f8E0630b35a9b54bE713736',
   wokb: '0xe538905cf8410324e03A5A23C1c177a474D59b2b',
   pool: '0xe3BE6A0137f1b0602Fc1a4841686f43B340a5082',
+  depositor: '0x948ea5060786167f1d9f7fdfbF3301c59893E3D4', // LatchDeposit: OKX wallets refuse plain USDT0 transfers on X Layer, but sign contract calls
   site: 'https://okblatch.xyz'
 };
 const C = { ...MAINNET, ...(process.env.LATCH_CONFIG ? JSON.parse(fs.readFileSync(process.env.LATCH_CONFIG, 'utf8')) : {}) };
@@ -56,7 +57,9 @@ const VAULT2 = parseAbi([
   'function withdraw(address token, address to, uint256 amount)',
   'error NotOwner()', 'error OverCap()', 'error CapRaised()', 'error BadParam()', 'error BadSavings()', 'error BadRecipient()', 'error Underfunded()'
 ]);
-const ERC20 = parseAbi(['function balanceOf(address) view returns (uint256)', 'function transfer(address to, uint256 amount) returns (bool)']);
+const ERC20 = parseAbi(['function balanceOf(address) view returns (uint256)', 'function transfer(address to, uint256 amount) returns (bool)',
+  'function allowance(address owner, address spender) view returns (uint256)', 'function approve(address spender, uint256 amount) returns (bool)']);
+const DEPOSIT = parseAbi(['function deposit(address token, address vault, uint256 amount)']);
 const WOKB = parseAbi(['function deposit() payable']);
 const POOL = parseAbi(['function slot0() view returns (uint160,int24,uint16,uint16,uint16,uint8,bool)', 'function token0() view returns (address)', 'function observe(uint32[] secondsAgos) view returns (int56[], uint160[])']);
 const PROC = parseAbi(['function eval(uint256 id, bytes inputs) view returns (bytes)']);
@@ -226,7 +229,17 @@ async function run() {
           + (r.dir === 0 ? 'Send USDT0 (X Layer network; some wallets call it USDT) to that wallet first, then try again.'
             : okb >= amount ? 'It has enough OKB: run `latch wrap --amount ' + formatUnits(amount, 18) + '` first (Take Profit vaults hold WOKB).' : 'Send OKB (X Layer) to that wallet, then `latch wrap`, then try again.'));
       }
-      return out({ transactions: [tx(`Add ${amtOf(amount, r.dir)} to the vault`, r.tokenIn, encodeFunctionData({ abi: ERC20, functionName: 'transfer', args: [v, amount] }))],
+      // Through Latch's deposit helper (approve, then deposit), the same route as the website's Add funds button:
+      // OKX's wallets refuse a plain USDT0 transfer on X Layer but sign contract calls. The helper only pays Latch vaults.
+      const list = [];
+      if (C.depositor) {
+        const allowed = await read(r.tokenIn, ERC20, 'allowance', [from, C.depositor]);
+        if (allowed < amount) list.push(tx(`Allow Latch's deposit helper to move ${amtOf(amount, r.dir)} (this amount only; it can only pay into Latch vaults)`, r.tokenIn,
+          encodeFunctionData({ abi: ERC20, functionName: 'approve', args: [C.depositor, amount] })));
+        list.push(tx(`Add ${amtOf(amount, r.dir)} to the vault (through Latch's deposit helper)`, C.depositor,
+          encodeFunctionData({ abi: DEPOSIT, functionName: 'deposit', args: [r.tokenIn, v, amount] })));
+      } else list.push(tx(`Add ${amtOf(amount, r.dir)} to the vault`, r.tokenIn, encodeFunctionData({ abi: ERC20, functionName: 'transfer', args: [v, amount] })));
+      return out({ transactions: list, order: list.length > 1 ? 'Sign them in order and wait for the first to confirm before the second.' : undefined,
         note: r.dir === 1 ? 'Take Profit vaults hold WOKB. If the wallet has only OKB, run `latch wrap` first.' : undefined });
     }
     case 'wrap': {
