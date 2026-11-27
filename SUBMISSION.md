@@ -18,8 +18,8 @@ Buy OKB on dips and take profit on rises from a vault only you control. A 101-ga
   - LatchFactory2 `0x9C647a631fe59813c430D03330C3A4Da21df6428` (v2 vaults: Buy and Take Profit)
   - LatchFactory `0xc700C9865f237612b0bA86408BB4C182D41ABD11` (classic vaults)
   - Uniswap V3 USDT0/WOKB 0.05% pool `0xe3BE6A0137f1b0602Fc1a4841686f43B340a5082`
-- **Access link:** https://latch.tapeguard.workers.dev. Also fully on chain at https://2-2-435.tapekit.org/ (`tape://2.2.435.tape`), served from circuit #2's own container.
-- **Try it with no wallet:** https://latch.tapeguard.workers.dev/#/demo. Demo mode runs the whole journey with play money: create a vault, move the market, watch Latch's agent trade (sized by the real circuit #2 netlist at the live OKB price), pause, withdraw.
+- **Access link:** https://okblatch.xyz. Also fully on chain at https://2-2-435.tapekit.org/ (`tape://2.2.435.tape`), served from circuit #2's own container.
+- **Try it with no wallet:** https://okblatch.xyz/#/demo. Demo mode runs the whole journey with play money: create a vault, move the market, watch Latch's agent trade (sized by the real circuit #2 netlist at the live OKB price), pause, withdraw.
 - **Repo:** https://github.com/sollid-web/latch
 - **Demo video:** `[YouTube link]`
 

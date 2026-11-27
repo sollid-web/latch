@@ -99,7 +99,7 @@ For each entry of `transactions`, **in order**:
 3. `latch create --dir buy --mode smart --savings <user wallet> --base 5 --ref <ref> --limit 100 --every week`, then sign.
 4. `latch vaults --owner <wallet>` to find the new vault.
 5. `latch fund --vault <vault> --amount <USDT0>`, then sign.
-6. Tell the user: Latch's agent checks every minute; the OKB arrives in `<user wallet>`; the page is `https://latch.tapeguard.workers.dev/#/vaults`.
+6. Tell the user: Latch's agent checks every minute; the OKB arrives in `<user wallet>`; the page is `https://okblatch.xyz/#/vaults`.
 
 **"Take profit as OKB rises":** the same, with `--dir sell` and `--limit` as the floor. First `latch wrap` if the wallet holds only OKB.
 

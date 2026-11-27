@@ -29,5 +29,5 @@ build:
   binary_name: latch
 api_calls:
   - "rpc.xlayer.tech"
-  - "latch.tapeguard.workers.dev"
+  - "okblatch.xyz"
   - "2-2-435.tapekit.org"

@@ -23,7 +23,7 @@ version, Latch's agent and its price sources, the trade history, the on-chain De
 
 ## Part B: on your phone (about 30 minutes)
 
-Use https://latch.tapeguard.workers.dev in your phone's browser unless a step says otherwise.
+Use https://okblatch.xyz in your phone's browser unless a step says otherwise.
 
 ### 1. First look, no wallet
 

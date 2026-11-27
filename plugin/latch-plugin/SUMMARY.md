@@ -27,4 +27,4 @@ latch fund --vault <vault> --amount 10                           # → sign
 latch status --vault <vault>
 ```
 
-Web app: https://latch.tapeguard.workers.dev · On chain (DeWEB): https://2-2-435.tapekit.org/ · Source: https://github.com/sollid-web/latch
+Web app: https://okblatch.xyz · On chain (DeWEB): https://2-2-435.tapekit.org/ · Source: https://github.com/sollid-web/latch

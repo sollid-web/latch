@@ -5,6 +5,13 @@
   "observability": {
     "enabled": true
   },
+  // okblatch.xyz is a Cloudflare zone in the same account; Cloudflare makes the DNS record and certificate.
+  // latch.tapeguard.workers.dev keeps working too, so older links don't break.
+  "routes": [
+    { "pattern": "okblatch.xyz", "custom_domain": true },
+    { "pattern": "www.okblatch.xyz", "custom_domain": true }
+  ],
+  "workers_dev": true,
   "assets": {
     "directory": "public"
   }

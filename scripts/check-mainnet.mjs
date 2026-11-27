@@ -11,7 +11,7 @@ import { createPublicClient, http, parseAbi, getAddress } from 'viem';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const C = JSON.parse(fs.readFileSync(process.env.CONFIG || path.join(root, 'deployments/web-config.json'), 'utf8')); // CONFIG=… for a local test chain
-const SITE = 'https://latch.tapeguard.workers.dev';
+const SITE = 'https://okblatch.xyz';
 const chain = { id: 196, name: 'X Layer', nativeCurrency: { name: 'OKB', symbol: 'OKB', decimals: 18 }, rpcUrls: { default: { http: C.rpc } } };
 const pub = createPublicClient({ chain, transport: http(C.rpc[0], { retryCount: 3, timeout: 20_000 }) });
 

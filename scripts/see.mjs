@@ -7,7 +7,7 @@
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 
-const URL = process.argv[2] || 'https://latch.tapeguard.workers.dev/';
+const URL = process.argv[2] || 'https://okblatch.xyz/';
 const OUT = 'see-out';
 const OWNER = '0xb4bDEAc86CBdd0C148BB98504e1c35d8451A23a4';
 fs.rmSync(OUT, { recursive: true, force: true });

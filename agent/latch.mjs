@@ -28,7 +28,7 @@ const MAINNET = {
   usdt: '0x779Ded0c9e1022225f8E0630b35a9b54bE713736',
   wokb: '0xe538905cf8410324e03A5A23C1c177a474D59b2b',
   pool: '0xe3BE6A0137f1b0602Fc1a4841686f43B340a5082',
-  site: 'https://latch.tapeguard.workers.dev'
+  site: 'https://okblatch.xyz'
 };
 const C = { ...MAINNET, ...(process.env.LATCH_CONFIG ? JSON.parse(fs.readFileSync(process.env.LATCH_CONFIG, 'utf8')) : {}) };
 
