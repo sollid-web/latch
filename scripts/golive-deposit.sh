@@ -46,7 +46,9 @@ check(){ # check <rpc> <address>
 
 if [ -z "${DEPOSITOR:-}" ]; then
   step "1. Rehearsal on a local copy of mainnet (free)"
-  anvil --fork-url "$RPC" --port 8657 --silent & APID=$!; trap 'kill $APID 2>/dev/null || true' EXIT; sleep 4
+  anvil --fork-url "$RPC" --port 8657 --silent & APID=$!; trap 'kill $APID 2>/dev/null || true' EXIT
+  for i in $(seq 1 90); do cast chain-id --rpc-url http://127.0.0.1:8657 >/dev/null 2>&1 && break; kill -0 $APID 2>/dev/null || fail "the local copy of mainnet (anvil) stopped; check your internet and run again"; sleep 1; done
+  cast chain-id --rpc-url http://127.0.0.1:8657 >/dev/null 2>&1 || fail "the local copy of mainnet did not start within 90 s; run again"
   OUT=$(forge create contracts/LatchDeposit.sol:LatchDeposit "${BUILD[@]}" --rpc-url http://127.0.0.1:8657 --private-key "$OWNER_PRIVATE_KEY" --broadcast --constructor-args "${ARGS[@]}" 2>&1) || { echo "$OUT"; fail "rehearsal deploy failed"; }
   check http://127.0.0.1:8657 "$(echo "$OUT" | awk '/Deployed to/{print $3}')"
   kill $APID 2>/dev/null || true; trap - EXIT
