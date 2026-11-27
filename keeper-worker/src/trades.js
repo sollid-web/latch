@@ -36,15 +36,25 @@ async function rpcBatch(url, calls, fetchFn = fetch) {
   });
 }
 
-/** First block where `address` has code (binary search on eth_getCode). */
-async function deployBlock(url, address, head, fetchFn) {
-  let lo = 0n, hi = head;
-  while (lo < hi) {
-    const mid = (lo + hi) / 2n;
-    const [code] = await rpcBatch(url, [{ method: 'eth_getCode', params: [address, numberToHex(mid)] }], fetchFn);
-    if (code && code !== '0x') hi = mid; else lo = mid + 1n;
+/** A block at or before unix time `ts`, from block timestamps (every node keeps headers; old state it may not).
+ *  A few estimate-and-correct steps from the average block time: about 6 requests. */
+async function blockAtTime(url, ts, head, fetchFn) {
+  const timeOf = async (n) => { const [b] = await rpcBatch(url, [{ method: 'eth_getBlockByNumber', params: [numberToHex(n), false] }], fetchFn); return Number(BigInt(b.timestamp)); };
+  const tHead = await timeOf(head);
+  if (ts >= tHead) return head;
+  let probe = head > 200_000n ? head - 200_000n : 0n;
+  let tProbe = await timeOf(probe);
+  let guess = head;
+  for (let i = 0; i < 5; i++) {
+    const rate = (tHead - tProbe) / Number(head - probe || 1n); // seconds per block
+    guess = head - BigInt(Math.ceil((tHead - ts) / Math.max(rate, 0.01)));
+    if (guess < 0n) guess = 0n;
+    const tg = await timeOf(guess);
+    if (tg <= ts && ts - tg < 600) return guess;
+    probe = guess; tProbe = tg;
+    if (tg > ts) continue;
   }
-  return lo;
+  return guess > 2000n ? guess - 2000n : 0n; // close enough; start a little earlier
 }
 
 function decode(log, v2set) {
@@ -78,18 +88,25 @@ export async function recordTrades(opts) {
   const [headHex] = await rpcBatch(rpc, [{ method: 'eth_blockNumber', params: [] }], fetchFn);
   const head = BigInt(headHex) - 2n; // stay a couple of blocks behind the tip
   if (state.cursor === null) {
-    let start = head;
-    for (const f of factories.filter(Boolean)) { const b = await deployBlock(rpc, f, head, fetchFn); if (b < start) start = b; }
-    state.start = Number(start); state.cursor = Number(start);
+    try {
+      // Latch's first factory went live on 21 November 2026; nothing to find before that.
+      const since = Math.floor(Date.parse(opts.since || '2026-11-21T00:00:00Z') / 1000);
+      const start = await blockAtTime(rpc, since, head, fetchFn);
+      state.start = Number(start); state.cursor = Number(start);
+    } catch (err) {
+      state.error = 'could not find the start block: ' + String(err.message || err).slice(0, 160);
+      return save(kv, state, true, 0, opts.now);
+    }
   }
   if (!addrs.length) { state.cursor = Number(head); return save(kv, state, true, 0); }
 
   const v2set = new Set(vaults2.map((a) => a.toLowerCase()));
+  const per = state.noBatch ? 1 : perBatch; // some RPCs refuse JSON-RPC batches: then one window per request
   const seen = new Set(state.trades.map((t) => t.id));
   let cursor = BigInt(state.cursor), found = 0;
   for (let b = 0; b < batches && cursor <= head; b++) {
     const calls = [];
-    for (let i = 0; i < perBatch && cursor <= head; i++) {
+    for (let i = 0; i < per && cursor <= head; i++) {
       const to = cursor + windowSize - 1n < head ? cursor + windowSize - 1n : head;
       calls.push({ method: 'eth_getLogs', params: [{ address: addrs, topics: [TOPICS], fromBlock: numberToHex(cursor), toBlock: numberToHex(to) }] });
       cursor = to + 1n;
@@ -98,6 +115,7 @@ export async function recordTrades(opts) {
     try { results = await rpcBatch(rpc, calls, fetchFn); }
     catch (err) { // keep what we have; the cursor only moves past windows that answered
       cursor = BigInt(calls[0].params[0].fromBlock);
+      if (/batch/i.test(String(err.message)) && calls.length > 1) state.noBatch = true;
       state.error = String(err.message || err).slice(0, 200);
       break;
     }
@@ -124,6 +142,6 @@ async function save(kv, state, write, found, now = Date.now()) {
 /** What GET /trades returns. */
 export async function readTrades(kv) {
   const s = kv ? await kv.get(KEY, 'json') : null;
-  if (!s) return { complete: false, trades: [] };
-  return { complete: s.cursor >= (s.head ?? s.cursor) - 50, start: s.start, scannedTo: s.cursor, trades: s.trades };
+  if (!s) return { complete: false, trades: [], note: 'nothing recorded yet: the agent records on its next runs' };
+  return { complete: s.cursor != null && s.cursor >= (s.head ?? s.cursor) - 50, start: s.start, scannedTo: s.cursor, head: s.head, error: s.error, trades: s.trades };
 }

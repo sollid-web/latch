@@ -194,13 +194,24 @@ try {
   const real = (await pub.getLogs({ address: all, events: (await import('../src/trades.js')).EVENTS, fromBlock: 0n, toBlock: 'latest' })).length;
   await fetch(RPC, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'anvil_mine', params: ['0x5'] }) });
   let rec, steps = 0;
-  do { rec = await recordTrades({ kv, rpc: RPC, factories: [fac, fac2], vaults1: v1s, vaults2: v2s, windowSize: 3, perBatch: 4, batches: 2, now: 1e12 + steps }); steps++; } while (rec.cursor <= rec.head && steps < 500);
+  do { rec = await recordTrades({ kv, rpc: RPC, factories: [fac, fac2], vaults1: v1s, vaults2: v2s, windowSize: 3, perBatch: 4, batches: 2, since: '2000-01-01T00:00:00Z', now: 1e12 + steps }); steps++; } while (rec.cursor <= rec.head && steps < 500);
   const got = await readTrades(kv);
   check('recorder: walks from the first factory to the tip in many small windows', steps > 2 && got.complete, { steps, rec });
   check('recorder: finds every trade on chain (classic + v2), each once', real > 3 && got.trades.length === real, { real, got: got.trades.length });
   check('recorder: v2 rows carry direction and chip size; classic rows are version 1', got.trades.some((t) => t.version === 2 && t.k >= 1 && t.dir === 1) && got.trades.some((t) => t.version === 1), got.trades.slice(0, 3));
-  const before = puts; rec = await recordTrades({ kv, rpc: RPC, factories: [fac, fac2], vaults1: v1s, vaults2: v2s, windowSize: 3, now: 1e12 + steps + 1000 });
+  const before = puts; rec = await recordTrades({ kv, rpc: RPC, factories: [fac, fac2], vaults1: v1s, vaults2: v2s, windowSize: 3, since: '2000-01-01T00:00:00Z', now: 1e12 + steps + 1000 });
   check('recorder: re-running finds no duplicates and does not write when nothing changed', rec.found === 0 && puts === before && (await readTrades(kv)).trades.length === real, { rec, puts, before });
+  { // start from a date: finds a block at or just before it, from block timestamps only
+    const mid = await pub.getBlock({ blockNumber: 30n });
+    const kv2 = { m: new Map(), get: async (k) => (kv2.m.has(k) ? JSON.parse(kv2.m.get(k)) : null), put: async (k, v) => { kv2.m.set(k, v); } };
+    const r1 = await recordTrades({ kv: kv2, rpc: RPC, factories: [fac, fac2], vaults1: v1s, vaults2: v2s, windowSize: 3, perBatch: 2, batches: 1, since: new Date(Number(mid.timestamp) * 1000).toISOString(), now: 5e12 });
+    check('recorder: a start date maps to a block at or before it', r1.start <= 30 && !r1.error, r1);
+    // an RPC that refuses batches: falls back to one window per request and still catches up
+    const noBatch = async (url, init) => { const body = JSON.parse(init.body); if (Array.isArray(body) && body.length > 1) return new Response(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'batch not supported' } }), { status: 200 }); return fetch(url, init); };
+    const kv3 = { m: new Map(), get: async (k) => (kv3.m.has(k) ? JSON.parse(kv3.m.get(k)) : null), put: async (k, v) => { kv3.m.set(k, v); } };
+    let r3, n = 0; do { r3 = await recordTrades({ kv: kv3, rpc: RPC, factories: [fac, fac2], vaults1: v1s, vaults2: v2s, windowSize: 50, perBatch: 4, batches: 3, since: '2000-01-01T00:00:00Z', fetchFn: noBatch, now: 6e12 + n }); n++; } while (r3.cursor <= r3.head && n < 200);
+    check('recorder: RPC without batch support → one window per request, still finds every trade', (await readTrades(kv3)).trades.length === real, { n, r3 });
+  }
   check('recorder: no KV binding → skipped, never throws', (await recordTrades({ kv: null, rpc: RPC, factories: [fac] })).skipped);
 } catch (err) {
   console.error('TEST CRASHED:', err); failures++;
