@@ -1,7 +1,35 @@
 # Latch: submission kit (X Layer TapeOut Accelerate)
 
-Draft, 2026-11-23. Text in `[brackets]` gets filled in after the DeWEB publish and the video upload.
+Audited 2026-11-27 against the event rules and the live product. `[brackets]` are the only things still to fill.
 Every address below is live on X Layer mainnet (chain 196).
+
+## Google Form answers (copy into https://forms.gle/EoDNbxQ65dev1wFd9)
+
+| Field | Answer |
+|---|---|
+| Full name | `[your full name]` |
+| Nationality | Nigerian |
+| Project name | Latch |
+| Project logo (256×256) | `brand/latch-logo-256.png` |
+| Telegram handle | `[@your_telegram]` |
+| Project X account | `[https://x.com/your_latch_handle]` |
+| Team contact email | `[team email]` |
+| Team size | 1 |
+| Team background | Solo builder from Lagos, Nigeria. `[One line on your experience, e.g. "Full-stack web developer"]`. I designed, built and shipped all of Latch during the event: the two TapeOut circuits, the vault contracts, the hosted agent, the web app, the DeWEB copy and the AI-agent skill. I used AI coding assistants (Claude) for implementation and review. |
+| Elevator pitch | Buy OKB on dips and take profit on rises from a vault only you control. A 101-gate TapeOut circuit on X Layer decides the size of every trade, so the agent that runs it can never trade more, pay more, or send your money anywhere else. Try it with no wallet: https://okblatch.xyz/#/demo |
+| GitHub | https://github.com/sollid-web/latch |
+| Demo video (≤ 3 min) | `[YouTube link]` |
+| Project website | https://okblatch.xyz |
+
+How each event requirement is met:
+
+| Requirement | Where |
+|---|---|
+| Builds in the TapeOut ecosystem: circuits, contracts, on-chain data on X Layer, DeWEB | Own processor + circuits #1 and #2 on X Layer; every trade calls `processor.eval`; all stats read from chain; the app is also served from DeWEB (`2.2.435.tape`). See "TapeOut ecosystem integration". |
+| Product, target users and how to reach them, revenue model, why users pay and stay | Sections below with those exact names. |
+| Circuit projects: processor address and circuit ID | Processor `0x3728a5dfE596F6bF7309cA911e61ecaC9b0b6813`; circuit IDs **2** (strategy) and **1** (safety). |
+| Apps: access link and which TapeOut features are used | https://okblatch.xyz (and https://2-2-435.tapekit.org/); "TapeOut ecosystem integration". |
+| Existing projects: what was added | Not an existing project: the repo started on 2026-11-03, during the event. See "What was built during the event". |
 
 ## One line
 
@@ -17,6 +45,7 @@ Buy OKB on dips and take profit on rises from a vault only you control. A 101-ga
 - **Other contracts:**
   - LatchFactory2 `0x9C647a631fe59813c430D03330C3A4Da21df6428` (v2 vaults: Buy and Take Profit)
   - LatchFactory `0xc700C9865f237612b0bA86408BB4C182D41ABD11` (classic vaults)
+  - LatchDeposit `0x948ea5060786167f1d9f7fdfbF3301c59893E3D4` (the deposit helper behind Add funds: moves only the caller's own tokens, only into Latch vaults)
   - Uniswap V3 USDT0/WOKB 0.05% pool `0xe3BE6A0137f1b0602Fc1a4841686f43B340a5082`
 - **Access link:** https://okblatch.xyz. Also fully on chain at https://2-2-435.tapekit.org/ (`tape://2.2.435.tape`), served from circuit #2's own container.
 - **Try it with no wallet:** https://okblatch.xyz/#/demo. Demo mode runs the whole journey with play money: create a vault, move the market, watch Latch's agent trade (sized by the real circuit #2 netlist at the live OKB price), pause, withdraw.
@@ -59,19 +88,20 @@ Only the owner can withdraw (any time, even while paused), pause, change the str
 ### Target users
 
 1. **OKX Wallet users on X Layer who want to build an OKB position or lock in gains** without watching charts or leaving coins on an exchange for its recurring-buy feature. Setup takes about two minutes, on a phone or a computer.
-2. **People who would use a trading bot but won't give one their keys.** Trading bots and bot services get hacked, as with the Telegram bots Unibot (2023) and Banana Gun (2024), and with API keys leaked at 3Commas (2022). With Latch, the worst a compromised bot can do is a trade the owner already allowed, into the owner's wallet.
-3. **Builders of bots and AI agents on X Layer** who need spending limits that an agent can't argue its way around. With the OKX Plugin Store skill, an agent on the OKX Agentic Wallet becomes a vault's owner or its bot, and the chip and the vault hold the line.
+2. **People who would use a trading bot but won't give one their keys.** Trading bots and bot services get hacked, as with the Telegram bots Unibot (2023) and Banana Gun (2024), and with API keys leaked at 3Commas (2022). With Latch, the worst a compromised agent can do is a trade the owner already allowed, into the owner's wallet.
+3. **Builders of bots and AI agents on X Layer** who need spending limits that an agent can't argue its way around. With the Latch skill, an AI agent on the OKX Agentic Wallet becomes a vault's owner or its agent, and the chip and the vault hold the line.
 
 ### How we reach them
 
-- **Inside OKX Wallet:** Latch connects to the OKX Wallet app from a phone browser and works in its Discover browser. Next steps: a Discover listing and an X Layer ecosystem listing.
+- **Any X Layer wallet, no install for a first look:** Demo mode lets anyone try the whole journey with play money before connecting. Then Latch connects to wallet extensions (OKX Wallet, MetaMask and others), to phone wallets by QR (WalletConnect), and to the OKX Wallet app on phones. Next steps: an OKX Wallet Discover listing and an X Layer ecosystem listing.
+- **On X:** `[@handle]` posts each real trade with its transaction link.
 - **Proof as marketing:** every trade links to its transaction and to the chip's decision. The Activity page and the on-chain explorer let anyone check a claim like "the chip said 3× and the swap obeyed" for themselves. We post those on X and in TapeOut and X Layer communities.
 - **Communities that DCA:** savings groups and crypto communities on WhatsApp, Telegram and X in Lagos and beyond, where "buy a little every week" is already the habit. Latch adds "more on the dips, never above my price" without custody.
 - **Bot and AI-agent builders:** "use my own agent" is built into the create flow. A keeper SDK and a guide bring their users in as vault owners.
 
 ### Revenue model
 
-- **Trading fee:** 1% of each trade. It falls to 0.75%, 0.5% and 0.25% as a vault's volume passes 1,000, 5,000 and 20,000 USDT0, so big users stay. The fee is enforced in the contract and paid to the treasury on every trade, and Latch's bot pays the gas.
+- **Trading fee:** 1% of each trade. It falls to 0.75%, 0.5% and 0.25% as a vault's volume passes 1,000, 5,000 and 20,000 USDT0, so big users stay. The fee is enforced in the contract and paid to the treasury on every trade, and Latch's agent pays the gas.
 - **Next:**
   - premium strategies (new circuits taped out as new strategy chips)
   - a paid keeper service for agent builders (their agent, our limits and monitoring)
@@ -102,11 +132,10 @@ Only the owner can withdraw (any time, even while paused), pause, change the str
   - The vault and the chip enforce every limit on chain, so even a tricked agent can't overspend.
   - **Live proof on mainnet:** an OKX Agentic Wallet (`0xFd6A…721C`) created Latch vault [`0x367F…10b7`](https://www.oklink.com/x-layer/address/0x367F3EB73E6C5e7883Aa7D1db76Cb29C11E710b7) through the `latch` tool and `onchainos wallet contract-call` (Buy OKB, Smart, Latch's hosted agent trading it).
 - **On-chain data, no database:** the stats, activity and history pages read the factories, vaults and trade events straight from X Layer.
-- **TapeSend:** `[not integrated yet / or: trade notices to the owner's TapeSend inbox, if shipped]`
 
 ### What was built during the event
 
-All of it. The repository started on 2026-11-03 and has 78+ commits since:
+All of it. The repository started on 2026-11-03 and has 129 commits since:
 
 - **Circuits:** circuit #1 (safety) and circuit #2 (strategy, 101 NAND, with a NAND builder and exhaustive checks), both taped out on our own processor.
 - **v1 contracts:**
@@ -115,6 +144,7 @@ All of it. The repository started on 2026-11-03 and has 78+ commits since:
 - **v2 contracts:**
   - LatchVault (EIP-1167 clones) + LatchFactory2 (live), with Buy and Take Profit, chip-sized trades and every safety rule enforced in Solidity
   - Uniswap V3 TWAP pricing with a live-price check and worst-fill limits
+- **Deposit helper (LatchDeposit):** OKX Wallet on X Layer refuses a plain token transfer requested by a website, so Add funds goes through a small helper after a one-time approval. 11 security checks (`audit/deposit.test.mjs`).
 - **Verified source:** LatchFactory2, the LatchVault template and the classic LatchFactory are verified on **OKLink** (https://www.oklink.com/xlayer/address/0x9C647a631fe59813c430D03330C3A4Da21df6428#code) and on Sourcify with an exact match (https://repo.sourcify.dev/196/0x9C647a631fe59813c430D03330C3A4Da21df6428)
 - **Verification:**
   - 47 tests on Uniswap's real V3 + SwapRouter02 code
@@ -125,22 +155,27 @@ All of it. The repository started on 2026-11-03 and has 78+ commits since:
   - serves every vault fairly
   - refuses to trade when Uniswap disagrees with the exchanges
   - simulates before sending
-  - records every Latch trade for the full history (`/trades`)
-  - 34 tests
-- **Website:**
-  - six pages: Home, Create, My vaults, The chip, Activity, Safety
-  - phone connection through OKX's official connect library
-  - 30 browser checks
+  - records every Latch trade for the full history (`/trades`), pacing itself under the public RPC's rate limit
+  - 41 tests
+- **Website (https://okblatch.xyz):**
+  - nine pages: Home, Demo, Try it, Create, My vaults, The chip, Activity, Agents, Safety
+  - **Demo mode:** the whole journey with play money and no wallet, using the live OKB price and the real circuit #2 netlist
+  - a wallet picker: browser extensions, WalletConnect QR for any phone wallet, and the OKX Wallet app via OKX's official connect library
+  - step-by-step funding help, copy-address buttons, and drafts that survive the phone reloading the page
+  - 53 browser checks
   - an on-chain DeWEB copy
+- **AI-agent tool:** the `latch` CLI and skill for the OKX Agentic Wallet, 22 checks; a mainnet vault created by an Agentic Wallet
 
 ### Traction (honest)
 
-- `[N]` vaults, `[N]` trades checked by a chip, `[X]` OKB bought, `[Y]` USDT0 of profit taken, from the Activity page on `[date]`.
-- Vaults created by the builder for testing and the demo are labelled as such. `[Real users: names or count, if any]`
+- As of 2026-11-27 (Activity page): 2 vaults, 2 trades checked by a chip, 0.0246 OKB bought for 2.00 USDT0, 0 USDT0 of profit taken. `[update on submission day]`
+- Both vaults are the builder's own (one created by an OKX Agentic Wallet, to prove the agent path). No outside users yet; we are inviting X Layer and TapeOut builders to try it with a few dollars. `[update with real users, if any]`
 
 ---
 
 ## Demo video script (≤ 3:00, screen capture + voice)
+
+_To revise at recording time (after the 4 Dec freeze): add Demo mode (no-wallet try-out), the wallet picker, Add funds and the Agents page; record on okblatch.xyz._
 
 | Time | Screen | Voice |
 |---|---|---|
