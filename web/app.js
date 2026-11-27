@@ -280,7 +280,7 @@ function pageHome() {
   return `<section class="hero wrap">
     <div class="hero-copy">
       <h1>Buy OKB on dips. Take profit on rises. A chip decides how much.</h1>
-      <p class="lead">Put USDT0 or OKB in a vault only you control. Latch trades for you on Uniswap, and the size of every trade is decided on chain by a 101-gate TapeOut circuit: more when the move is bigger, less when the market is jumpy, nothing when your rules say no. The bot can never withdraw, raise your limits or send money anywhere but your wallet.</p>
+      <p class="lead">Put USDT0 or OKB in a vault only you control. Latch trades for you on Uniswap, and the size of every trade is decided on chain by a 101-gate TapeOut circuit: more when the move is bigger, less when the market is jumpy, nothing when your rules say no. Latch's agent can never withdraw, raise your limits or send money anywhere but your wallet.</p>
       <div class="cta-row"><a class="btn primary lg" href="#/create?buy">Buy OKB automatically</a><a class="btn quiet lg" href="#/create?sell">Take profit automatically</a></div>
       <p class="fine">No wallet yet? <a href="#/demo">Try the whole journey in Demo mode</a> with play money, or <a href="#/try">see what a vault would do right now</a>.</p>
       <dl class="facts">

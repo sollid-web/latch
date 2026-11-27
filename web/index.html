@@ -527,7 +527,7 @@ html.glass :is(.chipw,.vault,.sheet,.feed,.flow,.job,.sees,.howto,.empty,.demo-d
     linear-gradient(180deg,rgba(23,44,38,.24),rgba(17,33,29,.12));
   -webkit-backdrop-filter:blur(34px);backdrop-filter:blur(34px);
   border-color:rgba(233,241,236,.14);
-  text-shadow:0 1px 2px rgba(12,23,20,.35);
+  text-shadow:0 1px 1px rgba(12,23,20,.3);
   box-shadow:inset 0 1px 0 rgba(233,241,236,.22),inset 0 -1px 0 rgba(0,0,0,.24),inset 0 0 0 1px rgba(233,241,236,.03),
     0 34px 80px -34px rgba(0,0,0,.7),0 0 90px -30px rgba(227,176,75,.34)}
 html.glass :is(.chipw,.vault,.sheet,.job,.sees,.demo-dec)::before{
@@ -552,7 +552,7 @@ html.glass .sheet{background:linear-gradient(180deg,rgba(233,241,236,.09),rgba(2
 html.glass .modal{background:rgba(4,10,8,.34)}
 
 /* small grey text over the bright light: a soft substrate halo keeps it readable */
-html.glass :is(.muted,dt,.ctl-l,.sees-t,.sees-l span,.fine,small,.die-sub,.meter-label,.curve-x,.wgrp,.lead-s,figcaption,.facts dt){text-shadow:0 0 24px rgba(12,23,20,.9),0 0 12px rgba(12,23,20,.95),0 0 4px rgba(12,23,20,.95),0 1px 1px rgba(12,23,20,.8)}
+html.glass :is(.muted,dt,.ctl-l,.sees-t,.sees-l span,.fine,small,.die-sub,.meter-label,.curve-x,.wgrp,.lead-s,figcaption,.facts dt){text-shadow:0 0 6px rgba(12,23,20,.85),0 0 2px rgba(12,23,20,.9)}
 
 /* phones / touch: keep the no-blur budget, with enough tint for crisp text */
 @media (hover:none),(max-width:680px){
@@ -561,6 +561,8 @@ html.glass :is(.muted,dt,.ctl-l,.sees-t,.sees-l span,.fine,small,.die-sub,.meter
   html.glass :is(input,select,.choice,.mode,.wopt,.die,.seg,.btn.quiet){-webkit-backdrop-filter:none;backdrop-filter:none}
 }
 
+/* buttons and pills keep crisp text: no halo inherited from the panel they sit on */
+html.glass :is(.btn,.seg button,.tag,.status,.pin){text-shadow:none}
 /* the background light, faded so it sits behind the UI instead of competing with it */
 html.glass body::before{opacity:.7}
 </style>

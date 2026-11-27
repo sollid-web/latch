@@ -92,7 +92,7 @@ const pick = await page.locator('.picker').innerText().catch(() => '');
 ok('Connect opens the wallet picker: browser wallet + scan with a phone wallet', /Connect a wallet/.test(pick) && /OKX Wallet/.test(pick) && /Scan with a phone wallet/.test(pick) && /X Layer/.test(pick), pick);
 await page.screenshot({ path: shots + '/1c-wallet-picker.png' });
 await page.keyboard.press('Escape'); await page.waitForTimeout(300);
-ok('Escape closes the picker without connecting', !(await page.locator('.picker').count()) && (await page.locator('header [data-a=connect]').count()) === 1);
+ok('Escape closes the picker without connecting (only a non-clickable fading copy may linger outside the app)', !(await page.locator('#app .picker').count()) && (await page.locator('.picker').evaluateAll((els) => els.every((e) => e.closest('.lg-ghost') && e.closest('[inert]')))) && (await page.locator('header [data-a=connect]').count()) === 1);
 await page.click('header [data-a=connect]'); await page.waitForTimeout(400);
 await page.click('.picker [data-a=pick][data-id^="inj:"]'); await page.waitForTimeout(1500);
 ok('picking the browser wallet connects and closes the picker', !(await page.locator('.picker').count()) && /0x/i.test(await page.locator('header').innerText()), await page.locator('header').innerText());
