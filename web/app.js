@@ -798,7 +798,7 @@ function pageAgents() {
     <h2 class="sub">Set it up</h2>
     <ol class="steps-l">
       <li>Set up the OKX Agentic Wallet (OKX's Onchain OS) with your AI assistant.</li>
-      <li>Add the Latch skill:${cmd('npx skills add sollid-web/latch')}It installs the <code>latch</code> tool from npm (${C.onchain ? '<code>latch-xlayer</code>' : '<a href="https://www.npmjs.com/package/latch-xlayer" target="_blank" rel="noopener">latch-xlayer</a>'}) the first time.</li>
+      <li>Add the Latch skill:${cmd('npx skills add sollid-web/latch')}It installs the <code>latch</code> tool from npm (${C.npm ? `<a href="${esc(C.npm)}" target="_blank" rel="noopener">latch-xlayer</a>` : '<code>latch-xlayer</code>'}) the first time.</li>
       <li>Ask in plain words. For example:</li>
     </ol>
     <div class="chat">

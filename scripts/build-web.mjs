@@ -22,6 +22,7 @@ if (ONCHAIN) {
   config.onchain = true;
   delete config.wcProjectId;
   delete config.keeperUrl;
+  delete config.npm;
 }
 const stub = {
   name: 'okx-stub',
