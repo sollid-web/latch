@@ -125,7 +125,7 @@ async function readMine() {
 }
 
 /** Recent trades: yours (My vaults) and the whole network (Activity, Home). Loaded after the numbers. */
-/** Full trade history, recorded by the Latch bot (the public RPC only lets a page search ~100 blocks
+/** Full trade history, recorded by the Latch agent (the public RPC only lets a page search ~100 blocks
  *  at a time, so a page alone can find just each vault's latest trade). Every row has its tx hash,
  *  so anyone can check it on OKLink. Not used by the on-chain copy (no off-chain calls there). */
 async function indexedTrades() {
@@ -204,7 +204,7 @@ hooks(() => render(), () => refresh());
 
 /* ================================================================ shared bits */
 
-const PAGES = [['home', 'Home'], ['try', 'Try it'], ['create', 'Create'], ['vaults', 'My vaults'], ['chip', 'The chip'], ['activity', 'Activity'], ['safety', 'Safety']];
+const PAGES = [['home', 'Home'], ['try', 'Try it'], ['create', 'Create'], ['vaults', 'My vaults'], ['chip', 'The chip'], ['activity', 'Activity'], ['agents', 'Agents'], ['safety', 'Safety']];
 const LOGO = `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 3v4M12 3v4M16 3v4M8 17v4M12 17v4M16 17v4M3 8h4M3 12h4M3 16h4M17 8h4M17 12h4M17 16h4" stroke="currentColor" stroke-width="1.6"/><rect x="8.5" y="8.5" width="7" height="7" rx="1" fill="currentColor"/></svg>`;
 const ICON = {
   buy: `<svg viewBox="0 0 48 24" width="48" height="24" aria-hidden="true"><path d="M2 5 L14 8 L22 20 L30 13 L46 6" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="22" cy="20" r="3" fill="currentColor"/></svg>`,
@@ -299,12 +299,13 @@ function pageHome() {
     </div></section>
   <section class="wrap block"><h2>How a trade happens</h2>
     <ol class="flow">
-      <li><b>The bot asks</b><span>Every minute, Latch's bot asks each vault for a trade.</span></li>
+      <li><b>The agent asks</b><span>Every minute, Latch's agent asks each vault for a trade. It follows your rules; it cannot change them.</span></li>
       <li><b>Your vault measures</b><span>How far OKB moved from your reference, how jumpy the market is, and 7 safety facts.</span></li>
       <li><b>The chip decides</b><span>Circuit #${CID2} answers: no trade, 1×, 2× or 3× your base amount.</span></li>
       <li><b>Uniswap swaps</b><span>At the fair price, or the swap is refused.</span></li>
       <li><b>Your wallet receives</b><span>OKB (as WOKB) or USDT0. Never anywhere else.</span></li>
-    </ol></section>
+    </ol>
+    <p class="fine">Prefer to ask an AI assistant? With the OKX Agentic Wallet, your AI agent can create and manage vaults for you. <a href="#/agents">How agents use Latch</a></p></section>
   ${feed.length ? `<section class="wrap block"><div class="row between"><h2>Latest trades</h2><a href="#/activity">All activity</a></div>${feedList(feed)}</section>` : ''}`;
 }
 
@@ -380,15 +381,15 @@ function pageCreate() {
     const min = dir === 0 ? usd(S.mins.buy) : okb(S.mins.sell, 4);
     body = `<div class="form two">
       <label>Base amount per trade (${u})<input id="c-base" data-c="base" type="number" min="0" step="any" inputmode="decimal" value="${esc(c.base)}"><small>1× trade. At least ${min} ${u}.</small></label>
-      <label>How often, at most<select id="c-spacing" data-c="spacing">${[['3600', 'Every hour'], ['86400', 'Every day'], ['604800', 'Every week'], ['0', 'Whenever the chip allows']].map(([v, l]) => `<option value="${v}" ${c.spacing === v ? 'selected' : ''}>${l}</option>`).join('')}</select><small>The bot checks every minute.</small></label>
+      <label>How often, at most<select id="c-spacing" data-c="spacing">${[['3600', 'Every hour'], ['86400', 'Every day'], ['604800', 'Every week'], ['0', 'Whenever the chip allows']].map(([v, l]) => `<option value="${v}" ${c.spacing === v ? 'selected' : ''}>${l}</option>`).join('')}</select><small>The agent checks every minute.</small></label>
       <label>Reference price (USDT0 per OKB)<input id="c-ref" data-c="ref" type="number" step="any" inputmode="decimal" value="${esc(c.ref)}"><small>Moves are measured from here. OKB is ${P(S.price)} now.</small></label>
       <label>${dir === 0 ? 'Never pay more than' : 'Never sell under'} (USDT0 per OKB)<input id="c-limit" data-c="limit" type="number" step="any" inputmode="decimal" value="${esc(c.limit)}"><small>${dir === 0 ? 'A ceiling: no buys during a spike.' : 'A floor: no sales in a crash.'}</small></label>
       <label>Most per trade (${u})<input id="c-perTx" data-c="perTx" type="number" step="any" inputmode="decimal" value="${esc(c.perTx)}"><small>Can be lowered later, never raised.</small></label>
       <label>Most per day (${u})<input id="c-daily" data-c="daily" type="number" step="any" inputmode="decimal" value="${esc(c.daily)}"><small>Can be lowered later, never raised.</small></label>
       <label class="span2">Send the ${dir === 0 ? 'OKB' : 'USDT0'} to<input id="c-savings" data-c="savings" type="text" spellcheck="false" value="${esc(c.savings)}"><small>Fixed forever once the vault is created.</small></label>
-      <details class="span2" ${c.ownBot ? 'open' : ''}><summary>Use my own bot or AI agent</summary>
-        <label class="chk"><input id="c-ownBot" data-c="ownBot" type="checkbox" ${c.ownBot ? 'checked' : ''}> Use my own bot instead of Latch's</label>
-        <label>Bot address<input id="c-botAddr" data-c="botAddr" type="text" spellcheck="false" placeholder="0x…" value="${esc(c.botAddr)}"><small>Same limits; it can never withdraw or change settings.</small></label>
+      <details class="span2" ${c.ownBot ? 'open' : ''}><summary>Use my own agent (AI or script)</summary>
+        <label class="chk"><input id="c-ownBot" data-c="ownBot" type="checkbox" ${c.ownBot ? 'checked' : ''}> Use my own agent instead of Latch's</label>
+        <label>Agent address<input id="c-botAddr" data-c="botAddr" type="text" spellcheck="false" placeholder="0x…" value="${esc(c.botAddr)}"><small>Same limits; it can never withdraw or change settings.</small></label>
       </details>
     </div>${nav(true, 'cnext', 'Review')}`;
   } else if (c.step === 3) {
@@ -398,7 +399,7 @@ function pageCreate() {
         <li>At most ${esc(c.perTx)} ${dir === 0 ? 'USDT0' : 'OKB'} per trade and ${esc(c.daily)} per day.</li>
         <li>${dir === 0 ? 'OKB (as WOKB, worth 1 OKB each)' : 'USDT0'} goes to <span class="num">${esc(short(c.savings))}</span>.</li>
         <li>Prices use Uniswap's 30-minute average. A trade is refused if the price is more than about 1% away from it, or if the fill would break your ${dir === 0 ? 'ceiling' : 'floor'}.</li>
-        <li>${c.ownBot ? 'Your bot' : 'Latch’s bot'} can only trigger trades. It can't withdraw, raise limits or redirect funds.</li>
+        <li>${c.ownBot ? 'Your agent' : 'Latch’s agent'} can only trigger trades. It can't withdraw, raise limits or redirect funds.</li>
         <li>TapeOut circuit #${CID2} decides the size of every trade on chain.</li>
         <li>Fee: 1% of each trade, falling with volume. Pause or withdraw any time.</li>
       </ul>${nav(true, 'ccreate', S.busy ? esc(S.busy) + '…' : 'Create my vault', S.busy ? 'disabled' : '')}`;
@@ -421,7 +422,7 @@ function pageCreate() {
 function reasonV2(d) {
   if (d.paused) return 'Paused. Nothing trades until you resume.';
   if (d.previewError) return 'Checks unavailable right now: ' + d.previewError;
-  if (d.amount > 0n) return `The chip says ${d.dir === 0 ? 'buy' : 'sell'} ${d.k}× (${amt(d.amount, d.dir)}). The bot trades within about a minute.`;
+  if (d.amount > 0n) return `The chip says ${d.dir === 0 ? 'buy' : 'sell'} ${d.k}× (${amt(d.amount, d.dir)}). Latch's agent trades within about a minute.`;
   if (d.dailyCap - d.spentTodayNow < d.minAmount) return 'Today’s limit is used. Next trade after midnight UTC.';
   if (d.nextTradeAt > 0n) return `Next trade possible in ${when(d.nextTradeAt)}.`;
   if (d.balance < d.minAmount) return `Add ${d.dir === 0 ? 'USDT0' : 'WOKB'} so Latch has something to ${d.dir === 0 ? 'buy with' : 'sell'}.`;
@@ -498,7 +499,7 @@ function vaultCard2(d) {
       <button class="btn quiet sm" data-a="vstrategy" ${busy}>Change strategy</button>
       <button class="btn quiet sm" data-a="vwithdraw" ${busy}>Withdraw all</button>
     </div>
-    <p class="fine">Vault <span class="hex">${esc(short(d.address))}</span> <button type="button" class="linkbtn" data-a="copyAddr" data-addr="${d.address}">${S.copiedAddr === d.address ? 'Copied' : 'Copy address'}</button> (${link(d.address, 'address', 'OKLink')}) · output to ${link(d.savings)} · bot ${d.keeper && S.hostedKeeper && d.keeper.toLowerCase() === S.hostedKeeper.toLowerCase() ? 'Latch hosted' : link(d.keeper)} · fee ${(Number(d.feeBpsNow) / 100).toFixed(2)}%</p>
+    <p class="fine">Vault <span class="hex">${esc(short(d.address))}</span> <button type="button" class="linkbtn" data-a="copyAddr" data-addr="${d.address}">${S.copiedAddr === d.address ? 'Copied' : 'Copy address'}</button> (${link(d.address, 'address', 'OKLink')}) · output to ${link(d.savings)} · agent ${d.keeper && S.hostedKeeper && d.keeper.toLowerCase() === S.hostedKeeper.toLowerCase() ? 'Latch hosted' : link(d.keeper)} · fee ${(Number(d.feeBpsNow) / 100).toFixed(2)}%</p>
   </article>`;
 }
 function vaultCard1(d) {
@@ -548,7 +549,7 @@ function pageChip() {
     <h3 class="sub">Take profit: how far above the reference</h3><div class="scroll">${table(1)}</div></section>
   <section class="wrap block split">
     <div><h2>What goes in</h2><ul class="plain">
-      <li>7 safety facts, all must hold: not paused, the vault's own bot, output to the owner's wallet, price inside the owner's limit and stable, size within limits, daily limit and spacing, enough funds.</li>
+      <li>7 safety facts, all must hold: not paused, the vault's own agent, output to the owner's wallet, price inside the owner's limit and stable, size within limits, daily limit and spacing, enough funds.</li>
       <li>How far OKB's 30-minute average moved from the owner's reference price, in 8 steps.</li>
       <li>How jumpy the market is: the gap between the live price and the 30-minute average, in 4 steps.</li>
       <li>The owner's strategy: steady, dips/rises only, smart or ladder.</li></ul></div>
@@ -636,20 +637,54 @@ function pageActivity() {
 }
 
 /* ---------- Safety ---------- */
+const AGENT_VAULT = '0x367F3EB73E6C5e7883Aa7D1db76Cb29C11E710b7';
+function pageAgents() {
+  const cmd = (t) => `<pre class="cmd"><code>${esc(t)}</code></pre>`;
+  return `<section class="wrap block"><h1 class="pg">Agents</h1>
+    <p class="lead-s">Two kinds of agent work with Latch. Neither can take your money: the vault and the chip enforce every rule, whoever asks.</p>
+    <div class="split">
+      <div><h2>Latch's agent runs your vault</h2>
+        <p>Every minute, Latch's agent asks each vault whether to trade. If the chip says yes, it sends the trade and pays the gas. It follows your rules; it cannot change them.</p>
+        <ul class="plain"><li>It can only trigger trades your rules allow, at your prices, into your wallet</li><li>It can't withdraw, raise a limit or change where money goes</li><li>Prefer your own? Pick “Use my own agent” when you create a vault</li></ul>
+      </div>
+      <div><h2>Your AI agent can manage vaults for you</h2>
+        <p>With the <b>OKX Agentic Wallet</b>, an AI assistant (Claude Code, Cursor, Codex and others) creates and manages Latch vaults when you ask in plain words. The wallet keeps the keys; the AI never sees them, and you confirm every step that moves money.</p>
+        <p class="fine">Live on mainnet: an OKX Agentic Wallet created vault ${link(AGENT_VAULT)} this way.</p>
+      </div>
+    </div>
+    <h2 class="sub">Set it up</h2>
+    <ol class="steps-l">
+      <li>Set up the OKX Agentic Wallet (OKX's Onchain OS) with your AI assistant.</li>
+      <li>Add the Latch skill:${cmd('npx skills add sollid-web/latch')}</li>
+      <li>Ask in plain words. For example:</li>
+    </ol>
+    <div class="chat">
+      <p class="you">Make me a Latch vault that buys OKB on dips. 1 USDT0 a time, never above $100.</p>
+      <p class="ai">OKB is 82.10 now. A Smart vault would buy 1 USDT0 today and more on bigger dips, at most 3 USDT0 a day. Create it? You'll confirm in your Agentic Wallet.</p>
+      <p class="you">Yes. Then add 5 USDT0.</p>
+      <p class="ai">Done: vault 0x…, funded with 5 USDT0. Latch's agent checks it every minute.</p>
+    </div>
+    <p class="fine">Illustrative conversation. The assistant uses the <code>latch</code> tool: check the market, preview the chip, create, fund, pause, change strategy, withdraw. The tool only prepares transactions; the Agentic Wallet signs them after you confirm.</p>
+    <h2 class="sub">What an AI agent can't do</h2>
+    <ul class="plain"><li>Spend more than your per-trade and daily limits, or pay above your ceiling</li><li>Send the output anywhere but the wallet fixed when the vault was made</li><li>Take money out of a vault it doesn't own</li></ul>
+    <p class="mt"><a href="${esc(C.repo)}/tree/main/plugin/latch-plugin" target="_blank" rel="noopener">The Latch skill and tool, with its source</a></p>
+  </section>`;
+}
+
 function pageSafety() {
   return `<section class="wrap block"><h1 class="pg">Safety</h1><div class="split">
-    <div><h2>What a stolen bot key could do</h2>
-      <p>Most trading bots hold your keys. If they are hacked, your account is emptied. With Latch, the worst a stolen bot key can do is trigger the trades your own rules already allow, at your prices, into your own wallet. Latch can also switch a bot key off for every vault at once; that switch can only stop trades, never move funds.</p>
-      <p>The vault refuses a trade if Uniswap's live price is more than about 1% away from its 30-minute average, or if the worst accepted fill would break your ceiling or floor. The bot also refuses when Uniswap disagrees with the major exchanges.</p></div>
+    <div><h2>What a stolen agent key could do</h2>
+      <p>Most trading bots and agents hold your keys. If they are hacked, your account is emptied. With Latch, the worst a stolen agent key can do is trigger the trades your own rules already allow, at your prices, into your own wallet. Latch can also switch an agent key off for every vault at once; that switch can only stop trades, never move funds.</p>
+      <p>The vault refuses a trade if Uniswap's live price is more than about 1% away from its 30-minute average, or if the worst accepted fill would break your ceiling or floor. Latch's agent also refuses when Uniswap disagrees with the major exchanges.</p></div>
     <div><h2>What only you can do</h2>
-      <ul class="plain"><li>Withdraw everything, any time, even while paused</li><li>Pause and resume</li><li>Change the strategy, reference price, ceiling or floor, and spacing</li><li>Lower your limits (they can never be raised) or switch to your own bot or AI agent</li></ul>
-      <h2 class="sub">Checked and open</h2><p>Open-source contracts. Tests against Uniswap's real contract code (47 for the vault, 29 for the bot), Slither static analysis, and three independent reviews by separate AI agents, with every finding fixed or answered in writing. This is not a professional audit: start small.</p>
+      <ul class="plain"><li>Withdraw everything, any time, even while paused</li><li>Pause and resume</li><li>Change the strategy, reference price, ceiling or floor, and spacing</li><li>Lower your limits (they can never be raised) or switch to your own agent</li></ul>
+      <h2 class="sub">Checked and open</h2><p>Open-source contracts. Tests against Uniswap's real contract code (47 for the vault, 34 for the agent), Slither static analysis, and three independent reviews by separate AI agents, with every finding fixed or answered in writing. This is not a professional audit: start small.</p>
       <p><a href="${C.repo}" target="_blank" rel="noopener">Read the code, tests and reviews</a></p></div></div></section>
   <section class="wrap block split">
-    <div><h2>Fees</h2><p>1% of each trade, falling to 0.75%, 0.5% and 0.25% as your vault's volume passes 1,000, 5,000 and 20,000 USDT0. Uniswap's pool keeps its own 0.05%. No sign-up, deposit or withdrawal fees. Latch's bot pays the gas.</p></div>
+    <div><h2>Fees</h2><p>1% of each trade, falling to 0.75%, 0.5% and 0.25% as your vault's volume passes 1,000, 5,000 and 20,000 USDT0. Uniswap's pool keeps its own 0.05%. No sign-up, deposit or withdrawal fees. Latch's agent pays the gas.</p></div>
     <div><h2>Risks</h2><p>OKB's price can keep falling after you buy, or keep rising after you sell. USDT0's issuer can freeze addresses. Smart contracts can have bugs. Prices come from one Uniswap pool, protected by the 30-minute average and the live-price check.</p></div></section>
   <section class="wrap block faq"><h2>Questions</h2>
-    <details><summary>Can Latch take my money?</summary><p>No. Only the wallet that created the vault can withdraw. Latch's bot can only trigger trades within your rules, into your wallet.</p></details>
+    <details><summary>Can Latch take my money?</summary><p>No. Only the wallet that created the vault can withdraw. Latch's agent can only trigger trades within your rules, into your wallet.</p></details>
     <details><summary>Why WOKB and not OKB?</summary><p>Uniswap trades the wrapped form of OKB. Each WOKB is always worth 1 OKB and can be unwrapped any time. Add the WOKB token in your wallet to see it.</p></details>
     <details><summary>What is the reference price?</summary><p>The price your strategy measures moves from. A Buy vault with reference 85 sees OKB at 76 as "10% below"; a Take Profit vault with reference 85 sees 98 as "15% above". You can change it any time.</p></details>
     <details><summary>Which wallet do I need?</summary><p>Any wallet that supports X Layer. On a computer: a wallet extension such as OKX Wallet or MetaMask, or scan the code with a wallet app on your phone. On a phone: the OKX Wallet app, another WalletConnect wallet, or open this page in your wallet app's browser.</p></details>
@@ -718,7 +753,7 @@ function render() {
   saveDraft();
   const app = document.getElementById('app');
   const focus = document.activeElement?.id;
-  const page = { home: pageHome, try: pageTry, create: pageCreate, vaults: pageVaults, chip: pageChip, activity: pageActivity, safety: pageSafety }[S.page] || pageHome;
+  const page = { home: pageHome, try: pageTry, create: pageCreate, vaults: pageVaults, chip: pageChip, activity: pageActivity, agents: pageAgents, safety: pageSafety }[S.page] || pageHome;
   app.innerHTML = header() + `<main id="main">${mobileHelp()}${S.note ? `<p class="wrap note" role="status">${esc(S.note)}</p>` : ''}${page()}</main>
     <footer class="wrap foot"><span>${C.onchain ? 'You are on the on-chain copy of Latch, served from X Layer (DeWEB). ' : ''}Latch runs on X Layer. Every trade is decided by TapeOut circuit #${CID2}${C.circuitId ? ` (classic vaults: #${C.circuitId})` : ''}.${!C.onchain && C.deweb ? ` Also on chain: <a href="${esc(C.deweb.url)}" target="_blank" rel="noopener">${esc(C.deweb.name)}</a>.` : ''}</span><span>${HAS2 ? link(C.factory2, 'address', 'Vault factory') + ' · ' : ''}<a href="${C.repo}" target="_blank" rel="noopener">GitHub</a></span></footer>` + dialogView() + pickerView();
   if (focus) document.getElementById(focus)?.focus();
@@ -760,7 +795,7 @@ function validateCreate(c) {
   if (!(Number(c.limit) > 0)) return `Enter a ${c.dir === 0 ? 'ceiling' : 'floor'} price above 0.`;
   if (!isAddress(c.savings)) return 'The "Send to" address is not valid.';
   if (S.treasury && c.savings.toLowerCase() === S.treasury.toLowerCase()) return 'That wallet is Latch’s fee wallet. Choose another wallet to receive the output.';
-  if (c.ownBot && !isAddress(c.botAddr)) return 'Your bot address is not valid.';
+  if (c.ownBot && !isAddress(c.botAddr)) return 'Your agent address is not valid.';
   return '';
 }
 /** The two ways to put money in a vault, spelled out. */

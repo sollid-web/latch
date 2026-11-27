@@ -183,7 +183,7 @@ function windowOf(all, max, offset) {
  *  reason is worked out from cheap facts first, then the chip's own answer, then the price facts. */
 export function why2(inputs, extra = {}) {
   if (inputs & 1) return 'paused by owner';
-  if (!(inputs & 2)) return 'this bot is not allowed for this vault';
+  if (!(inputs & 2)) return 'this agent is not allowed for this vault';
   if (extra.dailyDone) return 'daily limit reached';
   if (extra.waitUntil) return 'waiting for the next trade time';
   if (extra.lowBalance) return 'not enough money in the vault';
@@ -254,7 +254,7 @@ export async function runOnce(env, opts = {}) {
     if (r.err) { row.action = 'error'; row.why = short(r.err); return; }
     const [s, bps, minAmt] = r;
     const st = { armed: s[1], paused: s[2], balance: s[3], perTxCap: s[4], dailyCap: s[5], spentToday: s[6], keeper: s[7] };
-    if (st.keeper.toLowerCase() !== me) { row.action = 'skip'; row.why = 'uses its own bot'; return; }
+    if (st.keeper.toLowerCase() !== me) { row.action = 'skip'; row.why = 'uses its own agent'; return; }
     if (!st.armed || st.paused) { row.action = 'hold'; row.why = st.paused ? 'paused by owner' : 'not switched on'; return; }
     let amount = st.perTxCap;
     const left = st.dailyCap > st.spentToday ? st.dailyCap - st.spentToday : 0n;
@@ -274,7 +274,7 @@ export async function runOnce(env, opts = {}) {
     c.row.bits = Number(bits);
     if (!allow) {
       c.row.action = 'hold';
-      c.row.why = (bits & 2) === 0 ? 'this bot is not allowed for this vault' : (bits & 8) === 0 ? 'price above your ceiling (or unstable)' : (bits & 32) === 0 ? 'waiting for the next buy time' : 'safety checks said no';
+      c.row.why = (bits & 2) === 0 ? 'this agent is not allowed for this vault' : (bits & 8) === 0 ? 'price above your ceiling (or unstable)' : (bits & 32) === 0 ? 'waiting for the next buy time' : 'safety checks said no';
       return;
     }
     c.row.action = opts.send ? 'ready' : 'would-buy';
@@ -299,7 +299,7 @@ export async function runOnce(env, opts = {}) {
     if (r.err) { row.action = 'error'; row.why = short(r.err); return; }
     const [keeper, dir, p, next, spent, daily, minAmt] = r;
     row.kind = Number(dir) === 0 ? 'buy' : 'take-profit';
-    if (keeper.toLowerCase() !== me) { row.action = 'skip'; row.why = 'uses its own bot'; return; }
+    if (keeper.toLowerCase() !== me) { row.action = 'skip'; row.why = 'uses its own agent'; return; }
     const [inputs, k, amount, fee] = p;
     row.inputs = Number(inputs); row.multiplier = Number(k);
     if (amount === 0n) {

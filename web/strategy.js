@@ -37,7 +37,7 @@ export const depthWord = (d, dir) => d === 0 ? (dir === 0 ? 'not below the refer
 export const VOLS = ['calm', 'a little busy', 'jumpy', 'very jumpy'];
 export const SAFETY = [
   ['Paused by the owner', 0, true],
-  ['Sent by the vault’s own bot', 1],
+  ['Sent by the vault’s own agent', 1],
   ['Output only to the owner’s wallet', 2],
   ['Price inside the owner’s limit, market stable', 3],
   ['Trade size inside the per-trade limit', 4],

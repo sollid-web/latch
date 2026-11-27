@@ -36,12 +36,12 @@ Strategies (`--mode`):
 | `smart` | 2× from a 10% dip, 3× from 20%; 1× when jumpy; waits when very jumpy | the same, on rises |
 | `ladder` | 1× from a 5% dip, 2× from 15%, 3× from 30% | the same, on rises |
 
-What a vault's bot can and can't do:
+What a vault's agent can and can't do:
 - **It can:** only trigger trades.
 - **It can't:** withdraw, raise limits, change the strategy or send funds anywhere except the chosen wallet.
 - **Only the owner can:** withdraw (any time), pause, change the strategy, or lower the limits. Limits can never be raised.
 
-**Fee:** 1% of each trade, falling to 0.25% with volume. Latch's hosted bot pays the gas when it trades.
+**Fee:** 1% of each trade, falling to 0.25% with volume. Latch's hosted agent pays the gas when it trades.
 
 The `latch` tool reads the chain and **prepares** transactions. It never holds, asks for or sees a private key. The user's **OKX Agentic Wallet** signs every transaction with `onchainos wallet contract-call`, inside OKX's TEE, and only after the user confirms it.
 
@@ -71,13 +71,13 @@ Every command prints JSON. Commands that change anything return a `transactions`
 
 | Command | Notes |
 |---|---|
-| `latch create --dir buy\|sell --mode <mode> --savings <address> --base <amount> --ref <price> --limit <price> [--per-trade <amount>] [--daily <amount>] [--every any\|hour\|day\|week] [--keeper <address>]` | `--base` is in USDT0 for `buy` (at least 1) and OKB for `sell` (at least 0.01). `--limit` is the ceiling for buys and the floor for sells. `--per-trade` and `--daily` default to the strategy's largest size. `--every` defaults to `day`. Leave out `--keeper` to use Latch's hosted bot. |
+| `latch create --dir buy\|sell --mode <mode> --savings <address> --base <amount> --ref <price> --limit <price> [--per-trade <amount>] [--daily <amount>] [--every any\|hour\|day\|week] [--keeper <address>]` | `--base` is in USDT0 for `buy` (at least 1) and OKB for `sell` (at least 0.01). `--limit` is the ceiling for buys and the floor for sells. `--per-trade` and `--daily` default to the strategy's largest size. `--every` defaults to `day`. Leave out `--keeper` to use Latch's hosted agent. |
 | `latch fund --vault <vault> --amount <amount>` | USDT0 for Buy vaults, WOKB for Take Profit vaults |
 | `latch wrap --amount <okb>` | OKB → WOKB (1:1). Needed before funding a Take Profit vault from plain OKB. |
 | `latch pause --vault <vault>` / `latch resume --vault <vault>` | Owner only |
 | `latch strategy --vault <vault> [--mode] [--base] [--ref] [--limit] [--every]` | Owner only. Limits can't be raised; `--base` must stay at or under the per-trade limit. |
 | `latch withdraw --vault <vault> --to <address>` | Owner only. Takes everything out; may return two transactions. |
-| `latch tick --vault <vault> --as <wallet>` | Only when `<wallet>` is the vault's bot. Returns a trade transaction if the chip allows it now; otherwise returns the reason and an empty `transactions` list. |
+| `latch tick --vault <vault> --as <wallet>` | Only when `<wallet>` is the vault's own agent. Returns a trade transaction if the chip allows it now; otherwise returns the reason and an empty `transactions` list. |
 
 ### Signing a returned transaction (OKX Agentic Wallet)
 
@@ -99,13 +99,13 @@ For each entry of `transactions`, **in order**:
 3. `latch create --dir buy --mode smart --savings <user wallet> --base 5 --ref <ref> --limit 100 --every week`, then sign.
 4. `latch vaults --owner <wallet>` to find the new vault.
 5. `latch fund --vault <vault> --amount <USDT0>`, then sign.
-6. Tell the user: Latch's bot checks every minute; the OKB arrives in `<user wallet>`; the page is `https://latch.tapeguard.workers.dev/#/vaults`.
+6. Tell the user: Latch's agent checks every minute; the OKB arrives in `<user wallet>`; the page is `https://latch.tapeguard.workers.dev/#/vaults`.
 
 **"Take profit as OKB rises":** the same, with `--dir sell` and `--limit` as the floor. First `latch wrap` if the wallet holds only OKB.
 
 **"How is my vault doing?":** `latch status --vault <vault>`. Report `now.why`, the balance, what was bought or received, and the average price.
 
-**The Agentic Wallet as the vault's own bot** (create with `--keeper <wallet>`): when the user asks, check periodically with `latch tick --vault <vault> --as <wallet>`. If `transactions` is not empty, sign it. The vault and chip enforce every limit, so the agent can't trade more, more often or at a worse price than the owner allowed.
+**The Agentic Wallet as the vault's own agent** (create with `--keeper <wallet>`): when the user asks, check periodically with `latch tick --vault <vault> --as <wallet>`. If `transactions` is not empty, sign it. The vault and chip enforce every limit, so the agent can't trade more, more often or at a worse price than the owner allowed.
 
 ## Error Handling
 
@@ -117,12 +117,12 @@ For each entry of `transactions`, **in order**:
 | `"--base can be at most the per-trade limit"` | Limits can only be lowered; to trade bigger, create a new vault |
 | `status.now.why` / `tick.why` | Plain reason the vault is waiting: say it as is |
 | `contract-call` reverts with `NotOwner` | The signing wallet doesn't own this vault |
-| `contract-call` reverts with `BadSavings` | The output wallet isn't allowed (a bot, the fee wallet or another vault) |
+| `contract-call` reverts with `BadSavings` | The output wallet isn't allowed (the vault's agent, the fee wallet or another vault) |
 
 ## Security Notices
 
 - The tool never asks for, stores or uses private keys. Signing happens only in the OKX Agentic Wallet.
 - Always confirm each write with the user, showing `description`.
-- **Funds:** only the vault owner can withdraw. A vault's bot can only trigger trades within the owner's limits, at a price within about 1% of Uniswap's 30-minute average and inside the owner's ceiling or floor, with the output only to the chosen wallet.
+- **Funds:** only the vault owner can withdraw. A vault's agent can only trigger trades within the owner's limits, at a price within about 1% of Uniswap's 30-minute average and inside the owner's ceiling or floor, with the output only to the chosen wallet.
 - **Risks:** OKB's price can keep falling after a buy or keep rising after a sale. USDT0's issuer can freeze addresses. The contracts are open source and independently reviewed but not professionally audited, so start small. Not financial advice.
 - **External calls:** the X Layer RPC (`rpc.xlayer.tech`) only.

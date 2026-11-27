@@ -142,7 +142,7 @@ async function decision(v, r, caller) {
   let why;
   if (amount > 0n) why = `the chip says ${r.dir === 0 ? 'buy' : 'sell'} ${Number(k)}× (${amtOf(amount, r.dir)})`;
   else if (r.paused) why = 'paused by the owner';
-  else if (caller.toLowerCase() !== r.keeper.toLowerCase()) why = `only the vault's bot (${r.keeper}) can trade`;
+  else if (caller.toLowerCase() !== r.keeper.toLowerCase()) why = `only the vault's own agent (${r.keeper}) can trade`;
   else if (r.dailyCap - r.spentTodayNow < r.minAmount) why = "today's limit is used";
   else if (r.nextTradeAt > 0n) why = `next trade possible at ${new Date(Number(r.nextTradeAt) * 1000).toISOString()}`;
   else if (r.balance < r.minAmount) why = `the vault needs ${r.dir === 0 ? 'USDT0' : 'WOKB'}`;
@@ -246,10 +246,10 @@ async function run() {
       return out({ transactions: t, note: t.length ? 'Run them in order.' : 'The vault is already empty.' });
     }
     case 'tick': {
-      const v = addr('vault', 'vault address'); const as = addr('as', "the agent wallet address (must be the vault's bot)"); const r = await vaultInfo(v);
+      const v = addr('vault', 'vault address'); const as = addr('as', "the agent wallet address (must be the vault's own agent)"); const r = await vaultInfo(v);
       const d = await decision(v, r, as);
       return out({ ...d, transactions: d.tradeNow ? [tx(`Trade now: ${d.why}`, v, encodeFunctionData({ abi: VAULT2, functionName: 'tick' }))] : [],
-        note: d.tradeNow ? 'Sign it now; the vault re-checks everything at the moment of the trade.' : 'Nothing to do now. Ask again later (the bot checks about once a minute).' });
+        note: d.tradeNow ? 'Sign it now; the vault re-checks everything at the moment of the trade.' : 'Nothing to do now. Ask again later (Latch\u2019s agent checks about once a minute).' });
     }
     default:
       process.stdout.write(fs.readFileSync(new URL(import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//')).slice(0, 18).map((l) => l.slice(3)).join('\n') + '\n');

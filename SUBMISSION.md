@@ -5,7 +5,7 @@ Every address below is live on X Layer mainnet (chain 196).
 
 ## One line
 
-Buy OKB on dips and take profit on rises from a vault only you control. A 101-gate TapeOut circuit on chain decides the size of every trade, so the bot that runs it can never trade more, pay more, or send your money anywhere else.
+Buy OKB on dips and take profit on rises from a vault only you control. A 101-gate TapeOut circuit on chain decides the size of every trade, so the agent that runs it can never trade more, pay more, or send your money anywhere else.
 
 ## Form fields
 
@@ -42,7 +42,7 @@ You also set:
 - a per-trade limit and a daily limit
 - how often it may trade at most
 
-Latch's hosted bot checks every vault each minute. On each check, the vault turns the market into 16 bits:
+Latch's hosted agent checks every vault each minute. On each check, the vault turns the market into 16 bits:
 
 - how far OKB's 30-minute average has moved from your reference (8 steps)
 - how jumpy the market is (4 steps)
@@ -51,9 +51,9 @@ Latch's hosted bot checks every vault each minute. On each check, the vault turn
 
 TapeOut circuit #2 answers with a decision: no trade, 1×, 2× or 3× your base amount. The vault then swaps on Uniswap and sends the output straight to your wallet. It never keeps the output, and never sends it anywhere else.
 
-The bot can only trigger trades. It cannot withdraw, raise a limit, change the strategy or redirect funds. A stolen bot key can do no more than what your own rules already allow. Latch can also switch a bot key off for every vault at once, and that switch can only stop trades.
+The agent can only trigger trades. It cannot withdraw, raise a limit, change the strategy or redirect funds. A stolen agent key can do no more than what your own rules already allow. Latch can also switch an agent key off for every vault at once, and that switch can only stop trades.
 
-Only the owner can withdraw (any time, even while paused), pause, change the strategy and prices, and lower the limits. Limits can never be raised. You can plug in your own bot or AI agent as the vault's keeper, and it gets exactly the same limits.
+Only the owner can withdraw (any time, even while paused), pause, change the strategy and prices, and lower the limits. Limits can never be raised. You can plug in your own agent (AI or script) as the vault's keeper, and it gets exactly the same limits.
 
 ### Target users
 
@@ -66,7 +66,7 @@ Only the owner can withdraw (any time, even while paused), pause, change the str
 - **Inside OKX Wallet:** Latch connects to the OKX Wallet app from a phone browser and works in its Discover browser. Next steps: a Discover listing and an X Layer ecosystem listing.
 - **Proof as marketing:** every trade links to its transaction and to the chip's decision. The Activity page and the on-chain explorer let anyone check a claim like "the chip said 3× and the swap obeyed" for themselves. We post those on X and in TapeOut and X Layer communities.
 - **Communities that DCA:** savings groups and crypto communities on WhatsApp, Telegram and X in Lagos and beyond, where "buy a little every week" is already the habit. Latch adds "more on the dips, never above my price" without custody.
-- **Bot and agent builders:** "use my own bot" is built into the create flow. A keeper SDK and a guide bring their users in as vault owners.
+- **Bot and AI-agent builders:** "use my own agent" is built into the create flow. A keeper SDK and a guide bring their users in as vault owners.
 
 ### Revenue model
 
@@ -96,10 +96,10 @@ Only the owner can withdraw (any time, even while paused), pause, change the str
   - It passes TapeKit's "100% on-chain" static rule (`scripts/check-onchain.mjs`) and reads only TapeKit's default X Layer nodes.
 - **OKX Agentic Wallet + Plugin Store (Onchain OS):**
   - Latch is packaged as a skill in the OKX Plugin Store format, `latch-plugin`. The Plugin Store adds plugins only by OKX's own curation right now, so it installs from our repo with `npx skills add sollid-web/latch`, alongside OKX's Onchain OS skills.
-  - An AI agent creates and manages vaults, or acts as a vault's bot, with the `latch` tool, which prepares transactions.
+  - An AI agent creates and manages vaults, or acts as a vault's own agent, with the `latch` tool, which prepares transactions.
   - The agent's OKX Agentic Wallet signs them with `onchainos wallet contract-call` inside OKX's TEE, after the user confirms.
   - The vault and the chip enforce every limit on chain, so even a tricked agent can't overspend.
-  - **Live proof on mainnet:** an OKX Agentic Wallet (`0xFd6A…721C`) created Latch vault [`0x367F…10b7`](https://www.oklink.com/x-layer/address/0x367F3EB73E6C5e7883Aa7D1db76Cb29C11E710b7) through the `latch` tool and `onchainos wallet contract-call` (Buy OKB, Smart, Latch's hosted bot trading it).
+  - **Live proof on mainnet:** an OKX Agentic Wallet (`0xFd6A…721C`) created Latch vault [`0x367F…10b7`](https://www.oklink.com/x-layer/address/0x367F3EB73E6C5e7883Aa7D1db76Cb29C11E710b7) through the `latch` tool and `onchainos wallet contract-call` (Buy OKB, Smart, Latch's hosted agent trading it).
 - **On-chain data, no database:** the stats, activity and history pages read the factories, vaults and trade events straight from X Layer.
 - **TapeSend:** `[not integrated yet / or: trade notices to the owner's TapeSend inbox, if shipped]`
 
@@ -120,7 +120,7 @@ All of it. The repository started on 2026-11-03 and has 78+ commits since:
   - Slither
   - three independent reviews by separate AI agents, every finding fixed or answered in writing (`audit/`)
   - fork rehearsals on a copy of mainnet before every mainnet step
-- **Hosted bot (Cloudflare cron, every minute):**
+- **Hosted agent (Cloudflare cron, every minute):**
   - serves every vault fairly
   - refuses to trade when Uniswap disagrees with the exchanges
   - simulates before sending
@@ -145,10 +145,10 @@ All of it. The repository started on 2026-11-03 and has 78+ commits since:
 | 0:00–0:15 | Home. The chip widget: drag the slider; the 101 gates switch; "Buy 1×" becomes "Buy 3×". | "Trading bots want your keys. Latch doesn't. You keep the money in your own vault, and a chip on X Layer decides how much every trade can be." |
 | 0:15–0:35 | Phone: Connect wallet, then approve in the OKX Wallet app; the address appears. | "Connect with the OKX Wallet app." |
 | 0:35–1:05 | Create, then Buy OKB, then Smart (the bar chart), then amounts, then the review sentence, then Create, then add USDT0. | "Pick a job and a strategy. Smart buys more on bigger dips and less when the market is jumpy. You set a ceiling, a daily limit and how often. One transaction, and it's live." |
-| 1:05–1:35 | My vaults: "What the chip sees now: 20–30% below, calm, all 7 pass, buy 3×". Then the bot's trade appears, with Recent trades showing 3× and a link to the transaction. | "Every minute the bot asks. The vault turns the market into 16 bits, circuit #2 answers 3×, Uniswap swaps, and the OKB lands in my wallet. Not in the vault, not anywhere else." |
+| 1:05–1:35 | My vaults: "What the chip sees now: 20–30% below, calm, all 7 pass, buy 3×". Then the agent's trade appears, with Recent trades showing 3× and a link to the transaction. | "Every minute Latch's agent asks. The vault turns the market into 16 bits, circuit #2 answers 3×, Uniswap swaps, and the OKB lands in my wallet. Not in the vault, not anywhere else." |
 | 1:35–1:55 | Take profit vault, Ladder, the sentence; a trade showing "Sold 0.02 OKB, chip 1×". | "The same vault in reverse takes profit as OKB rises, more on bigger rises, never under my floor." |
 | 1:55–2:20 | The chip page: flip "Paused", and the verdict becomes "Wait"; "Ask the real chip"; the full table of answers. | "This is the real netlist, running here and on chain. Every possible answer is public and was checked on all 65,536 inputs." |
-| 2:20–2:40 | Safety page: what a stolen bot key could do. Pause, then Withdraw all. | "If the bot key is stolen, the worst case is a trade I already allowed. I can pause or withdraw any time." |
+| 2:20–2:40 | Safety page: what a stolen agent key could do. Pause, then Withdraw all. | "If the agent key is stolen, the worst case is a trade I already allowed. I can pause or withdraw any time." |
 | 2:40–3:00 | The on-chain copy at `2-2-435.tapekit.org` with TapeKit's badge. Footer: "served from X Layer (DeWEB)". | "The app itself lives in the chip's container on X Layer. Latch: automation you don't have to trust." |
 
 Recording notes: fund the demo vaults beforehand so the 3× buy and the take-profit sale happen on camera, or cut to the trade a minute later. Keep the phone and the desktop on the same wallet. Speak slowly. Captions help judges who watch muted.

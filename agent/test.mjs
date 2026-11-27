@@ -66,7 +66,7 @@ ok('wrap: OKB → WOKB transaction carries the value', r.transactions?.[0]?.amt 
 r = latch('fund', '--vault', v2, '--amount', '0.1');
 ok('fund the Take Profit vault with WOKB', await sign(r.transactions[0]), r);
 r = latch('tick', '--vault', v2, '--as', SAVE);
-ok('tick: a wallet that is not the bot is told plainly', r.tradeNow === false && /only the vault's bot/.test(r.why), r);
+ok('tick: a wallet that is not the vault\'s agent is told plainly', r.tradeNow === false && /only the vault's own agent/.test(r.why), r);
 r = latch('tick', '--vault', v2, '--as', AGENT);
 ok('tick: chip says sell 2× (OKB ~13.6% above reference)', r.tradeNow === true && r.multiplier === 2 && r.transactions.length === 1, r);
 const u0 = BigInt(await rpc('eth_call', [{ to: web.usdt, data: '0x70a08231' + SAVE.slice(2).padStart(64, '0') }, 'latest']));

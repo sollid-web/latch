@@ -6,7 +6,7 @@
 
 Latch lets anyone put USDT0 or OKB in a vault only they control and have it traded automatically on Uniswap.
 The size of every trade is decided on chain by a 101-gate TapeOut circuit: more when the move is bigger,
-less when the market is jumpy, nothing when the owner's rules say no. The bot that runs it can never
+less when the market is jumpy, nothing when the owner's rules say no. The agent that runs it can never
 withdraw, raise a limit, or send money anywhere but the owner's wallet.
 
 ## For judges (X Layer TapeOut Accelerate)
@@ -24,7 +24,7 @@ withdraw, raise a limit, or send money anywhere but the owner's wallet.
 | **Usage, live** | [Activity](https://latch.tapeguard.workers.dev/#/activity): vaults, trades checked by a chip, OKB bought and profit taken, all read from chain. Full trade list, each with its tx hash: [latch-keeper.tapeguard.workers.dev/trades](https://latch-keeper.tapeguard.workers.dev/trades) |
 | **Verified source** | All three live contracts verified on [Sourcify](https://repo.sourcify.dev/196/0x9C647a631fe59813c430D03330C3A4Da21df6428) with an **exact match** (byte-for-byte, including metadata): LatchFactory2, the LatchVault template every vault clones, and the classic LatchFactory. All three are also verified on OKLink, X Layer's explorer. (v2 was rebuilt without via-IR on 24 November so OKLink could verify it; the earlier via-IR factory `0x4Af2…81b8` is retired.) |
 | **Assurance** | Circuit #2 checked on all 65,536 inputs, against the live processor too · 47 contract tests on Uniswap's real V3 code · Slither · three independent reviews with every finding answered ([audit/](audit/)) · mainnet-fork rehearsal before every mainnet step |
-| **AI agents** | OKX Plugin Store skill [`latch-plugin`](plugin/latch-plugin) on OKX Agentic Wallet: an agent creates and manages vaults, or acts as a vault's bot, signing with `onchainos wallet contract-call` |
+| **AI agents** | OKX Plugin Store skill [`latch-plugin`](plugin/latch-plugin) on OKX Agentic Wallet: an agent creates and manages vaults, or acts as a vault's own agent, signing with `onchainos wallet contract-call` |
 | **Built during the event** | All of it. First commit 2026-11-03. |
 
 ## What it does
@@ -43,12 +43,12 @@ withdraw, raise a limit, or send money anywhere but the owner's wallet.
    - the most per trade and per day; these can only ever be lowered
    - how often it may trade at most
    - the wallet that receives the output
-4. **Fund it.** That's it. Latch's hosted bot checks every vault each minute. You can pause, change the strategy or withdraw everything at any time.
+4. **Fund it.** That's it. Latch's hosted agent checks every vault each minute. You can pause, change the strategy or withdraw everything at any time.
 
 ### How one trade is decided
 
 ```
-bot calls vault.tick()
+agent calls vault.tick()
   └─ vault measures, from Uniswap's 30-minute average (TWAP) and the live price:
        how far OKB moved from your reference (8 steps) · how jumpy the market is (4 steps) · your strategy · 7 safety facts
   └─ 16 bits → TapeOut processor.eval(circuit #2) → allow + size k (0, 1, 2 or 3)
@@ -57,15 +57,15 @@ bot calls vault.tick()
   └─ Uniswap V3 swap → output straight to your wallet → event Traded(…, inputs, k)
 ```
 
-## Why you don't have to trust the bot
+## Why you don't have to trust the agent
 
-- **The bot can only trigger trades.** Only the owner can withdraw (any time, even while paused), pause, change the strategy or prices, or lower the limits. Limits can never be raised.
-- **A stolen bot key can only make trades your own rules already allow,** at your prices, into your own wallet. Latch can also switch a bot key off for every vault at once. That switch can stop trades but can never move funds.
+- **The agent can only trigger trades.** Only the owner can withdraw (any time, even while paused), pause, change the strategy or prices, or lower the limits. Limits can never be raised.
+- **A stolen agent key can only make trades your own rules already allow,** at your prices, into your own wallet. Latch can also switch an agent key off for every vault at once. That switch can stop trades but can never move funds.
 - **Price safety.**
   - Every trade is priced from Uniswap's 30-minute average, not the price this second.
   - It is refused if the live price is more than about 1% away from that average.
   - It is refused if the worst accepted fill would break the owner's ceiling or floor.
-  - The bot also refuses when Uniswap disagrees with the major exchanges (Gate, MEXC, LBank, XT and others).
+  - The agent also refuses when Uniswap disagrees with the major exchanges (Gate, MEXC, LBank, XT and others).
 - **Rules can't be changed by anyone.** Every vault is pinned at creation to the processor, the circuit, the router and the pool, and the factory has no power over funds.
 
 ## For AI agents: OKX Agentic Wallet + Plugin Store
@@ -91,13 +91,13 @@ npx skills add sollid-web/latch
 | What a vault would do right now (real chip) | `latch try --dir buy --mode smart --ref 95 --limit 100 --base 2` |
 | Create, fund, pause, change strategy, withdraw | `latch create …`, `latch fund …`, `latch pause …`, `latch strategy …`, `latch withdraw …` |
 | See a vault and why it waits | `latch status --vault 0x…` |
-| Be the vault's bot | `latch tick --vault 0x… --as <agent wallet>` |
+| Be the vault's own agent | `latch tick --vault 0x… --as <agent wallet>` |
 
 **Two uses:**
 1. **"Buy OKB on dips for me":** a user's assistant sets up and manages a vault from their Agentic Wallet.
-2. **The Agentic Wallet as a vault's own bot:** gas-free on X Layer. Because the vault and the chip enforce every limit, a tricked or confused agent still can't trade more, more often or at a worse price than the owner allowed, and can't send funds anywhere else.
+2. **The Agentic Wallet as a vault's own agent:** gas-free on X Layer. Because the vault and the chip enforce every limit, a tricked or confused agent still can't trade more, more often or at a worse price than the owner allowed, and can't send funds anywhere else.
 
-**Live on mainnet:** an OKX Agentic Wallet created a Latch vault this way: [`0x367F…10b7`](https://www.oklink.com/x-layer/address/0x367F3EB73E6C5e7883Aa7D1db76Cb29C11E710b7). Also tested end to end on a local chain with Uniswap's real contract code (`agent/test.mjs`, 24 checks). Any other bot can do the same with `vault.preview(bot)` and `vault.tick()`.
+**Live on mainnet:** an OKX Agentic Wallet created a Latch vault this way: [`0x367F…10b7`](https://www.oklink.com/x-layer/address/0x367F3EB73E6C5e7883Aa7D1db76Cb29C11E710b7). Also tested end to end on a local chain with Uniswap's real contract code (`agent/test.mjs`, 22 checks). Any other agent or script can do the same with `vault.preview(agent)` and `vault.tick()`.
 
 ## Revenue model
 
@@ -116,7 +116,7 @@ Browser (web/, viem, OKX Wallet: extension, in-app browser, or OKX Connect from 
    │ createVault / fund / pause / setStrategy / withdraw
    ▼
 LatchFactory2 ──clones──► LatchVault (EIP-1167, one per user; Buy or Take Profit)
-                              │ tick()  ◄── hosted bot (Cloudflare cron every minute, keeper-worker/)
+                              │ tick()  ◄── hosted agent (Cloudflare cron every minute, keeper-worker/)
                               ├─ Uniswap V3 TWAP + live price (UniMath)
                               ├─ TapeOut processor.eval(#2) → allow + size
                               ├─ Solidity money rules
@@ -128,7 +128,7 @@ DeWEB: the same app, as one HTML file, in circuit #2's container (SiteRegistry) 
 |---|---|
 | `circuits/` | `circuit2.py`: rules, NAND builder, exhaustive check on 65,536 inputs, TAP-02 export (`circuit2.json`) |
 | `contracts/` | `LatchVault.sol`, `LatchFactory2.sol`, `UniMath.sol`; classic `LatchSwap.sol` + `LatchFactory.sol` |
-| `keeper-worker/` | Hosted bot (Cloudflare Worker) |
+| `keeper-worker/` | Hosted agent (Cloudflare Worker) |
 | `web/` | Website source (Home, Try it, Create, My vaults, The chip, Activity, Safety); built by `scripts/build-web.mjs` |
 | `audit/` | Test suites and independent reviews |
 | `scripts/` | Fork rehearsals, go-live scripts, the on-chain circuit verifier, DeWEB publishing |
@@ -137,7 +137,7 @@ DeWEB: the same app, as one HTML file, in circuit #2's container (SiteRegistry) 
 
 ```bash
 node audit/v2/vault.test.mjs                       # v2 contracts on Uniswap's real V3 code (needs anvil; npm i in audit/swap)
-cd keeper-worker && npm install && npm test        # hosted bot
+cd keeper-worker && npm install && npm test        # hosted agent
 node web/e2e-setup.mjs                             # then: WEB_CONFIG=<tmp>/latch-ui/web-local.json node scripts/build-web.mjs && node web/e2e.mjs
 node scripts/verify-circuit2.mjs https://rpc.xlayer.tech 0x3728a5dfE596F6bF7309cA911e61ecaC9b0b6813 2   # ask the live chip all 65,536 inputs
 ./scripts/preflight-v2.sh                          # free mainnet-fork rehearsal (reads keeper/.env)
@@ -150,7 +150,7 @@ ONCHAIN=1 node scripts/build-web.mjs && node scripts/check-onchain.mjs   # DeWEB
   - circuit #1 taped out
   - first savings relay; it lost 15 USDT0 to a fee we hadn't tested for, and since then every mainnet step is rehearsed on a mainnet fork first
 - **Mid November:**
-  - rebuilt as classic Latch vaults that buy OKB on Uniswap, with a hosted bot and a self-serve site
+  - rebuilt as classic Latch vaults that buy OKB on Uniswap, with a hosted agent and a self-serve site
   - first real buy
   - two independent reviews
 - **23 November, v2:**
