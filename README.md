@@ -79,6 +79,8 @@ The OKX Plugin Store currently adds plugins only by its own curation, not by out
 npx skills add sollid-web/latch
 ```
 
+The skill then installs the `latch` tool once (`git clone` + `npm link`, see the skill's "Install" section) and signs with the OKX Agentic Wallet (`onchainos`).
+
 **How it works:**
 - The [`latch`](agent/latch.mjs) command-line tool reads Latch on X Layer and **prepares** transactions.
 - The agent's Agentic Wallet signs each one with `onchainos wallet contract-call` inside OKX's TEE, after the user confirms it.

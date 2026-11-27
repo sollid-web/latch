@@ -45,8 +45,23 @@ What a vault's agent can and can't do:
 
 The `latch` tool reads the chain and **prepares** transactions. It never holds, asks for or sees a private key. The user's **OKX Agentic Wallet** signs every transaction with `onchainos wallet contract-call`, inside OKX's TEE, and only after the user confirms it.
 
+## Install the `latch` tool (once)
+
+Installing this skill adds these instructions, not the `latch` command. Check with `latch --help`. If that fails, install it:
+
+```
+git clone https://github.com/sollid-web/latch ~/.latch
+cd ~/.latch/agent && npm install && npm link
+```
+
+- Needs Node.js 18 or newer and git.
+- If `npm link` is refused (permissions), skip it and use `node ~/.latch/agent/latch.mjs` wherever this skill says `latch`.
+- To update later: `cd ~/.latch && git pull && cd agent && npm install`.
+- Signing needs the OKX Agentic Wallet CLI, `onchainos` (OKX's Onchain OS skills). This skill never asks for a private key.
+
 ## Pre-flight Checks
 
+0. `latch --help`. If it fails, do "Install the `latch` tool" above first.
 1. `onchainos wallet status`. If not logged in, follow `onchainos wallet login`.
 2. `onchainos wallet addresses`. Use the **EVM address** for X Layer (chain `196`) as `<wallet>` below.
 3. `latch market`. If it returns an error, X Layer's RPC is unreachable; tell the user and stop.
