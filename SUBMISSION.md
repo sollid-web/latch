@@ -163,7 +163,7 @@ All of it. The repository started on 2026-11-03 and has 129 commits since:
   - **Demo mode:** the whole journey with play money and no wallet, using the live OKB price and the real circuit #2 netlist
   - a wallet picker: browser extensions, WalletConnect QR for any phone wallet, and the OKX Wallet app via OKX's official connect library
   - step-by-step funding help, copy-address buttons, and drafts that survive the phone reloading the page
-  - 54 browser checks
+  - 57 browser checks
   - an on-chain DeWEB copy
 - **AI-agent tool:** the `latch` CLI (published on npm as `latch-xlayer`) and skill for the OKX Agentic Wallet, 25 checks; mainnet vaults created by an Agentic Wallet, including one by GitHub Copilot from the skill alone
 

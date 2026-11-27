@@ -270,6 +270,10 @@ function chipWidget(full) {
   </figure>`;
 }
 
+/** Shown when the connected wallet has no OKB: every X Layer transaction needs a tiny network fee in OKB. */
+function gasNote() {
+  return S.account && S.wallet?.okb === 0n ? `<p class="empty-note" role="status">Your wallet has no OKB on X Layer. Every transaction needs a tiny network fee in OKB (less than $0.01), so your wallet will refuse it. Send a little OKB on X Layer to this wallet first, then reload this page (what you entered is kept).</p>` : '';
+}
 function errBox() { return S.error && !S.dialog ? `<p class="err" role="alert">${esc(S.error)}</p>` : ''; }
 
 /* ================================================================ pages */
@@ -420,7 +424,7 @@ function pageCreate() {
       <div class="row between"><a class="btn quiet" href="#/vaults">Later</a><span class="row gap">${dir === 1 ? `<button class="btn quiet" data-a="cwrap" ${S.busy ? 'disabled' : ''}>Wrap OKB → WOKB</button>` : ''}<button class="btn primary" data-a="cdeposit" ${S.busy ? 'disabled' : ''}>${S.busy ? esc(S.busy) + '…' : 'Add ' + fundTok}</button></span></div>`;
   }
   return `<section class="wrap block narrow"><h1 class="pg">${c.step === 0 ? 'Create a vault' : dir === 0 ? 'Buy OKB automatically' : 'Take profit automatically'}</h1>
-    ${bar}${errBox()}${body}</section>`;
+    ${bar}${errBox()}${c.step >= 3 ? gasNote() : ''}${body}</section>`;
 }
 
 /* ---------- My vaults ---------- */
@@ -851,7 +855,7 @@ function dialogView() {
     <div class="row between"><h2 id="dg-t">${esc(g.title)}</h2><button type="button" class="x" data-a="closeDialog" aria-label="Close">×</button></div>
     ${g.text ? `<p class="dlg-text">${g.text}</p>` : ''}<div class="form">${fields}</div>
     ${S.error ? `<p class="err" role="alert">${esc(S.error)}</p>` : ''}
-    ${g.kind === 'add' ? fundSteps(g.d) : ''}
+    ${g.kind === 'add' ? gasNote() + fundSteps(g.d) : ''}
     <div class="row end gap"><button type="button" class="btn quiet" data-a="closeDialog">Cancel</button><button type="submit" class="btn ${g.danger ? 'danger' : 'primary'}" ${S.busy ? 'disabled' : ''}>${S.busy ? esc(S.busy) + '…' : esc(g.ok)}</button></div>
   </form></div>`;
 }
