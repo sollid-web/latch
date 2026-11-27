@@ -407,6 +407,11 @@ function pageCreate() {
     const w = S.wallet || {};
     const fundTok = dir === 0 ? 'USDT0' : 'WOKB';
     const have = dir === 0 ? w.usdt : w.wokb;
+    // suggest no more than the wallet holds (until the person types their own amount)
+    if (have != null && have > 0n && !c.depositTouched) {
+      let want; try { want = parseUnits(c.deposit || '0', dir === 0 ? 6 : 18); } catch { want = 0n; }
+      if (want > have) c.deposit = dir === 0 ? (Math.floor(Number(formatUnits(have, 6)) * 100) / 100).toString() : (Math.floor(Number(formatUnits(have, 18)) * 1e4) / 1e4).toString();
+    }
     body = `<p class="summary">Your vault is live: ${link(c.created)}. Add ${fundTok} for it to ${dir === 0 ? 'spend' : 'sell'}.</p>
       <div class="form"><label>Amount to add (${fundTok})<input id="c-deposit" data-c="deposit" type="number" min="0" step="any" inputmode="decimal" value="${esc(c.deposit)}">
         <small>Your wallet holds ${have != null ? (dir === 0 ? usd(have) : okb(have, 4)) : '…'} ${fundTok}${dir === 1 && w.okb != null ? ` and ${okb(w.okb, 4)} OKB` : ''}.</small></label></div>
@@ -968,6 +973,10 @@ async function runDialog() {
   try {
     if (g.kind === 'add') {
       g.fields[0].value = dlg('amt') || '0'; // keep what was typed through re-renders
+      const wokb = d.version === 2 && d.dir === 1; const want = parseUnits(g.fields[0].value, wokb ? 18 : 6);
+      const held = wokb ? S.wallet?.wokb : S.wallet?.usdt;
+      if (want <= 0n) { S.error = 'Enter an amount above 0.'; return render(); }
+      if (held != null && want > held) { S.error = `Your wallet holds ${wokb ? okb(held, 4) + ' WOKB' : usd(held) + ' USDT0'}, less than the ${g.fields[0].value} you entered. Lower the amount${wokb ? ' or wrap more OKB first' : ''}.`; return render(); }
       r = await addFunds(d.address, d.version === 2 ? d.tokenIn : C.usdt, parseUnits(g.fields[0].value, d.version === 2 && d.dir === 1 ? 18 : 6), { normalFee: !!g.retry });
       if (!r && S.sendErr && !declined(S.sendErr)) { // e.g. the wallet's free-gas service answered "network error"
         if (!g.retry) { g.retry = true; g.ok = 'Try again with a normal fee'; S.error = 'Your wallet could not send it. Try again with a normal network fee (a fraction of a cent in OKB), or send from your wallet app with the vault address below.'; }
@@ -1098,6 +1107,8 @@ async function act(a, el) {
       const dec = c.dir === 0 ? 6 : 18;
       let amount; try { amount = parseUnits(c.deposit || '0', dec); } catch { amount = 0n; }
       if (amount <= 0n) { S.error = 'Enter an amount above 0.'; return render(); }
+      const held = c.dir === 0 ? S.wallet?.usdt : S.wallet?.wokb;
+      if (held != null && amount > held) { S.error = `Your wallet holds ${c.dir === 0 ? usd(held) + ' USDT0' : okb(held, 4) + ' WOKB'}, less than the ${c.deposit} you entered. Lower the amount${c.dir === 1 ? ' or wrap more OKB first' : ''}.`; return render(); }
       const r = await addFunds(c.created, c.dir === 0 ? C.usdt : C.wokb, amount);
       if (r) { S.c = null; location.hash = '#/vaults'; await refresh(); }
       return;
@@ -1108,7 +1119,7 @@ async function act(a, el) {
       const tok = two ? (d.dir === 0 ? 'USDT0' : 'WOKB') : 'USDT0';
       const bal = two && d.dir === 1 ? S.wallet?.wokb : S.wallet?.usdt;
       return openDialog({ kind: 'add', d, title: 'Add ' + tok, ok: 'Add ' + tok,
-        fields: [{ id: 'amt', label: `Amount (${tok})`, value: two && d.dir === 1 ? '0.05' : '5', hint: bal != null ? `Your wallet holds ${two && d.dir === 1 ? okb(bal, 4) : usd(bal)} ${tok}.` : '' }] });
+        fields: [{ id: 'amt', label: `Amount (${tok})`, value: (() => { const dflt = two && d.dir === 1 ? 0.05 : 5; if (bal == null || bal <= 0n) return String(dflt); const h = two && d.dir === 1 ? Math.floor(Number(formatUnits(bal, 18)) * 1e4) / 1e4 : Math.floor(Number(formatUnits(bal, 6)) * 100) / 100; return String(Math.min(dflt, h)); })(), hint: bal != null ? `Your wallet holds ${two && d.dir === 1 ? okb(bal, 4) : usd(bal)} ${tok}.` : '' }] });
     }
     case 'vpause': case 'vresume': {
       const r = await send(a === 'vpause' ? 'Pausing' : 'Resuming', { address: v, abi: d.version === 2 ? VAULT2 : VAULT1, functionName: 'setPaused', args: [a === 'vpause'] });
@@ -1154,6 +1165,7 @@ document.addEventListener('input', (e) => {
   if (el.dataset?.c && S.c) {
     S.c[el.dataset.c] = el.type === 'checkbox' ? el.checked : el.value.trim();
     if (el.dataset.c === 'perTx' || el.dataset.c === 'daily') S.c.limitsTouched = true;
+    if (el.dataset.c === 'deposit') S.c.depositTouched = true;
     saveDraft();
   }
 });

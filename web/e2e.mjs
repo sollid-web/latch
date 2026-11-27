@@ -109,6 +109,8 @@ ok('review sentence in plain English', /Latch buys 2 USDT0 of OKB at most once a
 await page.screenshot({ path: shots + '/4-create-review.png', fullPage: true });
 await page.click('[data-a=ccreate]'); await page.waitForTimeout(2500);
 ok('vault created → Add funds step', /Your vault is live/.test(await txt()), (await txt()).slice(0, 300));
+await page.fill('#c-deposit', '99999999'); await page.click('[data-a=cdeposit]'); await page.waitForTimeout(800);
+ok('Add funds: more than the wallet holds is refused plainly, before the wallet opens', /Your wallet holds [\d.,]+ USDT0, less than the 99999999 you entered/.test(await txt()) && (await page.evaluate(() => location.hash)) !== '#/vaults' && /Your vault is live/.test(await txt()), (await txt()).slice(0, 400));
 await page.fill('#c-deposit', '20'); await page.click('[data-a=cdeposit]'); await page.waitForFunction(() => location.hash === '#/vaults', null, { timeout: 20000 }).catch(() => {}); await page.waitForTimeout(2500);
 ok('after funding: on My vaults with the Buy vault', /My vaults/.test(await txt()) && /Buy OKB · Smart/.test(await txt()), (await txt()).slice(0, 300));
 ok('My vaults: chip decision shows buy 3×', /buy 3×/.test(await txt()), (await txt()).match(/Decision[^\n]*\n[^\n]*/)?.[0]);
