@@ -3,9 +3,41 @@
   "version": "0.1.0",
   "description": "Latch on X Layer for AI agents: buy OKB on dips / take profit on rises from a vault the owner controls; a TapeOut chip sizes every trade. Prepares transactions for the OKX Agentic Wallet (onchainos wallet contract-call); never handles keys.",
   "type": "module",
-  "bin": { "latch": "latch.mjs" },
-  "main": "latch.mjs",
+  "bin": {
+    "latch": "latch.mjs"
+  },
   "license": "GPL-2.0-or-later",
-  "repository": "github:sollid-web/latch",
-  "dependencies": { "viem": "^2.21.0" }
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sollid-web/latch.git",
+    "directory": "agent"
+  },
+  "dependencies": {
+    "viem": "^2.21.0"
+  },
+  "files": [
+    "latch.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "xlayer",
+    "okb",
+    "tapeout",
+    "okx",
+    "agentic-wallet",
+    "onchainos",
+    "dca",
+    "take-profit",
+    "ai-agent"
+  ],
+  "homepage": "https://okblatch.xyz/#/agents",
+  "bugs": {
+    "url": "https://github.com/sollid-web/latch/issues"
+  },
+  "author": "sollid-web",
+  "main": "latch.mjs"
 }

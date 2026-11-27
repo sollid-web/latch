@@ -47,16 +47,15 @@ The `latch` tool reads the chain and **prepares** transactions. It never holds, 
 
 ## Install the `latch` tool (once)
 
-Installing this skill adds these instructions, not the `latch` command. Check with `latch --help`. If that fails, install it:
+Installing this skill adds these instructions, not the `latch` command. Check with `latch --help`. If that fails, install it from npm:
 
 ```
-git clone https://github.com/sollid-web/latch ~/.latch
-cd ~/.latch/agent && npm install && npm link
+npm install -g latch-xlayer
 ```
 
-- Needs Node.js 18 or newer and git.
-- If `npm link` is refused (permissions), skip it and use `node ~/.latch/agent/latch.mjs` wherever this skill says `latch`.
-- To update later: `cd ~/.latch && git pull && cd agent && npm install`.
+- Or run it without installing: `npx -y latch-xlayer <command>` wherever this skill says `latch <command>`.
+- Needs Node.js 18 or newer.
+- If npm is unavailable, install from source: `git clone https://github.com/sollid-web/latch ~/.latch && cd ~/.latch/agent && npm install && npm link` (or use `node ~/.latch/agent/latch.mjs`).
 - Signing needs the OKX Agentic Wallet CLI, `onchainos` (OKX's Onchain OS skills). This skill never asks for a private key.
 
 ## Pre-flight Checks
