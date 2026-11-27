@@ -124,7 +124,8 @@ All of it. The repository started on 2026-11-03 and has 78+ commits since:
   - serves every vault fairly
   - refuses to trade when Uniswap disagrees with the exchanges
   - simulates before sending
-  - 29 tests
+  - records every Latch trade for the full history (`/trades`)
+  - 34 tests
 - **Website:**
   - six pages: Home, Create, My vaults, The chip, Activity, Safety
   - phone connection through OKX's official connect library
