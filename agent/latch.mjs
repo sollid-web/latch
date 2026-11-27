@@ -9,7 +9,7 @@
 //   latch vaults --owner 0x…                       an owner's vaults
 //   latch status --vault 0x…                       one vault: settings, balance, what the chip sees, next action
 //   latch create --dir buy --mode smart --savings 0x… --base 2 --ref 95 --limit 100 [--per-trade 6 --daily 6 --every day --keeper 0x…]
-//   latch fund --vault 0x… --amount 10             add USDT0 (Buy vault) or WOKB (Take Profit vault)
+//   latch fund --vault 0x… --amount 10 [--from 0x…] add USDT0 (Buy vault) or WOKB (Take Profit vault); checks the payer's balance first
 //   latch wrap --amount 0.1                        OKB → WOKB (Take Profit vaults hold WOKB)
 //   latch pause|resume --vault 0x…
 //   latch strategy --vault 0x… [--mode --base --ref --limit --every]
@@ -217,6 +217,15 @@ async function run() {
     case 'fund': {
       const v = addr('vault', 'vault address'); const r = await vaultInfo(v); const dec = r.dir === 0 ? 6 : 18;
       const amount = parseUnits(need('amount', (x) => Number(x) > 0, 'amount'), dec);
+      // check the paying wallet first (default: the vault's owner), so the agent gets a plain answer, not a revert
+      const from = opt.from ? addr('from', 'paying wallet') : r.owner;
+      const have = await read(r.tokenIn, ERC20, 'balanceOf', [from]);
+      if (have < amount) {
+        const okb = r.dir === 1 ? await pub.getBalance({ address: from }) : 0n;
+        throw new UserError(`The wallet ${from} has ${amtOf(have, r.dir)} on X Layer, less than the ${amtOf(amount, r.dir)} to add. `
+          + (r.dir === 0 ? 'Send USDT0 (X Layer network; some wallets call it USDT) to that wallet first, then try again.'
+            : okb >= amount ? 'It has enough OKB: run `latch wrap --amount ' + formatUnits(amount, 18) + '` first (Take Profit vaults hold WOKB).' : 'Send OKB (X Layer) to that wallet, then `latch wrap`, then try again.'));
+      }
       return out({ transactions: [tx(`Add ${amtOf(amount, r.dir)} to the vault`, r.tokenIn, encodeFunctionData({ abi: ERC20, functionName: 'transfer', args: [v, amount] }))],
         note: r.dir === 1 ? 'Take Profit vaults hold WOKB. If the wallet has only OKB, run `latch wrap` first.' : undefined });
     }

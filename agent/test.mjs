@@ -52,6 +52,8 @@ ok('create: Agentic Wallet signs it', await sign(r.transactions[0]), r);
 r = latch('vaults', '--owner', AGENT);
 const v1 = r.vaults?.[0]?.vault;
 ok('vaults: the new vault, owned by the agent wallet', v1 && r.vaults[0].job === 'Buy OKB' && /Smart/.test(r.vaults[0].strategy) && r.vaults[0].mostPerTrade === '6 USDT0', r);
+r = latch('fund', '--vault', v1, '--amount', '10', '--from', '0x000000000000000000000000000000000000dEaD');
+ok('fund: a wallet without enough USDT0 gets a plain answer before signing (not a revert)', /has 0 USDT0 on X Layer, less than the 10 USDT0/.test(r.error || '') && /Send USDT0/.test(r.error || ''), r);
 r = latch('fund', '--vault', v1, '--amount', '10');
 ok('fund: signs a 10 USDT0 transfer', await sign(r.transactions[0]), r);
 r = latch('status', '--vault', v1);
