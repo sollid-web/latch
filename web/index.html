@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="glass">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -253,10 +253,424 @@ table.grid{border-collapse:collapse;font-size:.86rem;min-width:640px;width:100%}
   .hdr-in .acct{white-space:nowrap;font-size:.78rem;padding:0 9px}.hdr-in .btn.sm{padding:0 10px}
 }
 </style>
+<style>
+/* Glass + motion layer. Presentation only: everything is scoped to html.glass; remove that class for the original look. */
+:root{--glass-rest:inset 0 1px 0 rgba(233,241,236,.07), 0 18px 50px -30px rgba(0,0,0,.85);--glass-hover:inset 0 1px 0 rgba(233,241,236,.09), 0 0 0 3px rgba(227,176,75,.1), 0 22px 44px -24px rgba(227,176,75,.38);--chip-lift:0 30px 80px -40px rgba(0,0,0,.8);--gold-rest:inset 0 1px 0 rgba(233,241,236,.4), 0 8px 22px -12px rgba(227,176,75,.6);--gold-hover:inset 0 1px 0 rgba(233,241,236,.5), 0 0 0 3px rgba(227,176,75,.18), 0 14px 30px -12px rgba(227,176,75,.7);--blur-bar:18px;--blur-card:14px;--blur-sheet:24px;--blur-scrim:6px;--dur-fast:140ms;--dur-base:240ms;--dur-slow:520ms;--dur-enter:640ms;--dur-ambient:48s;--ease-out:cubic-bezier(.22,1,.36,1);--ease-spring:cubic-bezier(.34,1.56,.64,1);--ease-glide:cubic-bezier(.45,0,.55,1);}
+/* ── Part 2 · The glass + motion layer ─────────────────────────────────────────────
+   Everything below is scoped to html.glass: remove that one class and the app is exactly today.
+   Colour rule: every colour is an existing Latch token or literal, sometimes at an alpha. No new hues.
+   Motion rule: transform / opacity / filter only; nothing that changes layout. */
+
+/* ambient light: lives on body pseudo-elements, which sit outside #app and so never re-render */
+html.glass body{background:none}
+html.glass body::before{content:"";position:fixed;inset:-25vmax;z-index:-2;pointer-events:none;
+  background:
+    radial-gradient(38vmax 30vmax at 22% 18%,rgba(227,176,75,.09),transparent 62%),
+    radial-gradient(34vmax 26vmax at 82% 34%,rgba(121,224,190,.07),transparent 62%),
+    radial-gradient(52vmax 40vmax at 50% 105%,rgba(47,82,73,.42),transparent 64%);
+  animation:lg-drift var(--dur-ambient) var(--ease-glide) infinite alternate;will-change:transform}
+html.glass body::after{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background:
+    linear-gradient(transparent 31px,rgba(121,224,190,.035) 32px) 0 0/32px 32px,
+    linear-gradient(90deg,transparent 31px,rgba(121,224,190,.035) 32px) 0 0/32px 32px;
+  -webkit-mask:radial-gradient(120% 80% at 50% 0%,#000 40%,rgba(0,0,0,.35));mask:radial-gradient(120% 80% at 50% 0%,#000 40%,rgba(0,0,0,.35))}
+@keyframes lg-drift{0%{transform:translate3d(0,0,0) scale(1)}50%{transform:translate3d(3vmax,-2vmax,0) scale(1.06)}100%{transform:translate3d(-2vmax,2vmax,0) scale(1.02)}}
+html.glass ::selection{background:rgba(227,176,75,.32);color:var(--paper)}
+html.glass{scrollbar-color:var(--line-2) transparent}
+
+/* ── glass recipe: translucent tint of mask/mask-2, frosted backdrop, a 1px specular rim ── */
+html.glass :is(.chipw,.vault,.sheet,.feed,.flow,.job,.sees,.howto,.empty,.demo-dec){
+  position:relative;isolation:isolate;
+  background:
+    radial-gradient(420px circle at var(--mx,-999px) var(--my,-999px),rgba(227,176,75,.075),transparent 60%),
+    linear-gradient(180deg,rgba(23,44,38,.64),rgba(17,33,29,.5));
+  -webkit-backdrop-filter:blur(var(--blur-card));backdrop-filter:blur(var(--blur-card));
+  border-color:rgba(47,82,73,.62);
+  box-shadow:var(--glass-rest)}
+html.glass :is(.chipw,.vault,.sheet,.job,.sees,.demo-dec)::before{content:"";position:absolute;inset:0;border-radius:inherit;padding:1px;pointer-events:none;z-index:1;
+  background:linear-gradient(160deg,rgba(233,241,236,.2),rgba(233,241,236,.03) 32%,transparent 58%,rgba(227,176,75,.16));
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask-composite:exclude}
+html.glass .chipw{box-shadow:var(--glass-rest),var(--chip-lift)}
+
+/* ── header: deeper frost, a hairline of light under it ── */
+html.glass .hdr{background:linear-gradient(180deg,rgba(12,23,20,.8),rgba(12,23,20,.6));
+  -webkit-backdrop-filter:blur(var(--blur-bar));backdrop-filter:blur(var(--blur-bar));
+  border-bottom-color:rgba(35,64,58,.7);box-shadow:inset 0 -1px 0 rgba(233,241,236,.04),0 12px 32px -24px rgba(0,0,0,.9)}
+html.glass .mark svg{transition:transform var(--dur-base) var(--ease-spring),filter var(--dur-base)}
+html.glass .mark:hover svg{transform:rotate(-8deg) scale(1.08);filter:drop-shadow(0 0 6px rgba(227,176,75,.55))}
+html.glass .nav a{position:relative;transition:color var(--dur-fast)}
+html.glass .nav a::after{content:"";position:absolute;left:0;right:0;bottom:-4px;height:2px;border-radius:2px;background:var(--gold);transform:scaleX(0);transform-origin:left;opacity:.6;transition:transform var(--dur-base) var(--ease-out)}
+html.glass .nav a:hover:not(.on)::after{transform:scaleX(1)}
+html.glass .nav a.on{box-shadow:none}
+html.glass .nav a.on::after{transform:none;opacity:1;bottom:0;box-shadow:0 0 10px rgba(227,176,75,.6)}
+html.glass .nav a.on.lg-slide::after{animation:lg-slide-x var(--dur-slow) var(--ease-spring) both;transform-origin:left}
+
+/* ── buttons: liquid gold, glass quiet, light sweep on hover, springy press ── */
+html.glass .btn{position:relative;overflow:hidden;isolation:isolate;
+  transition:background-color var(--dur-fast),border-color var(--dur-fast),color var(--dur-fast),transform var(--dur-base) var(--ease-spring),box-shadow var(--dur-base) var(--ease-out)}
+html.glass .btn::after{content:"";position:absolute;inset:-1px;z-index:-1;pointer-events:none;
+  background:linear-gradient(105deg,transparent 32%,rgba(233,241,236,.26) 48%,transparent 64%);
+  transform:translateX(-130%);transition:transform var(--dur-slow) var(--ease-out)}
+html.glass .btn:hover::after{transform:translateX(130%)}
+html.glass .btn:hover{transform:translateY(-1px)}
+html.glass .btn:active{transform:translateY(0) scale(.97);transition-duration:var(--dur-fast)}
+html.glass .btn.primary{background:linear-gradient(180deg,var(--gold-hi) -30%,var(--gold) 70%);box-shadow:var(--gold-rest)}
+html.glass .btn.primary:hover{background:linear-gradient(180deg,var(--gold-hi) 0%,var(--gold-hi) 40%,var(--gold) 120%);box-shadow:var(--gold-hover)}
+html.glass .btn.quiet{background:rgba(23,44,38,.42);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);border-color:rgba(47,82,73,.95);box-shadow:inset 0 1px 0 rgba(233,241,236,.07)}
+html.glass .btn.quiet:hover{border-color:var(--gold);box-shadow:inset 0 1px 0 rgba(233,241,236,.09),0 0 0 3px rgba(227,176,75,.12),0 10px 24px -14px rgba(227,176,75,.45)}
+html.glass .btn.danger{box-shadow:inset 0 1px 0 rgba(233,241,236,.35),0 8px 22px -12px rgba(255,138,112,.6)}
+html.glass .btn[disabled]{transform:none;box-shadow:none}html.glass .btn[disabled]::after{display:none}
+
+/* ── segmented control: sunken glass track, a lit pill that slides (FLIP via the conductor) ── */
+html.glass .seg{background:rgba(10,20,17,.62);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);box-shadow:inset 0 1px 3px rgba(0,0,0,.45),inset 0 -1px 0 rgba(233,241,236,.03)}
+html.glass .seg button{position:relative;isolation:isolate;transition:color var(--dur-fast)}
+html.glass .seg button.on{background:none;box-shadow:none}
+html.glass .seg button.on::before{content:"";position:absolute;inset:0;z-index:-1;border-radius:4px;transform-origin:left;
+  background:linear-gradient(180deg,rgba(47,82,73,.55),var(--mask-2) 70%);
+  box-shadow:inset 0 0 0 1px var(--gold),inset 0 1px 0 rgba(242,200,109,.28),0 6px 16px -8px rgba(227,176,75,.5)}
+html.glass .seg button.on.lg-slide::before{animation:lg-slide var(--dur-slow) var(--ease-spring) both}
+@keyframes lg-slide{from{transform:translateX(var(--fx,0)) scaleX(var(--fw,1))}to{transform:none}}
+@keyframes lg-slide-x{from{transform:translateX(var(--fx,0)) scaleX(var(--fw,1))}to{transform:none}}
+html.glass .seg button:active{transform:scale(.96);transition:transform var(--dur-fast)}
+
+/* ── the chip: a lit die, gates that ignite only when they actually flip ── */
+html.glass .die{background:radial-gradient(120% 90% at 50% 0%,rgba(227,176,75,.07),transparent 60%),#0a1411;
+  box-shadow:inset 0 0 0 4px #0a1411,inset 0 0 0 5px rgba(227,176,75,.3),0 0 0 1px rgba(227,176,75,.06),0 20px 44px -26px rgba(227,176,75,.4)}
+html.glass .gates span{box-shadow:inset 0 1px 0 rgba(233,241,236,.05);transition:none}
+html.glass .gates span.hi{background:linear-gradient(180deg,var(--gold-hi),var(--gold));box-shadow:0 0 6px rgba(227,176,75,.55),inset 0 1px 0 rgba(233,241,236,.45)}
+html.glass .gates span.lg-flip{animation:lg-ignite var(--dur-slow) var(--ease-spring) both;animation-delay:calc(var(--i,0) * 7ms)}
+html.glass .gates span.lg-flip:not(.hi){animation-name:lg-douse}
+@keyframes lg-ignite{0%{transform:scale(.35);box-shadow:0 0 0 rgba(227,176,75,0)}55%{transform:scale(1.25);box-shadow:0 0 14px rgba(242,200,109,.9)}100%{transform:none}}
+@keyframes lg-douse{0%{transform:scale(1.15);opacity:.4}100%{transform:none;opacity:1}}
+html.glass .lg-tick{animation:lg-tick var(--dur-base) var(--ease-out) both}
+@keyframes lg-tick{from{opacity:.15;transform:translateY(7px);filter:blur(3px)}}
+html.glass .allow .verdict-word{text-shadow:0 0 24px rgba(121,224,190,.35)}html.glass .deny .verdict-word{text-shadow:0 0 24px rgba(255,138,112,.3)}
+html.glass input[type=range]{transition:filter var(--dur-base)}html.glass input[type=range]:hover{filter:drop-shadow(0 0 6px rgba(227,176,75,.45))}
+html.glass .pin{transition:border-color var(--dur-fast),transform var(--dur-base) var(--ease-spring),box-shadow var(--dur-base)}
+html.glass .pin:hover{transform:translateY(-1px)}html.glass .pin:active{transform:scale(.96)}
+html.glass .pin.ok{box-shadow:inset 0 1px 0 rgba(233,241,236,.05)}html.glass .pin.bad{box-shadow:0 0 0 3px rgba(255,138,112,.08)}
+
+/* ── vault card: status that breathes, a meter of liquid gold ── */
+html.glass .vault-icon{background:rgba(10,20,17,.5);box-shadow:inset 0 1px 0 rgba(233,241,236,.06),0 0 18px -6px rgba(227,176,75,.35)}
+html.glass .status{display:inline-flex;align-items:center;gap:7px;background:rgba(12,23,20,.5);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+html.glass .status.live::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--pass);animation:lg-breathe 2.4s var(--ease-glide) infinite}
+@keyframes lg-breathe{0%{box-shadow:0 0 0 0 rgba(121,224,190,.55)}70%,100%{box-shadow:0 0 0 7px rgba(121,224,190,0)}}
+html.glass .meter{background:#1e342e;box-shadow:inset 0 1px 2px rgba(0,0,0,.5)}
+html.glass .meter span{background:linear-gradient(90deg,var(--gold),var(--gold-hi));box-shadow:0 0 10px rgba(227,176,75,.5);transform-origin:left}
+
+/* ── interactive cards: lift, gold rim, a cursor spotlight (vars set by the conductor) ── */
+html.glass :is(.job,.choice,.mode,.wopt){transition:transform var(--dur-base) var(--ease-spring),border-color var(--dur-fast),box-shadow var(--dur-base) var(--ease-out)}
+html.glass :is(.choice,.mode,.wopt){background:radial-gradient(300px circle at var(--mx,-999px) var(--my,-999px),rgba(227,176,75,.08),transparent 60%),rgba(14,28,24,.7);box-shadow:inset 0 1px 0 rgba(233,241,236,.05)}
+html.glass :is(.job,.choice,.mode,.wopt):hover:not(:disabled){transform:translateY(-2px);box-shadow:var(--glass-hover)}
+html.glass :is(.job,.choice,.mode,.wopt):active:not(:disabled){transform:translateY(0) scale(.985)}
+html.glass :is(.choice,.mode).sel{background:radial-gradient(300px circle at var(--mx,-999px) var(--my,-999px),rgba(227,176,75,.1),transparent 60%),#14261f;box-shadow:0 0 0 1px var(--gold) inset,0 12px 30px -16px rgba(227,176,75,.5)}
+html.glass .job.sel{box-shadow:0 0 0 1px var(--gold) inset,var(--glass-hover)}
+html.glass :is(.job-icon,.choice svg){transition:transform var(--dur-base) var(--ease-spring)}
+html.glass :is(.job,.choice):hover :is(.job-icon,svg){transform:translateY(-2px) scale(1.06)}
+
+/* ── lists: feed rows and flow steps become one glass sheet with lit hover rows ── */
+html.glass .feed li{background:transparent;transition:background-color var(--dur-fast)}
+html.glass .feed li:hover{background:rgba(23,44,38,.6)}
+html.glass .feed li+li,html.glass .flow li+li{border-color:rgba(35,64,58,.7)}
+html.glass .flow li{background:transparent}html.glass .flow li:nth-child(3){background:rgba(23,44,38,.55)}
+html.glass .flow li::before{box-shadow:0 0 12px -2px rgba(227,176,75,.45),inset 0 0 6px rgba(227,176,75,.15)}
+html.glass .tag{background:rgba(12,23,20,.4)}
+html.glass .steps li{transition:background-color var(--dur-base),color var(--dur-base)}
+html.glass .steps li.on{background:linear-gradient(180deg,var(--gold-hi),var(--gold));box-shadow:0 6px 16px -8px rgba(227,176,75,.6)}
+
+/* ── forms: sunken wells, a soft gold halo on focus ── */
+html.glass :is(input,select){background:rgba(10,20,17,.72);box-shadow:inset 0 1px 2px rgba(0,0,0,.4);transition:box-shadow var(--dur-base) var(--ease-out),border-color var(--dur-fast)}
+html.glass :is(input,select):hover{border-color:rgba(227,176,75,.45)}
+html.glass :is(input,select):focus{box-shadow:inset 0 1px 2px rgba(0,0,0,.4),0 0 0 4px rgba(227,176,75,.16)}
+html.glass input[type=range]{background:none;box-shadow:none}
+
+/* ── banners ── */
+html.glass :is(.note,.demo-banner){-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);box-shadow:inset 0 1px 0 rgba(242,200,109,.12)}
+html.glass .err{box-shadow:inset 0 1px 0 rgba(255,138,112,.12)}
+
+/* ── chat bubbles ── */
+html.glass .chat .you{background:linear-gradient(180deg,var(--gold-hi) -40%,var(--gold) 70%);box-shadow:0 8px 20px -12px rgba(227,176,75,.6)}
+html.glass .chat .ai{background:rgba(23,44,38,.6);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+
+/* ── overlays: frosted scrim, a sheet that springs in, and glides out as a ghost ── */
+html.glass .modal{background:rgba(4,10,8,.58);-webkit-backdrop-filter:blur(var(--blur-scrim));backdrop-filter:blur(var(--blur-scrim))}
+html.glass .sheet{-webkit-backdrop-filter:blur(var(--blur-sheet));backdrop-filter:blur(var(--blur-sheet));
+  background:linear-gradient(180deg,rgba(23,44,38,.82),rgba(17,33,29,.78));box-shadow:var(--glass-rest),0 40px 100px -40px #000}
+html.glass .modal.lg-sheet-in{animation:lg-fade var(--dur-base) var(--ease-out) both}
+html.glass .modal.lg-sheet-in .sheet{animation:lg-sheet var(--dur-slow) var(--ease-spring) both}
+html.glass .lg-ghost{pointer-events:none!important;animation:lg-fade var(--dur-base) var(--ease-out) reverse both}
+html.glass .lg-ghost .sheet{animation:lg-sheet var(--dur-base) var(--ease-out) reverse both}
+@keyframes lg-fade{from{opacity:0}}
+@keyframes lg-sheet{from{opacity:0;transform:translateY(22px) scale(.965);filter:blur(6px)}}
+html.glass .x{transition:transform var(--dur-base) var(--ease-spring),color var(--dur-fast)}html.glass .x:hover{transform:rotate(90deg)}
+
+/* ── entrances: only on first load and route change (class added by the conductor), never on re-render ── */
+html.glass .lg-in{animation:lg-rise var(--dur-enter) var(--ease-out) both;animation-delay:calc(var(--i,0) * 70ms)}
+@keyframes lg-rise{from{opacity:0;transform:translateY(16px);filter:blur(6px)}}
+html.glass .lg-item{animation:lg-rise-s var(--dur-enter) var(--ease-out) both;animation-delay:calc(120ms + var(--j,0) * 55ms)}
+@keyframes lg-rise-s{from{opacity:0;transform:translateY(10px)}}
+html.glass :is(.lg-in,.lg-item) .meter span{animation:lg-grow var(--dur-enter) var(--ease-out) both;animation-delay:calc(var(--i,0) * 70ms + 200ms)}
+@keyframes lg-grow{from{transform:scaleX(0)}}
+html.glass .lg-in .gates span.hi{animation:lg-ignite var(--dur-slow) var(--ease-spring) both;animation-delay:calc(200ms + var(--g,0) * 5ms)}
+html.glass .lg-in .curve i{animation:lg-rise-bar var(--dur-enter) var(--ease-spring) both;transform-origin:bottom}
+@keyframes lg-rise-bar{from{transform:scaleY(0)}}
+
+/* ── budgets: phones get less frost; reduced motion gets none of the motion ── */
+@media (hover:none),(max-width:680px){
+  html.glass :is(.chipw,.vault,.feed,.flow,.job,.sees,.howto,.empty,.demo-dec,.btn.quiet,.seg,.status,.note,.demo-banner,.chat .ai){-webkit-backdrop-filter:none;backdrop-filter:none}
+  html.glass body::before{animation-duration:calc(var(--dur-ambient) * 1.6)}
+}
+@media (prefers-reduced-motion:reduce){
+  html.glass *,html.glass *::before,html.glass *::after{animation:none!important;transition-duration:1ms!important}
+  html.glass .btn:hover,html.glass :is(.job,.choice,.mode,.wopt):hover{transform:none}
+}
+/* ── Part 2b · Translucent+ : clearer glass, brighter light, crisper edges ─────────────────────
+   Same rules as Part 2: only Latch's own colours (gold, gold-hi, pass, paper, mask, mask-2, line-2,
+   substrate, well) at an alpha. Overrides Part 2 by coming later in the cascade. */
+
+/* crisp type and edges on high-density screens */
+html.glass body{text-rendering:optimizeLegibility;-moz-osx-font-smoothing:grayscale;font-kerning:normal}
+html.glass svg{shape-rendering:geometricPrecision}
+
+/* light behind the glass: bigger, brighter pools of the brand's own gold and mint */
+html.glass body::before{
+  background:
+    radial-gradient(24vmax 20vmax at 63% 40%,rgba(227,176,75,.3),transparent 66%),
+    radial-gradient(14vmax 11vmax at 69% 30%,rgba(242,200,109,.16),transparent 64%),
+    radial-gradient(20vmax 17vmax at 70% 66%,rgba(121,224,190,.2),transparent 66%),
+    radial-gradient(18vmax 15vmax at 25% 29%,rgba(121,224,190,.1),transparent 64%),
+    radial-gradient(22vmax 18vmax at 28% 70%,rgba(227,176,75,.13),transparent 66%),
+    radial-gradient(50vmax 30vmax at 50% 92%,rgba(47,82,73,.55),transparent 68%)}
+
+/* glass panels: clearer tint, deeper frost, a lit top sheen, a paper hairline edge */
+html.glass :is(.chipw,.vault,.sheet,.feed,.flow,.job,.sees,.howto,.empty,.demo-dec){
+  background:
+    radial-gradient(480px circle at var(--mx,-999px) var(--my,-999px),rgba(242,200,109,.11),transparent 60%),
+    linear-gradient(180deg,rgba(233,241,236,.065),rgba(233,241,236,0) 34%),
+    linear-gradient(180deg,rgba(23,44,38,.42),rgba(17,33,29,.26));
+  -webkit-backdrop-filter:blur(var(--blur-card-plus,28px));backdrop-filter:blur(var(--blur-card-plus,28px));
+  border-color:rgba(233,241,236,.1);
+  box-shadow:inset 0 1px 0 rgba(233,241,236,.16),inset 0 -1px 0 rgba(0,0,0,.28),inset 0 0 0 1px rgba(233,241,236,.025),
+    0 34px 80px -34px rgba(0,0,0,.75),0 0 70px -34px rgba(227,176,75,.22)}
+html.glass :is(.chipw,.vault,.sheet,.job,.sees,.demo-dec)::before{
+  background:linear-gradient(155deg,rgba(233,241,236,.5),rgba(233,241,236,.08) 26%,transparent 52%,rgba(227,176,75,.12) 82%,rgba(242,200,109,.42))}
+/* a whisper of frosted grain, luminance only */
+html.glass :is(.chipw,.vault,.sheet,.feed,.flow,.job)::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:-1;opacity:.07;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+html.glass .chipw{box-shadow:inset 0 1px 0 rgba(233,241,236,.18),inset 0 -1px 0 rgba(0,0,0,.3),0 40px 100px -40px rgba(0,0,0,.85),0 0 90px -30px rgba(227,176,75,.3)}
+
+/* header: near-clear frost */
+html.glass .hdr{background:linear-gradient(180deg,rgba(12,23,20,.55),rgba(12,23,20,.32));
+  -webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);border-bottom-color:rgba(233,241,236,.08);
+  box-shadow:inset 0 -1px 0 rgba(233,241,236,.03),0 16px 40px -28px rgba(0,0,0,.9)}
+
+/* controls: clear tracks, a glassy lit pill */
+html.glass .seg{background:rgba(10,20,17,.34);border-color:rgba(233,241,236,.08);box-shadow:inset 0 1px 3px rgba(0,0,0,.4),inset 0 -1px 0 rgba(233,241,236,.04)}
+html.glass .seg button.on::before{background:linear-gradient(180deg,rgba(233,241,236,.14),rgba(23,44,38,.5) 60%);
+  box-shadow:inset 0 0 0 1px var(--gold),inset 0 1px 0 rgba(242,200,109,.45),0 8px 22px -8px rgba(227,176,75,.6)}
+html.glass .btn.quiet{background:linear-gradient(180deg,rgba(233,241,236,.085),rgba(233,241,236,.025));border-color:rgba(233,241,236,.15);
+  -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);box-shadow:inset 0 1px 0 rgba(233,241,236,.14)}
+html.glass .btn.quiet:hover{border-color:var(--gold);box-shadow:inset 0 1px 0 rgba(233,241,236,.18),0 0 0 3px rgba(227,176,75,.14),0 12px 28px -12px rgba(227,176,75,.5)}
+html.glass .btn.primary{box-shadow:inset 0 1px 0 rgba(233,241,236,.55),inset 0 -1px 0 rgba(27,20,5,.18),0 10px 28px -10px rgba(227,176,75,.7),0 0 40px -12px rgba(242,200,109,.45)}
+html.glass :is(input,select){background:rgba(10,20,17,.42);border-color:rgba(233,241,236,.1);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+html.glass input[type=range]{-webkit-backdrop-filter:none;backdrop-filter:none}
+html.glass :is(.choice,.mode,.wopt){background:radial-gradient(320px circle at var(--mx,-999px) var(--my,-999px),rgba(242,200,109,.1),transparent 60%),linear-gradient(180deg,rgba(233,241,236,.05),rgba(233,241,236,0) 40%),rgba(14,28,24,.4);
+  border-color:rgba(233,241,236,.09);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+html.glass :is(.choice,.mode).sel{background:linear-gradient(180deg,rgba(242,200,109,.1),rgba(20,38,31,.6));border-color:var(--gold)}
+
+/* the die: a dark lens over the light */
+html.glass .die{background:radial-gradient(120% 90% at 50% 0%,rgba(242,200,109,.1),transparent 60%),rgba(10,20,17,.62);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
+html.glass .gates span:not(.hi){background:rgba(30,52,46,.78)}
+html.glass .gates span.hi{box-shadow:0 0 8px rgba(227,176,75,.65),0 0 2px rgba(242,200,109,.9),inset 0 1px 0 rgba(233,241,236,.55)}
+
+/* lists and pills */
+html.glass .feed li:hover{background:rgba(233,241,236,.05)}
+html.glass .feed li+li,html.glass .flow li+li{border-color:rgba(233,241,236,.07)}
+html.glass .flow li:nth-child(3){background:rgba(233,241,236,.045)}
+html.glass .vault-stats,html.glass .vault-stats>div+div{border-color:rgba(233,241,236,.08)}
+html.glass .vault-icon{border-color:rgba(233,241,236,.12)}
+html.glass :is(.status,.tag,.pin){border-color:rgba(233,241,236,.14)}
+html.glass .status.live{border-color:rgba(121,224,190,.5)}html.glass .status.paused{border-color:rgba(255,138,112,.55)}html.glass .status.wait{border-color:rgba(227,176,75,.5)}
+html.glass .tag.buy{border-color:rgba(121,224,190,.5)}html.glass .tag.sell{border-color:rgba(227,176,75,.55)}
+html.glass .pin.bad{border-color:rgba(255,138,112,.6)}
+
+/* overlays: clearer scrim, a sheet of thick glass */
+html.glass .modal{background:rgba(4,10,8,.42);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
+html.glass .sheet{background:linear-gradient(180deg,rgba(233,241,236,.07),rgba(233,241,236,0) 30%),linear-gradient(180deg,rgba(23,44,38,.66),rgba(17,33,29,.56));
+  -webkit-backdrop-filter:blur(36px);backdrop-filter:blur(36px)}
+
+/* phones / touch: card blur stays off for speed, so panels take more tint to keep text crisp */
+@media (hover:none),(max-width:680px){
+  html.glass :is(.chipw,.vault,.feed,.flow,.job,.sees,.howto,.empty,.demo-dec){background:linear-gradient(180deg,rgba(233,241,236,.06),rgba(233,241,236,0) 34%),linear-gradient(180deg,rgba(23,44,38,.7),rgba(17,33,29,.6))}
+  html.glass :is(.chipw,.vault,.feed,.flow,.job)::after{display:none}
+  html.glass :is(input,select,.choice,.mode,.wopt,.die){-webkit-backdrop-filter:none;backdrop-filter:none}
+}
+/* ── Part 2c · Brighter glow, clearer glass ──────────────────────────────────────────────────────
+   Same colour rule: only gold, gold-hi, pass, paper, mask, mask-2, line-2 at an alpha. */
+
+/* the light: brighter pools, plus a warm bloom right behind the chip */
+html.glass body::before{
+  background:
+    radial-gradient(20vmax 17vmax at 63% 40%,rgba(242,200,109,.32),transparent 64%),
+    radial-gradient(28vmax 24vmax at 63% 42%,rgba(227,176,75,.42),transparent 68%),
+    radial-gradient(14vmax 11vmax at 70% 28%,rgba(242,200,109,.3),transparent 64%),
+    radial-gradient(22vmax 18vmax at 71% 68%,rgba(121,224,190,.32),transparent 66%),
+    radial-gradient(20vmax 16vmax at 24% 28%,rgba(121,224,190,.17),transparent 64%),
+    radial-gradient(24vmax 19vmax at 28% 72%,rgba(227,176,75,.22),transparent 66%),
+    radial-gradient(50vmax 30vmax at 50% 94%,rgba(47,82,73,.7),transparent 68%)}
+
+/* panels: nearly clear, deeper frost, brighter rim, a gold halo leaking out */
+html.glass :is(.chipw,.vault,.sheet,.feed,.flow,.job,.sees,.howto,.empty,.demo-dec){
+  background:
+    radial-gradient(520px circle at var(--mx,-999px) var(--my,-999px),rgba(242,200,109,.14),transparent 60%),
+    linear-gradient(180deg,rgba(233,241,236,.09),rgba(233,241,236,0) 30%),
+    linear-gradient(180deg,rgba(23,44,38,.24),rgba(17,33,29,.12));
+  -webkit-backdrop-filter:blur(34px);backdrop-filter:blur(34px);
+  border-color:rgba(233,241,236,.14);
+  text-shadow:0 1px 2px rgba(12,23,20,.35);
+  box-shadow:inset 0 1px 0 rgba(233,241,236,.22),inset 0 -1px 0 rgba(0,0,0,.24),inset 0 0 0 1px rgba(233,241,236,.03),
+    0 34px 80px -34px rgba(0,0,0,.7),0 0 90px -30px rgba(227,176,75,.34)}
+html.glass :is(.chipw,.vault,.sheet,.job,.sees,.demo-dec)::before{
+  background:linear-gradient(155deg,rgba(233,241,236,.65),rgba(233,241,236,.1) 24%,transparent 50%,rgba(227,176,75,.18) 80%,rgba(242,200,109,.6))}
+html.glass .chipw{background:radial-gradient(520px circle at var(--mx,-999px) var(--my,-999px),rgba(242,200,109,.12),transparent 60%),linear-gradient(180deg,rgba(233,241,236,.08),rgba(233,241,236,0) 30%),linear-gradient(180deg,rgba(17,33,29,.56),rgba(12,23,20,.46));box-shadow:inset 0 1px 0 rgba(233,241,236,.24),inset 0 -1px 0 rgba(0,0,0,.26),0 40px 100px -40px rgba(0,0,0,.8),0 0 120px -30px rgba(227,176,75,.46)}
+
+/* everything inside goes clearer with it */
+html.glass .hdr{background:linear-gradient(180deg,rgba(12,23,20,.42),rgba(12,23,20,.2));-webkit-backdrop-filter:blur(28px);backdrop-filter:blur(28px)}
+html.glass .seg{background:rgba(10,20,17,.22);border-color:rgba(233,241,236,.1)}
+html.glass .seg button.on::before{background:linear-gradient(180deg,rgba(233,241,236,.18),rgba(23,44,38,.34) 60%);
+  box-shadow:inset 0 0 0 1px var(--gold),inset 0 1px 0 rgba(242,200,109,.55),0 0 18px -4px rgba(227,176,75,.55),0 8px 24px -8px rgba(227,176,75,.7)}
+html.glass .btn.quiet{background:linear-gradient(180deg,rgba(233,241,236,.1),rgba(233,241,236,.03));border-color:rgba(233,241,236,.18)}
+html.glass .btn.primary{box-shadow:inset 0 1px 0 rgba(233,241,236,.6),inset 0 -1px 0 rgba(27,20,5,.18),0 10px 30px -8px rgba(227,176,75,.8),0 0 56px -10px rgba(242,200,109,.6)}
+html.glass :is(input,select){background:rgba(10,20,17,.3);border-color:rgba(233,241,236,.13)}
+html.glass :is(.choice,.mode,.wopt){background:radial-gradient(340px circle at var(--mx,-999px) var(--my,-999px),rgba(242,200,109,.13),transparent 60%),linear-gradient(180deg,rgba(233,241,236,.07),rgba(233,241,236,0) 40%),rgba(14,28,24,.24);border-color:rgba(233,241,236,.12)}
+html.glass .die{background:radial-gradient(120% 90% at 50% 0%,rgba(242,200,109,.14),transparent 60%),rgba(10,20,17,.48);
+  box-shadow:inset 0 0 0 4px rgba(10,20,17,.5),inset 0 0 0 5px rgba(227,176,75,.4),0 0 0 1px rgba(227,176,75,.1),0 0 50px -14px rgba(227,176,75,.6)}
+html.glass .gates span:not(.hi){background:rgba(30,52,46,.62)}
+html.glass .gates span.hi{box-shadow:0 0 10px rgba(227,176,75,.8),0 0 3px rgba(242,200,109,1),inset 0 1px 0 rgba(233,241,236,.6)}
+html.glass .meter span{box-shadow:0 0 14px rgba(227,176,75,.7)}
+html.glass .sheet{background:linear-gradient(180deg,rgba(233,241,236,.09),rgba(233,241,236,0) 30%),linear-gradient(180deg,rgba(23,44,38,.5),rgba(17,33,29,.4));-webkit-backdrop-filter:blur(40px);backdrop-filter:blur(40px)}
+html.glass .modal{background:rgba(4,10,8,.34)}
+
+/* small grey text over the bright light: a soft substrate halo keeps it readable */
+html.glass :is(.muted,dt,.ctl-l,.sees-t,.sees-l span,.fine,small,.die-sub,.meter-label,.curve-x,.wgrp,.lead-s,figcaption,.facts dt){text-shadow:0 0 24px rgba(12,23,20,.9),0 0 12px rgba(12,23,20,.95),0 0 4px rgba(12,23,20,.95),0 1px 1px rgba(12,23,20,.8)}
+
+/* phones / touch: keep the no-blur budget, with enough tint for crisp text */
+@media (hover:none),(max-width:680px){
+  html.glass :is(.chipw,.vault,.feed,.flow,.job,.sees,.howto,.empty,.demo-dec){-webkit-backdrop-filter:none;backdrop-filter:none;
+    background:linear-gradient(180deg,rgba(233,241,236,.07),rgba(233,241,236,0) 34%),linear-gradient(180deg,rgba(23,44,38,.66),rgba(17,33,29,.56))}
+  html.glass :is(input,select,.choice,.mode,.wopt,.die,.seg,.btn.quiet){-webkit-backdrop-filter:none;backdrop-filter:none}
+}
+
+/* the background light, faded so it sits behind the UI instead of competing with it */
+html.glass body::before{opacity:.7}
+</style>
 </head>
 <body>
 <div id="app"></div>
 <script>window.LATCH_CONFIG=__CONFIG__;</script>
 <script>__APP__</script>
+<script>
+/* Latch glass — the motion conductor.
+   A read-only observer that sits beside the app. It never touches app state, handlers, data-* attributes or text.
+   It only adds lg-* classes and --custom properties to fresh nodes, and appends a pointer-events:none ghost
+   outside #app when a dialog closes. Off entirely under prefers-reduced-motion or without html.glass.
+   Started below for #app. */
+(function () {
+  var RM = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+  var html = document.documentElement;
+  function live() { return html.classList.contains('glass') && !(RM && RM.matches); }
+  var GROUPS = '.seg, .nav, .steps';
+  var CARDS = '.chipw, .vault, .sheet, .job, .choice, .mode, .wopt, .sees, .demo-dec';
+
+  function conduct(root) {
+    if (!root || root.__lg) return root && root.__lg;
+    var mem = { groups: {}, gates: {}, ticks: {}, modal: false, route: location.hash };
+
+    function rel(el, box) { var r = el.getBoundingClientRect(), b = box.getBoundingClientRect(); return { x: r.left - b.left, w: r.width }; }
+    function keyOf(el, i) { return (el.className.split(' ')[0] || '') + ':' + (el.getAttribute('aria-label') || i); }
+
+    function enter() {
+      if (!live()) return;
+      var main = root.querySelector('#main') || root;
+      var kids = main.children, n = 0;
+      for (var i = 0; i < kids.length; i++) { kids[i].classList.add('lg-in'); kids[i].style.setProperty('--i', n++); }
+      main.querySelectorAll('.hero > *, .feed li, .flow li, .vault, .jobs > *').forEach(function (el, j) {
+        el.classList.add('lg-item'); el.style.setProperty('--j', Math.min(j, 8));
+      });
+      main.querySelectorAll('.gates').forEach(function (g) {
+        var k = 0; g.querySelectorAll('span.hi').forEach(function (s) { s.style.setProperty('--g', k++); });
+      });
+    }
+
+    function sweep(records) {
+      var on = live();
+      // 1 · lit pills and nav underline slide from where they were (FLIP)
+      var groups = {};
+      root.querySelectorAll(GROUPS).forEach(function (g, i) {
+        var cur = g.querySelector('.on'); if (!cur) return;
+        var k = keyOf(g, i), now = rel(cur, g), was = mem.groups[k];
+        groups[k] = now;
+        if (on && was && now.w && (Math.abs(was.x - now.x) > 1 || Math.abs(was.w - now.w) > 1)) {
+          cur.style.setProperty('--fx', (was.x - now.x) + 'px');
+          cur.style.setProperty('--fw', (was.w / now.w).toFixed(4));
+          cur.classList.add('lg-slide');
+        }
+      });
+      mem.groups = groups;
+      // 2 · only the gates that changed state ignite or go out
+      var gates = {};
+      root.querySelectorAll('.gates').forEach(function (g, i) {
+        var spans = g.children, bits = '';
+        for (var j = 0; j < spans.length; j++) bits += spans[j].classList.contains('hi') ? '1' : '0';
+        var was = mem.gates[i]; gates[i] = bits;
+        if (!on || !was || was.length !== bits.length) return;
+        var n = 0;
+        for (var j2 = 0; j2 < bits.length; j2++) if (bits[j2] !== was[j2]) { spans[j2].classList.add('lg-flip'); spans[j2].style.setProperty('--i', n++); }
+      });
+      mem.gates = gates;
+      // 3 · a number or verdict that changed settles in
+      var ticks = {};
+      root.querySelectorAll('.verdict-word, .ctl-v, dd, [data-lg-tick]').forEach(function (el, i) {
+        var t = el.textContent, was = mem.ticks[i]; ticks[i] = t;
+        if (on && was !== undefined && was !== t && mem.route === location.hash) el.classList.add('lg-tick');
+      });
+      mem.ticks = ticks;
+      // 4 · dialogs spring in once, and glide out as a ghost
+      var modal = root.querySelector('.modal');
+      if (modal && !mem.modal && on) modal.classList.add('lg-sheet-in');
+      if (!modal && mem.modal && on && records) {
+        records.forEach(function (r) {
+          r.removedNodes.forEach(function (n) {
+            if (n.nodeType === 1 && n.classList.contains('modal')) {
+              var ghost = n.cloneNode(true); ghost.classList.remove('lg-sheet-in'); ghost.classList.add('lg-ghost');
+              ghost.setAttribute('aria-hidden', 'true'); ghost.inert = true; document.body.appendChild(ghost);
+              setTimeout(function () { ghost.remove(); }, 320);
+            }
+          });
+        });
+      }
+      mem.modal = !!modal;
+      // 5 · a route change gets an entrance; ordinary re-renders never do
+      if (mem.route !== location.hash) { mem.route = location.hash; enter(); }
+    }
+
+    var mo = new MutationObserver(function (records) { sweep(records); });
+    mo.observe(root, { childList: true });
+    // cursor spotlight on glass cards: two custom properties, nothing else
+    document.addEventListener('pointermove', function (e) {
+      if (!live() || !e.target.closest) return;
+      var c = e.target.closest(CARDS); if (!c) return;
+      var r = c.getBoundingClientRect();
+      c.style.setProperty('--mx', (e.clientX - r.left) + 'px'); c.style.setProperty('--my', (e.clientY - r.top) + 'px');
+    }, { passive: true });
+    sweep(null); enter();
+    root.__lg = { sweep: sweep, enter: enter, stop: function () { mo.disconnect(); } };
+    return root.__lg;
+  }
+
+  window.LatchGlass = { conduct: conduct };
+})();
+LatchGlass.conduct(document.getElementById('app'));
+</script>
 </body>
 </html>
