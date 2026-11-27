@@ -410,6 +410,7 @@ function pageCreate() {
       <div class="form"><label>Amount to add (${fundTok})<input id="c-deposit" data-c="deposit" type="number" min="0" step="any" inputmode="decimal" value="${esc(c.deposit)}">
         <small>Your wallet holds ${have != null ? (dir === 0 ? usd(have) : okb(have, 4)) : '…'} ${fundTok}${dir === 1 && w.okb != null ? ` and ${okb(w.okb, 4)} OKB` : ''}.</small></label></div>
       ${dir === 1 ? `<p class="fine">Uniswap trades WOKB (wrapped OKB, always worth 1 OKB). If you hold plain OKB, wrap some first: it is one transaction and you can unwrap any time.</p>` : ''}
+      ${fundSteps({ version: 2, dir, address: c.created })}
       <div class="row between"><a class="btn quiet" href="#/vaults">Later</a><span class="row gap">${dir === 1 ? `<button class="btn quiet" data-a="cwrap" ${S.busy ? 'disabled' : ''}>Wrap OKB → WOKB</button>` : ''}<button class="btn primary" data-a="cdeposit" ${S.busy ? 'disabled' : ''}>${S.busy ? esc(S.busy) + '…' : 'Add ' + fundTok}</button></span></div>`;
   }
   return `<section class="wrap block narrow"><h1 class="pg">${c.step === 0 ? 'Create a vault' : dir === 0 ? 'Buy OKB automatically' : 'Take profit automatically'}</h1>
@@ -768,10 +769,10 @@ function fundSteps(d) {
   const alias = tok === 'USDT0' ? ' (some wallets call it USDT)' : ' (wrapped OKB)';
   return `<div class="howto">
     <p class="howto-t">Two ways to add money</p>
-    <p class="howto-s"><b>1. From this page:</b> enter an amount above and tap <i>Add ${tok}</i>. Your wallet asks you to approve; nothing moves until you do.</p>
+    <p class="howto-s"><b>1. From this page:</b> enter an amount above and tap <i>Add ${tok}</i>. Your wallet asks you to approve; nothing moves until you do. If your wallet answers with an error, use way 2.</p>
     <p class="howto-s"><b>2. From your wallet app:</b></p>
     <ol class="howto-l">
-      <li>Copy this vault's address:<span class="addrbox"><span class="hex">${esc(d.address)}</span><button type="button" class="btn quiet sm" data-a="copyVault">${S.copiedVault ? 'Copied' : 'Copy'}</button></span></li>
+      <li>Copy this vault's own address. Every vault has its own, and this is not your wallet's address:<span class="addrbox"><span class="hex">${esc(d.address)}</span><button type="button" class="btn quiet sm" data-a="copyAddr" data-addr="${d.address}">${S.copiedAddr === d.address ? 'Copied' : 'Copy'}</button></span></li>
       <li>In your wallet app, tap <b>Send</b> and pick <b>${tok}</b>${alias} on the <b>X Layer</b> network.</li>
       <li>Paste the address, enter the amount, and confirm.</li>
       <li>Come back here and tap <b>Refresh</b>. The balance shows within a minute.</li>
