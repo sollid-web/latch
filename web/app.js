@@ -804,7 +804,8 @@ function fundSteps(d) {
   const alias = tok === 'USDT0' ? ' (some wallets call it USDT)' : ' (wrapped OKB)';
   return `<div class="howto">
     <p class="howto-t">Two ways to add money</p>
-    <p class="howto-s"><b>1. From this page:</b> enter an amount above and tap <i>Add ${tok}</i>. Your wallet asks you to approve; nothing moves until you do.${C.depositor ? ` The first time, it also asks once to let Latch's deposit helper move your ${tok}: the helper only moves your own ${tok}, only into Latch vaults, and only when you ask.` : ''} If your wallet answers with an error, use way 2.</p>
+    <p class="howto-s"><b>1. From this page:</b> enter an amount above and tap <i>Add ${tok}</i>. Your wallet asks you to approve; nothing moves until you do.${C.depositor ? ` The first time, it also asks you to approve Latch's deposit helper, which only moves your own ${tok}, only into Latch vaults, and only when you ask.` : ''} If your wallet answers with an error, use way 2.</p>
+    ${C.depositor ? `<p class="fine">Your wallet may call this “Approve Unknown”: it just doesn't have a name for the helper yet. Check the address it shows is ${link(C.depositor)} (source published and verified). It may ask how much to approve: <i>Unlimited</i> approves once; the amount you're adding approves just this time.</p>` : ''}
     <p class="howto-s"><b>2. From your wallet app:</b></p>
     <ol class="howto-l">
       <li>Copy this vault's own address. Every vault has its own, and this is not your wallet's address:<span class="addrbox"><span class="hex">${esc(d.address)}</span><button type="button" class="btn quiet sm" data-a="copyAddr" data-addr="${d.address}">${S.copiedAddr === d.address ? 'Copied' : 'Copy'}</button></span></li>
