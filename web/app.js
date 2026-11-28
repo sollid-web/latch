@@ -550,7 +550,7 @@ function pageChip() {
   const table = (dir) => `<table class="grid"><thead><tr><th>Strategy</th>${DEPTHS.map((d, i) => `<th>${i === 0 ? (dir === 0 ? 'no dip' : 'no rise') : esc(d)}</th>`).join('')}</tr></thead>
     <tbody>${MODES[dir].map((m, i) => `<tr><th>${esc(m.name)}</th>${curve(i, x.vol).map((k) => `<td class="k${k}">${k ? k + '×' : '–'}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
   return `<section class="wrap block"><h1 class="pg">The strategy chip</h1>
-    <p class="lead-s">Every trade's size is decided by TapeOut circuit #${CID2}: ${GATE_COUNT} NAND gates taped out on X Layer at processor ${link(C.processor)}. The vault turns the market into 16 input bits; the chip answers with 3 bits: allow, and a size of 1×, 2× or 3×. Nothing in the bot or the website can change that answer.</p>
+    <p class="lead-s">Every trade's size is decided by TapeOut circuit #${CID2}: ${GATE_COUNT} NAND gates taped out on X Layer at processor ${link(C.processor)}. The vault turns the market into 16 input bits; the chip answers with 3 bits: allow, and a size of 1×, 2× or 3×. Nothing in the agent or the website can change that answer.</p>
     ${chipWidget(true)}</section>
   <section class="wrap block"><h2>Everything the chip can answer (market: ${esc(VOLS[x.vol])})</h2>
     <p class="fine">Change "Market" above to see how each strategy reacts to a jumpy market. All safety checks passing.</p>
