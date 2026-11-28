@@ -23,5 +23,6 @@
   "wcProjectId": "c23e291f18c0545d8d61a3bfecf457e6",
   "keeperUrl": "https://latch-keeper.tapeguard.workers.dev",
   "depositor": "0x948ea5060786167f1d9f7fdfbF3301c59893E3D4",
-  "npm": "https://www.npmjs.com/package/latch-xlayer"
+  "npm": "https://www.npmjs.com/package/latch-xlayer",
+  "iconUrl": "https://raw.githubusercontent.com/sollid-web/latch/main/web/icon.png"
 }

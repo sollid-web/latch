@@ -186,9 +186,12 @@ const pickAccount = (list) => {
 /* OKX Connect (OKX's official SDK): from a normal phone browser, asks the standalone OKX Wallet app
    (ConnectWalletType.OKX_WALLET, not the exchange app) to approve, then you come back here connected. */
 let okxConnectP = null;
+// Wallet apps fetch the dApp icon themselves; a plain image host (GitHub) is fetched more reliably than our
+// Cloudflare-protected site, so prefer it and keep our own copy as the fallback.
+const ICON = () => C.iconUrl || location.origin + '/icon.png';
 function okxConnect() {
   if (!okxConnectP) {
-    okxConnectP = OKXUniversalProvider.init({ dappMetaData: { name: 'Latch', icon: location.origin + '/icon.png' } }).then((okx) => {
+    okxConnectP = OKXUniversalProvider.init({ dappMetaData: { name: 'Latch', icon: ICON() } }).then((okx) => {
       okx.on('session_delete', () => { if (store.get(LAST) === 'okx') { S.account = null; S.provider = null; refreshFn(); } });
       okx.on('session_update', () => { const a = pickAccount(okx.session?.namespaces?.eip155?.accounts); if (a && store.get(LAST) === 'okx') { S.account = a; render(); } });
       return okx;
@@ -216,7 +219,7 @@ function wcInit() {
   if (!wcP) {
     wcP = UniversalProvider.init({
       projectId: C.wcProjectId,
-      metadata: { name: 'Latch', description: 'Rule-bound OKB vaults on X Layer', url: location.origin, icons: [location.origin + '/icon.png'] }
+      metadata: { name: 'Latch', description: 'Rule-bound OKB vaults on X Layer', url: location.origin, icons: [...new Set([ICON(), location.origin + '/icon.png'])] }
     }).then((p) => {
       p.on('display_uri', async (uri) => {
         if (!S.picker) return;
