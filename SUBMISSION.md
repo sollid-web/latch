@@ -157,7 +157,7 @@ All of it. The repository started on 2026-11-03 and has 129 commits since:
   - refuses to trade when Uniswap disagrees with the exchanges
   - simulates before sending
   - records every Latch trade for the full history (`/trades`), pacing itself under the public RPC's rate limit
-  - 41 tests
+  - 43 tests
 - **Website (https://okblatch.xyz):**
   - nine pages: Home, Demo, Try it, Create, My vaults, The chip, Activity, Agents, Safety
   - **Demo mode:** the whole journey with play money and no wallet, using the live OKB price and the real circuit #2 netlist

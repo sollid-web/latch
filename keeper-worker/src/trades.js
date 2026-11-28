@@ -144,7 +144,12 @@ export async function recordTrades(opts) {
       if (r.status !== 'fulfilled') {
         const msg = String(r.reason?.message || r.reason);
         if (/rate.?limit|too many requests|429|-32016|-32005|capacity|throttl/i.test(msg)) {
-          par = Math.max(1, Math.floor(par / 2)); state.par = par; state.rateLimited = (state.rateLimited || 0) + 1;
+          state.rateLimited = (state.rateLimited || 0) + 1;
+          state.lastRateLimit = urlOf(rr - groups.length + i) + ': ' + msg.slice(0, 120);
+          // Some RPCs count every lookup inside a bundle, so a big bundle is refused even when sent alone:
+          // once we are down to one request at a time, make the bundle smaller too.
+          if (par <= 1 && per > 1) { per = Math.max(1, Math.floor(per / 2)); state.perBatch = per; }
+          par = Math.max(1, Math.floor(par / 2)); state.par = par;
           await new Promise((res) => setTimeout(res, opts.pauseMs ?? 1500));
           continue outer; // carry on from the last window that answered, slower
         }
@@ -202,5 +207,5 @@ export async function readTrades(kv) {
   const s = kv ? await kv.get(KEY, 'json') : null;
   if (!s) return { complete: false, trades: [], note: 'nothing recorded yet: the agent records on its next runs' };
   return { complete: s.cursor != null && s.cursor >= (s.head ?? s.cursor) - 50, start: s.start, scannedTo: s.cursor, head: s.head,
-    blocksPerRequest: s.window || 2000, windowsPerRequest: s.perBatch ?? 25, parallel: s.par, rateLimitedRuns: s.rateLimited, lastSkippedEndpoint: s.skipped, error: s.error, trades: s.trades };
+    blocksPerRequest: s.window || 2000, windowsPerRequest: s.perBatch ?? 25, parallel: s.par, rateLimitedRuns: s.rateLimited, lastSkippedEndpoint: s.skipped, lastRateLimit: s.lastRateLimit, error: s.error, trades: s.trades };
 }

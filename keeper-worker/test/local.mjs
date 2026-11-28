@@ -246,6 +246,22 @@ try {
     check('recorder: a rate limit is not mistaken for a block-range limit (window stays 6)', got5.blocksPerRequest === 6, got5.blocksPerRequest);
     check('recorder: a dead endpoint in the list is dropped, the others carry on', /dead\.invalid/.test(got5.lastSkippedEndpoint || '') && !got5.error, got5.lastSkippedEndpoint);
   }
+  { // like mainnet on 28 Nov: the RPC counts every lookup inside a bundle, so a bundle of more than 3 is always "over rate limit",
+    // even sent one at a time. The recorder must make the bundle smaller, not only send fewer at once (it was stuck for a week).
+    let refusedB = 0;
+    const heavy = async (url, init) => {
+      const body = JSON.parse(init.body);
+      if (Array.isArray(body) && body.length > 3) { refusedB++; return new Response(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32016, message: 'over rate limit' } }), { status: 200 }); }
+      return fetch(url, init);
+    };
+    const kv6 = { m: new Map(), get: async (k) => (kv6.m.has(k) ? JSON.parse(kv6.m.get(k)) : null), put: async (k, v) => { kv6.m.set(k, v); } };
+    let r6, n = 0;
+    do { r6 = await recordTrades({ kv: kv6, rpc: RPC, factories: [fac, fac2], windowSize: 6, minWindow: 6, perBatch: 6, requests: 6, parallel: 1, pauseMs: 0, since: '2000-01-01T00:00:00Z', fetchFn: heavy, now: 9e12 + n }); n++; }
+    while (r6.cursor <= r6.head && n < 300);
+    const got6 = await readTrades(kv6);
+    check('recorder: a bundle the RPC always calls "over rate limit" → bundle shrinks (6 → ' + got6.windowsPerRequest + '), still finds every trade', refusedB > 0 && got6.windowsPerRequest <= 3 && got6.complete && got6.trades.length === real, { n, refusedB, got6: { ...got6, trades: got6.trades.length } });
+    check('recorder: /trades says which endpoint last refused and why', /over rate limit/.test(got6.lastRateLimit || ''), got6.lastRateLimit);
+  }
   check('recorder: no KV binding → skipped, never throws', (await recordTrades({ kv: null, rpc: RPC, factories: [fac] })).skipped);
 } catch (err) {
   console.error('TEST CRASHED:', err); failures++;
