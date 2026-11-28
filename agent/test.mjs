@@ -12,7 +12,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const UI = process.env.UI_DIR || path.join(os.tmpdir(), 'latch-ui');
 const web = JSON.parse(fs.readFileSync(path.join(UI, 'web-local.json'), 'utf8'));
 const cfgFile = path.join(UI, 'latch-agent.json');
-fs.writeFileSync(cfgFile, JSON.stringify({ rpc: web.rpc[0], factory2: web.factory2, processor: web.processor, circuit2Id: web.circuit2Id, usdt: web.usdt, wokb: web.wokb, pool: web.pool }));
+fs.writeFileSync(cfgFile, JSON.stringify({ rpc: web.rpc[0], factory2: web.factory2, processor: web.processor, circuit2Id: web.circuit2Id, usdt: web.usdt, wokb: web.wokb, pool: web.pool, depositor: web.depositor }));
 const RPC = web.rpc[0];
 const AGENT = '0x00000000000000000000000000000000a9e17001'; // stand-in Agentic Wallet
 const SAVE = '0x00000000000000000000000000000000a9e17002';
@@ -23,6 +23,7 @@ async function sign(t, from = AGENT) { // what `onchainos wallet contract-call -
   for (let i = 0; i < 50; i++) { const r = await rpc('eth_getTransactionReceipt', [hash]); if (r) return r.status === '0x1'; await new Promise((s) => setTimeout(s, 100)); }
   return false;
 }
+async function signAll(list) { if (!list?.length) return false; for (const t of list) if (!(await sign(t))) return false; return true; }
 let fails = 0;
 const ok = (n, c, d) => { console.log((c ? 'PASS ' : 'FAIL ') + n + (c ? '' : '  → ' + JSON.stringify(d).slice(0, 400))); if (!c) fails++; };
 
@@ -52,8 +53,14 @@ ok('create: Agentic Wallet signs it', await sign(r.transactions[0]), r);
 r = latch('vaults', '--owner', AGENT);
 const v1 = r.vaults?.[0]?.vault;
 ok('vaults: the new vault, owned by the agent wallet', v1 && r.vaults[0].job === 'Buy OKB' && /Smart/.test(r.vaults[0].strategy) && r.vaults[0].mostPerTrade === '6 USDT0', r);
+r = latch('fund', '--vault', v1, '--amount', '10', '--from', '0x000000000000000000000000000000000000dEaD');
+ok('fund: a wallet without enough USDT0 gets a plain answer before signing (not a revert)', /has 0 USDT0 on X Layer, less than the 10 USDT0/.test(r.error || '') && /Send USDT0/.test(r.error || ''), r);
 r = latch('fund', '--vault', v1, '--amount', '10');
-ok('fund: signs a 10 USDT0 transfer', await sign(r.transactions[0]), r);
+ok('fund: goes through the deposit helper (approve exactly 10 USDT0, then deposit), never a plain USDT0 transfer OKX wallets refuse',
+  r.transactions?.length === 2 && r.transactions[0].to.toLowerCase() === web.usdt.toLowerCase() && r.transactions[0].inputData.startsWith('0x095ea7b3')
+  && r.transactions[0].inputData.toLowerCase().includes(web.depositor.slice(2).toLowerCase()) && BigInt('0x' + r.transactions[0].inputData.slice(-64)) === 10_000_000n
+  && r.transactions[1].to.toLowerCase() === web.depositor.toLowerCase() && !r.transactions.some((t) => t.inputData.startsWith('0xa9059cbb')), r);
+ok('fund: Agentic Wallet signs both, in order', await signAll(r.transactions), r);
 r = latch('status', '--vault', v1);
 ok('status: what the chip sees and the next trade (3× = 6 USDT0)', r.now?.tradeNow === true && r.now.multiplier === 3 && r.balance === '10 USDT0', r.now);
 
@@ -64,7 +71,9 @@ const v2 = latch('vaults', '--owner', AGENT).vaults?.[1]?.vault;
 r = latch('wrap', '--amount', '0.05');
 ok('wrap: OKB → WOKB transaction carries the value', r.transactions?.[0]?.amt === '50000000000000000', r);
 r = latch('fund', '--vault', v2, '--amount', '0.1');
-ok('fund the Take Profit vault with WOKB', await sign(r.transactions[0]), r);
+ok('fund the Take Profit vault with WOKB (through the helper too)', r.transactions?.at(-1)?.to.toLowerCase() === web.depositor.toLowerCase() && await signAll(r.transactions), r);
+const w2 = BigInt(await rpc('eth_call', [{ to: web.wokb, data: '0x70a08231' + v2.slice(2).padStart(64, '0') }, 'latest']));
+ok('the WOKB landed in the Take Profit vault', w2 === 10n ** 17n, { w2 });
 r = latch('tick', '--vault', v2, '--as', SAVE);
 ok('tick: a wallet that is not the vault\'s agent is told plainly', r.tradeNow === false && /only the vault's own agent/.test(r.why), r);
 r = latch('tick', '--vault', v2, '--as', AGENT);

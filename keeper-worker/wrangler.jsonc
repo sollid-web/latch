@@ -5,7 +5,7 @@
   "compatibility_date": "2026-11-04",
   "observability": { "enabled": true },
   // Every minute. Each vault's own on-chain rules decide whether a buy is allowed.
-  "triggers": { "crons": ["* * * * *"] },
+  "triggers": { "crons": ["* * * * *", "*/2 * * * *"] },
   // Trade history recorded by the bot (GET /trades). Read-only data; anyone can re-check each tx on OKLink.
   "kv_namespaces": [{ "binding": "TRADES", "id": "53c81bd92ac2455eb1aef438b8758327" }],
   "vars": {

@@ -45,8 +45,22 @@ What a vault's agent can and can't do:
 
 The `latch` tool reads the chain and **prepares** transactions. It never holds, asks for or sees a private key. The user's **OKX Agentic Wallet** signs every transaction with `onchainos wallet contract-call`, inside OKX's TEE, and only after the user confirms it.
 
+## Install the `latch` tool (once)
+
+Installing this skill adds these instructions, not the `latch` command. Check with `latch --help`. If that fails, install it from npm:
+
+```
+npm install -g latch-xlayer
+```
+
+- Or run it without installing: `npx -y latch-xlayer <command>` wherever this skill says `latch <command>`.
+- Needs Node.js 18 or newer.
+- If npm is unavailable, install from source: `git clone https://github.com/sollid-web/latch ~/.latch && cd ~/.latch/agent && npm install && npm link` (or use `node ~/.latch/agent/latch.mjs`).
+- Signing needs the OKX Agentic Wallet CLI, `onchainos` (OKX's Onchain OS skills). This skill never asks for a private key.
+
 ## Pre-flight Checks
 
+0. `latch --help`. If it fails, do "Install the `latch` tool" above first.
 1. `onchainos wallet status`. If not logged in, follow `onchainos wallet login`.
 2. `onchainos wallet addresses`. Use the **EVM address** for X Layer (chain `196`) as `<wallet>` below.
 3. `latch market`. If it returns an error, X Layer's RPC is unreachable; tell the user and stop.
@@ -72,7 +86,7 @@ Every command prints JSON. Commands that change anything return a `transactions`
 | Command | Notes |
 |---|---|
 | `latch create --dir buy\|sell --mode <mode> --savings <address> --base <amount> --ref <price> --limit <price> [--per-trade <amount>] [--daily <amount>] [--every any\|hour\|day\|week] [--keeper <address>]` | `--base` is in USDT0 for `buy` (at least 1) and OKB for `sell` (at least 0.01). `--limit` is the ceiling for buys and the floor for sells. `--per-trade` and `--daily` default to the strategy's largest size. `--every` defaults to `day`. Leave out `--keeper` to use Latch's hosted agent. |
-| `latch fund --vault <vault> --amount <amount>` | USDT0 for Buy vaults, WOKB for Take Profit vaults |
+| `latch fund --vault <vault> --amount <amount>` | USDT0 for Buy vaults, WOKB for Take Profit vaults. Usually **two** transactions: allow Latch's deposit helper to move exactly that amount, then the deposit (OKX wallets refuse a plain USDT0 transfer on X Layer). The helper can only pay into Latch vaults. |
 | `latch wrap --amount <okb>` | OKB → WOKB (1:1). Needed before funding a Take Profit vault from plain OKB. |
 | `latch pause --vault <vault>` / `latch resume --vault <vault>` | Owner only |
 | `latch strategy --vault <vault> [--mode] [--base] [--ref] [--limit] [--every]` | Owner only. Limits can't be raised; `--base` must stay at or under the per-trade limit. |
@@ -98,8 +112,8 @@ For each entry of `transactions`, **in order**:
 2. `latch try --dir buy --mode smart --ref <ref> --limit 100 --base 5` to show what it would do right now.
 3. `latch create --dir buy --mode smart --savings <user wallet> --base 5 --ref <ref> --limit 100 --every week`, then sign.
 4. `latch vaults --owner <wallet>` to find the new vault.
-5. `latch fund --vault <vault> --amount <USDT0>`, then sign.
-6. Tell the user: Latch's agent checks every minute; the OKB arrives in `<user wallet>`; the page is `https://latch.tapeguard.workers.dev/#/vaults`.
+5. `latch fund --vault <vault> --amount <USDT0>`, then sign each transaction in order (allow, then deposit).
+6. Tell the user: Latch's agent checks every minute; the OKB arrives in `<user wallet>`; the page is `https://okblatch.xyz/#/vaults`.
 
 **"Take profit as OKB rises":** the same, with `--dir sell` and `--limit` as the floor. First `latch wrap` if the wallet holds only OKB.
 

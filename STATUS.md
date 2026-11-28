@@ -15,7 +15,7 @@ OKB goes straight to the user's savings wallet. Fee 1% per buy → treasury (lad
 ## Live on mainnet
 | What | Address / URL |
 |---|---|
-| Website | https://latch.tapeguard.workers.dev (Worker `latch`, built from `web/` into `public/` by `npm run deploy`) |
+| Website | https://okblatch.xyz (Worker `latch`, built from `web/` into `public/` by `npm run deploy`) |
 | Hosted bot | https://latch-keeper.tapeguard.workers.dev (Worker `latch-keeper`, `keeper-worker/`; GET / = read-only report) |
 | **LatchFactory** | **0xc700C9865f237612b0bA86408BB4C182D41ABD11** (admin + treasury = owner; min buy 1 USDT0; TWAP 1800 s; slippage 100 bps) |
 | Builder's first vault (Auto-DCA 1 USDT0/day, ceiling 120) | 0x8a6e62Efc19af82A25BFaA55754671471aE47f60 — 1 real buy done (0.012537 OKB @ 79.76) |

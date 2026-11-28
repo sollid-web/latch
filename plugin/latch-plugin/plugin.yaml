@@ -23,11 +23,11 @@ components:
 build:
   lang: node
   source_repo: "sollid-web/latch"
-  source_commit: 1f89deefc0139f459b9357baed03e4dfe08c3796
+  source_commit: dd71e37db733083b3b8e28516dad102e21b383b7
   source_dir: "agent"
   main: "latch.mjs"
   binary_name: latch
 api_calls:
   - "rpc.xlayer.tech"
-  - "latch.tapeguard.workers.dev"
+  - "okblatch.xyz"
   - "2-2-435.tapekit.org"

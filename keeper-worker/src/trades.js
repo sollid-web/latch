@@ -12,7 +12,7 @@
  * or at most every ~30 minutes otherwise. Re-scanning a window after a restart is harmless
  * (entries are keyed by tx hash + log index).
  */
-import { decodeEventLog, parseAbi, toEventSelector, numberToHex } from 'viem';
+import { decodeEventLog, parseAbi, toEventSelector, numberToHex, encodeFunctionData } from 'viem';
 
 export const EVENTS = parseAbi([
   'event Bought(address indexed keeper, uint256 amountIn, uint256 amountOut, uint256 fee, uint256 twapPrice, uint8 bits)',
@@ -36,15 +36,25 @@ async function rpcBatch(url, calls, fetchFn = fetch) {
   });
 }
 
-/** First block where `address` has code (binary search on eth_getCode). */
-async function deployBlock(url, address, head, fetchFn) {
-  let lo = 0n, hi = head;
-  while (lo < hi) {
-    const mid = (lo + hi) / 2n;
-    const [code] = await rpcBatch(url, [{ method: 'eth_getCode', params: [address, numberToHex(mid)] }], fetchFn);
-    if (code && code !== '0x') hi = mid; else lo = mid + 1n;
+/** A block at or before unix time `ts`, from block timestamps (every node keeps headers; old state it may not).
+ *  A few estimate-and-correct steps from the average block time: about 6 requests. */
+async function blockAtTime(url, ts, head, fetchFn) {
+  const timeOf = async (n) => { const b = await one(url, 'eth_getBlockByNumber', [numberToHex(n), false], fetchFn); return Number(BigInt(b.timestamp)); };
+  const tHead = await timeOf(head);
+  if (ts >= tHead) return head;
+  let probe = head > 200_000n ? head - 200_000n : 0n;
+  let tProbe = await timeOf(probe);
+  let guess = head;
+  for (let i = 0; i < 5; i++) {
+    const rate = (tHead - tProbe) / Number(head - probe || 1n); // seconds per block
+    guess = head - BigInt(Math.ceil((tHead - ts) / Math.max(rate, 0.01)));
+    if (guess < 0n) guess = 0n;
+    const tg = await timeOf(guess);
+    if (tg <= ts && ts - tg < 600) return guess;
+    probe = guess; tProbe = tg;
+    if (tg > ts) continue;
   }
-  return lo;
+  return guess > 2000n ? guess - 2000n : 0n; // close enough; start a little earlier
 }
 
 function decode(log, v2set) {
@@ -69,51 +79,122 @@ function decode(log, v2set) {
  * opts: { kv, rpc, factories, windowSize=100, perBatch=25, batches=6, fetchFn, now }
  */
 export async function recordTrades(opts) {
-  const { kv, rpc, factories, vaults1 = [], vaults2 = [] } = opts;
-  const windowSize = BigInt(opts.windowSize || 100), perBatch = opts.perBatch || 25, batches = opts.batches || 6;
+  const { kv, rpc } = opts;
   const fetchFn = opts.fetchFn || fetch;
   if (!kv) return { skipped: 'no TRADES KV binding' };
-  const addrs = [...vaults1, ...vaults2].map((a) => a.toLowerCase());
   const state = (await kv.get(KEY, 'json')) || { cursor: null, start: null, trades: [], savedAt: 0 };
-  const [headHex] = await rpcBatch(rpc, [{ method: 'eth_blockNumber', params: [] }], fetchFn);
-  const head = BigInt(headHex) - 2n; // stay a couple of blocks behind the tip
-  if (state.cursor === null) {
-    let start = head;
-    for (const f of factories.filter(Boolean)) { const b = await deployBlock(rpc, f, head, fetchFn); if (b < start) start = b; }
-    state.start = Number(start); state.cursor = Number(start);
+  // vault lists: given by the caller, or read from the factories (only new entries each run)
+  let vaults1 = opts.vaults1, vaults2 = opts.vaults2;
+  if (!vaults1 || !vaults2) {
+    state.v1 = state.v1 || []; state.v2 = state.v2 || [];
+    for (const [f, key] of [[opts.factories?.[0], 'v1'], [opts.factories?.[1], 'v2']]) {
+      if (!f) continue;
+      const n = Number(BigInt(await call(rpc, f, 'vaultCount', [], fetchFn)));
+      for (let i = state[key].length; i < n; i++) state[key].push(decodeAddr(await call(rpc, f, 'vaults', [BigInt(i)], fetchFn)).toLowerCase());
+    }
+    vaults1 = state.v1; vaults2 = state.v2;
   }
-  if (!addrs.length) { state.cursor = Number(head); return save(kv, state, true, 0); }
+  const addrs = [...vaults1, ...vaults2].map((a) => a.toLowerCase());
+  const head = BigInt(await one(rpc, 'eth_blockNumber', [], fetchFn)) - 2n; // stay a couple of blocks behind the tip
+  if (state.cursor === null) {
+    try {
+      // Latch's first factory went live on 21 November 2026; nothing to find before that.
+      const since = Math.floor(Date.parse(opts.since || '2026-11-21T00:00:00Z') / 1000);
+      const startBlock = await blockAtTime(rpc, since, head, fetchFn);
+      state.start = Number(startBlock); state.cursor = Number(startBlock);
+    } catch (err) {
+      state.error = 'could not find the start block: ' + String(err.message || err).slice(0, 160);
+      return save(kv, state, true, 0, opts.now);
+    }
+  }
+  if (!addrs.length) { state.cursor = Number(head) + 1; state.head = Number(head); return save(kv, state, true, 0, opts.now); }
 
+  // Adaptive: the window (blocks per eth_getLogs) and the batch size (windows per HTTP request) start large
+  // and halve when the RPC refuses, down to 100 blocks and one window per request. Remembered between runs.
+  const minWin = BigInt(opts.minWindow || 100);
+  if (!state.rangeHit && state.window != null && state.window < (opts.windowSize || 2000)) state.window = null; // only a real range refusal may keep it small
+  let win = BigInt(state.window || opts.windowSize || 2000); if (win < minWin) win = minWin;
+  let per = state.perBatch ?? (opts.perBatch || 25);
+  const requests = opts.requests || 6;
   const v2set = new Set(vaults2.map((a) => a.toLowerCase()));
   const seen = new Set(state.trades.map((t) => t.id));
-  let cursor = BigInt(state.cursor), found = 0;
-  for (let b = 0; b < batches && cursor <= head; b++) {
-    const calls = [];
-    for (let i = 0; i < perBatch && cursor <= head; i++) {
-      const to = cursor + windowSize - 1n < head ? cursor + windowSize - 1n : head;
-      calls.push({ method: 'eth_getLogs', params: [{ address: addrs, topics: [TOPICS], fromBlock: numberToHex(cursor), toBlock: numberToHex(to) }] });
-      cursor = to + 1n;
+
+  // Paced: send `par` requests at a time (spread over the RPC endpoints), keep the contiguous prefix that
+  // answered, and adapt: rate limit → halve the pace and pause; a clean wave → one more next time.
+  let rpcs = (opts.rpcs && opts.rpcs.length ? [...opts.rpcs] : [rpc]);
+  const maxPar = opts.maxParallel || 8;
+  let par = Math.min(state.par || opts.parallel || 2, maxPar);
+  const q = (a, b) => ({ method: 'eth_getLogs', params: [{ address: addrs, topics: [TOPICS], fromBlock: numberToHex(a), toBlock: numberToHex(b) }] });
+  const urlOf = (i) => rpcs[i % rpcs.length];
+  const send = (g, i) => { const url = urlOf(i); return per <= 1 && g.length === 1 ? one(url, 'eth_getLogs', q(...g[0]).params, fetchFn).then((x) => [x]) : rpcBatch(url, g.map((w) => q(...w)), fetchFn); };
+  let cursor = BigInt(state.cursor), found = 0, used = 0, waves = 0, rr = state.rr || 0;
+  delete state.error;
+  outer: while (used < requests && cursor <= head) {
+    const groups = []; let c = cursor;
+    for (let r = 0; r < par && used + groups.length < requests && c <= head; r++) {
+      const g = [];
+      for (let i = 0; i < Math.max(per, 1) && c <= head; i++) { const to = c + win - 1n < head ? c + win - 1n : head; g.push([c, to]); c = to + 1n; }
+      groups.push(g);
     }
-    let results;
-    try { results = await rpcBatch(rpc, calls, fetchFn); }
-    catch (err) { // keep what we have; the cursor only moves past windows that answered
-      cursor = BigInt(calls[0].params[0].fromBlock);
-      state.error = String(err.message || err).slice(0, 200);
-      break;
+    used += groups.length; waves++;
+    const settled = await Promise.allSettled(groups.map((g, i) => send(g, rr + i)));
+    rr += groups.length;
+    for (let i = 0; i < groups.length; i++) {
+      const r = settled[i];
+      if (r.status !== 'fulfilled') {
+        const msg = String(r.reason?.message || r.reason);
+        if (/rate.?limit|too many requests|429|-32016|-32005|capacity|throttl/i.test(msg)) {
+          state.rateLimited = (state.rateLimited || 0) + 1;
+          state.lastRateLimit = urlOf(rr - groups.length + i) + ': ' + msg.slice(0, 120);
+          // Some RPCs count every lookup inside a bundle, so a big bundle is refused even when sent alone:
+          // once we are down to one request at a time, make the bundle smaller too.
+          if (par <= 1 && per > 1) { per = Math.max(1, Math.floor(per / 2)); state.perBatch = per; }
+          par = Math.max(1, Math.floor(par / 2)); state.par = par;
+          await new Promise((res) => setTimeout(res, opts.pauseMs ?? 1500));
+          continue outer; // carry on from the last window that answered, slower
+        }
+        if (/batch/i.test(msg) && per > 1) { state.perBatch = Math.max(1, Math.floor(per / 2)); break outer; }
+        if (/range|exceed|too (large|big)|max.*block|block.*(limit|range)/i.test(msg) && win > minWin) { state.window = Number(win / 2n < minWin ? minWin : win / 2n); state.rangeHit = true; break outer; }
+        if (rpcs.length > 1) { // that endpoint is down or refuses: drop it for this run, carry on with the others
+          const bad = urlOf(rr - groups.length + i); rpcs = rpcs.filter((u) => u !== bad);
+          state.skipped = bad + ': ' + msg.slice(0, 120);
+          continue outer;
+        }
+        state.error = msg.slice(0, 200);
+        break outer;
+      }
+      for (const logs of r.value) for (const l of logs || []) {
+        const t = decode(l, v2set);
+        if (t && !seen.has(t.id)) { seen.add(t.id); state.trades.push(t); found++; }
+      }
+      cursor = groups[i][groups[i].length - 1][1] + 1n;
     }
-    for (const logs of results) for (const l of logs || []) {
-      const t = decode(l, v2set);
-      if (t && !seen.has(t.id)) { seen.add(t.id); state.trades.push(t); found++; }
-    }
-    delete state.error;
+    if (settled.every((x) => x.status === 'fulfilled')) { par = Math.min(maxPar, par + 1); state.par = par; }
   }
+  state.rr = rr % 1000;
+  if (state.window == null) state.window = Number(win);   // report the block window actually in use
+  if (state.perBatch == null) state.perBatch = per;
   state.cursor = Number(cursor);
   state.head = Number(head);
   state.trades.sort((a, b) => b.block - a.block);
   if (state.trades.length > MAX_KEEP) state.trades.length = MAX_KEEP;
   const catchingUp = BigInt(state.cursor) < head - 5n;
   const due = (opts.now ?? Date.now()) - (state.savedAt || 0) > 30 * 60 * 1000;
-  return save(kv, state, found > 0 || catchingUp || due, found, opts.now);
+  return save(kv, state, found > 0 || catchingUp || due || !!state.error, found, opts.now);
+}
+
+const FACT = parseAbi(['function vaultCount() view returns (uint256)', 'function vaults(uint256) view returns (address)']);
+async function call(rpc, to, fn, args, fetchFn) {
+  return one(rpc, 'eth_call', [{ to, data: encodeFunctionData({ abi: FACT, functionName: fn, args }) }, 'latest'], fetchFn);
+}
+const decodeAddr = (hex) => '0x' + hex.slice(-40);
+/** One JSON-RPC request (not a batch: some RPCs refuse batches). */
+async function one(url, method, params, fetchFn = fetch) {
+  const r = await fetchFn(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
+  if (!r.ok) throw new Error('rpc http ' + r.status);
+  const j = await r.json();
+  if (j.error) throw new Error('rpc error: ' + JSON.stringify(j.error).slice(0, 160));
+  return j.result;
 }
 
 async function save(kv, state, write, found, now = Date.now()) {
@@ -124,6 +205,7 @@ async function save(kv, state, write, found, now = Date.now()) {
 /** What GET /trades returns. */
 export async function readTrades(kv) {
   const s = kv ? await kv.get(KEY, 'json') : null;
-  if (!s) return { complete: false, trades: [] };
-  return { complete: s.cursor >= (s.head ?? s.cursor) - 50, start: s.start, scannedTo: s.cursor, trades: s.trades };
+  if (!s) return { complete: false, trades: [], note: 'nothing recorded yet: the agent records on its next runs' };
+  return { complete: s.cursor != null && s.cursor >= (s.head ?? s.cursor) - 50, start: s.start, scannedTo: s.cursor, head: s.head,
+    blocksPerRequest: s.window || 2000, windowsPerRequest: s.perBatch ?? 25, parallel: s.par, rateLimitedRuns: s.rateLimited, lastSkippedEndpoint: s.skipped, lastRateLimit: s.lastRateLimit, error: s.error, trades: s.trades };
 }

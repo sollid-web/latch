@@ -1,33 +1,35 @@
 // Cloudflare Worker entry for the Latch helper bot.
-//  - scheduled (cron): checks prices and, if a real dip passes every check, sends tick();
-//                      then records any new Latch trades (read-only) for the website's history.
+//  - scheduled, every minute: checks prices and, if a real dip passes every check, sends tick().
+//  - scheduled, every 2 minutes: records Latch trades (read-only) for the website's full history.
 //  - GET /           : a read-only dry run, so anyone can see what the bot would do right now.
 //                      It never sends a transaction.
 //  - GET /trades     : every Latch trade found on chain so far (vault, tx hash, amounts, chip size).
 import { runOnce } from './keeper.js';
 import { recordTrades, readTrades } from './trades.js';
 
+const RECORDER_CRON = '*/2 * * * *'; // must match the second entry in wrangler.jsonc triggers
 const JSON_HEADERS = { 'content-type': 'application/json', 'access-control-allow-origin': '*' };
 
 export default {
   async scheduled(event, env, ctx) {
-    let lists = null;
+    if (event.cron === RECORDER_CRON) { // its own schedule, so it never competes with trading for the per-run request limit
+      if (!env.TRADES) return;
+      try {
+        const t = await recordTrades({ kv: env.TRADES, rpc: env.RPC_URL || 'https://rpc.xlayer.tech',
+          factories: [env.FACTORY_ADDRESS, env.FACTORY2_ADDRESS], requests: Number(env.TRADE_SCAN_REQUESTS || 40),
+          // other public X Layer endpoints first, so the history reader leans less on the trading agent's RPC
+          rpcs: String(env.TRADE_RPC_URLS || 'https://xlayerrpc.okx.com,https://xlayer.drpc.org,https://rpc.xlayer.tech').split(',').map((x) => x.trim()).filter(Boolean) });
+        console.log(JSON.stringify({ trades: t }));
+      } catch (err) {
+        console.error('trade recorder failed:', (err && (err.shortMessage || err.message)) || err);
+      }
+      return;
+    }
     try {
-      const r = await runOnce(env, { send: true, onVaults: (a, b) => { lists = [a, b]; } });
+      const r = await runOnce(env, { send: true });
       console.log(JSON.stringify({ action: r.action, why: r.why, errors: r.errors, market: r.market, vaults: (r.vaults || []).map((v) => ({ v: v.vault, a: v.action, why: v.why, tx: v.tx })) }));
     } catch (err) {
       console.error('keeper run failed:', (err && (err.shortMessage || err.message)) || err);
-    }
-    if (!lists || !env.TRADES) return;
-    try {
-      const t = await recordTrades({
-        kv: env.TRADES, rpc: env.RPC_URL || 'https://rpc.xlayer.tech',
-        factories: [env.FACTORY_ADDRESS, env.FACTORY2_ADDRESS], vaults1: lists[0], vaults2: lists[1],
-        batches: Number(env.TRADE_SCAN_BATCHES || 6), perBatch: Number(env.TRADE_SCAN_PER_BATCH || 25)
-      });
-      console.log(JSON.stringify({ trades: t }));
-    } catch (err) {
-      console.error('trade recorder failed:', (err && (err.shortMessage || err.message)) || err);
     }
   },
 

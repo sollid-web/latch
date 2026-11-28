@@ -23,7 +23,7 @@ version, Latch's agent and its price sources, the trade history, the on-chain De
 
 ## Part B: on your phone (about 30 minutes)
 
-Use https://latch.tapeguard.workers.dev in your phone's browser unless a step says otherwise.
+Use https://okblatch.xyz in your phone's browser unless a step says otherwise.
 
 ### 1. First look, no wallet
 
@@ -75,8 +75,8 @@ Make sure "Send the OKB to" is **not** your fee wallet `0xb4bD…23a4`: use anot
 
 ### 7. AI agent (terminal, optional)
 
-- [ ] `cd ~/latch/agent && node latch.mjs market` → live price and chip answer
-- [ ] `node latch.mjs vaults --owner 0xFd6Afa2b7b7F50Be33050d5adB118fcD85b3721C` → the Agentic Wallet vault
+- [ ] `npx -y latch-xlayer market` → live price (the npm package, no clone)
+- [ ] `npx -y latch-xlayer vaults --owner 0xFd6Afa2b7b7F50Be33050d5adB118fcD85b3721C` → the Agentic Wallet vaults
 
 ---
 

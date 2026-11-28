@@ -270,6 +270,10 @@ function chipWidget(full) {
   </figure>`;
 }
 
+/** Shown when the connected wallet has no OKB: every X Layer transaction needs a tiny network fee in OKB. */
+function gasNote() {
+  return S.account && S.wallet?.okb === 0n ? `<p class="empty-note" role="status">Your wallet has no OKB on X Layer. Every transaction needs a tiny network fee in OKB (less than $0.01), so your wallet will refuse it. Send a little OKB on X Layer to this wallet first, then reload this page (what you entered is kept).</p>` : '';
+}
 function errBox() { return S.error && !S.dialog ? `<p class="err" role="alert">${esc(S.error)}</p>` : ''; }
 
 /* ================================================================ pages */
@@ -280,7 +284,7 @@ function pageHome() {
   return `<section class="hero wrap">
     <div class="hero-copy">
       <h1>Buy OKB on dips. Take profit on rises. A chip decides how much.</h1>
-      <p class="lead">Put USDT0 or OKB in a vault only you control. Latch trades for you on Uniswap, and the size of every trade is decided on chain by a 101-gate TapeOut circuit: more when the move is bigger, less when the market is jumpy, nothing when your rules say no. The bot can never withdraw, raise your limits or send money anywhere but your wallet.</p>
+      <p class="lead">Put USDT0 or OKB in a vault only you control. Latch trades for you on Uniswap, and the size of every trade is decided on chain by a 101-gate TapeOut circuit: more when the move is bigger, less when the market is jumpy, nothing when your rules say no. Latch's agent can never withdraw, raise your limits or send money anywhere but your wallet.</p>
       <div class="cta-row"><a class="btn primary lg" href="#/create?buy">Buy OKB automatically</a><a class="btn quiet lg" href="#/create?sell">Take profit automatically</a></div>
       <p class="fine">No wallet yet? <a href="#/demo">Try the whole journey in Demo mode</a> with play money, or <a href="#/try">see what a vault would do right now</a>.</p>
       <dl class="facts">
@@ -407,6 +411,11 @@ function pageCreate() {
     const w = S.wallet || {};
     const fundTok = dir === 0 ? 'USDT0' : 'WOKB';
     const have = dir === 0 ? w.usdt : w.wokb;
+    // suggest no more than the wallet holds (until the person types their own amount)
+    if (have != null && have > 0n && !c.depositTouched) {
+      let want; try { want = parseUnits(c.deposit || '0', dir === 0 ? 6 : 18); } catch { want = 0n; }
+      if (want > have) c.deposit = dir === 0 ? (Math.floor(Number(formatUnits(have, 6)) * 100) / 100).toString() : (Math.floor(Number(formatUnits(have, 18)) * 1e4) / 1e4).toString();
+    }
     body = `<p class="summary">Your vault is live: ${link(c.created)}. Add ${fundTok} for it to ${dir === 0 ? 'spend' : 'sell'}.</p>
       <div class="form"><label>Amount to add (${fundTok})<input id="c-deposit" data-c="deposit" type="number" min="0" step="any" inputmode="decimal" value="${esc(c.deposit)}">
         <small>Your wallet holds ${have != null ? (dir === 0 ? usd(have) : okb(have, 4)) : '…'} ${fundTok}${dir === 1 && w.okb != null ? ` and ${okb(w.okb, 4)} OKB` : ''}.</small></label></div>
@@ -415,7 +424,7 @@ function pageCreate() {
       <div class="row between"><a class="btn quiet" href="#/vaults">Later</a><span class="row gap">${dir === 1 ? `<button class="btn quiet" data-a="cwrap" ${S.busy ? 'disabled' : ''}>Wrap OKB → WOKB</button>` : ''}<button class="btn primary" data-a="cdeposit" ${S.busy ? 'disabled' : ''}>${S.busy ? esc(S.busy) + '…' : 'Add ' + fundTok}</button></span></div>`;
   }
   return `<section class="wrap block narrow"><h1 class="pg">${c.step === 0 ? 'Create a vault' : dir === 0 ? 'Buy OKB automatically' : 'Take profit automatically'}</h1>
-    ${bar}${errBox()}${body}</section>`;
+    ${bar}${errBox()}${c.step >= 3 ? gasNote() : ''}${body}</section>`;
 }
 
 /* ---------- My vaults ---------- */
@@ -541,7 +550,7 @@ function pageChip() {
   const table = (dir) => `<table class="grid"><thead><tr><th>Strategy</th>${DEPTHS.map((d, i) => `<th>${i === 0 ? (dir === 0 ? 'no dip' : 'no rise') : esc(d)}</th>`).join('')}</tr></thead>
     <tbody>${MODES[dir].map((m, i) => `<tr><th>${esc(m.name)}</th>${curve(i, x.vol).map((k) => `<td class="k${k}">${k ? k + '×' : '–'}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
   return `<section class="wrap block"><h1 class="pg">The strategy chip</h1>
-    <p class="lead-s">Every trade's size is decided by TapeOut circuit #${CID2}: ${GATE_COUNT} NAND gates taped out on X Layer at processor ${link(C.processor)}. The vault turns the market into 16 input bits; the chip answers with 3 bits: allow, and a size of 1×, 2× or 3×. Nothing in the bot or the website can change that answer.</p>
+    <p class="lead-s">Every trade's size is decided by TapeOut circuit #${CID2}: ${GATE_COUNT} NAND gates taped out on X Layer at processor ${link(C.processor)}. The vault turns the market into 16 input bits; the chip answers with 3 bits: allow, and a size of 1×, 2× or 3×. Nothing in the agent or the website can change that answer.</p>
     ${chipWidget(true)}</section>
   <section class="wrap block"><h2>Everything the chip can answer (market: ${esc(VOLS[x.vol])})</h2>
     <p class="fine">Change "Market" above to see how each strategy reacts to a jumpy market. All safety checks passing.</p>
@@ -792,13 +801,13 @@ function pageAgents() {
       </div>
       <div><h2>Your AI agent can manage vaults for you</h2>
         <p>With the <b>OKX Agentic Wallet</b>, an AI assistant (Claude Code, Cursor, Codex and others) creates and manages Latch vaults when you ask in plain words. The wallet keeps the keys; the AI never sees them, and you confirm every step that moves money.</p>
-        <p class="fine">Live on mainnet: an OKX Agentic Wallet created vault ${link(AGENT_VAULT)} this way.</p>
+        <p class="fine">Live on mainnet: an OKX Agentic Wallet created vault ${link(AGENT_VAULT)} this way, and GitHub Copilot, given only the skill, created vault ${link('0xB7e0B824Da8C744A55a6950cC7863960B1A33F65')}.</p>
       </div>
     </div>
     <h2 class="sub">Set it up</h2>
     <ol class="steps-l">
       <li>Set up the OKX Agentic Wallet (OKX's Onchain OS) with your AI assistant.</li>
-      <li>Add the Latch skill:${cmd('npx skills add sollid-web/latch')}</li>
+      <li>Add the Latch skill:${cmd('npx skills add sollid-web/latch')}It installs the <code>latch</code> tool from npm (${C.npm ? `<a href="${esc(C.npm)}" target="_blank" rel="noopener">latch-xlayer</a>` : '<code>latch-xlayer</code>'}) the first time.</li>
       <li>Ask in plain words. For example:</li>
     </ol>
     <div class="chat">
@@ -846,7 +855,7 @@ function dialogView() {
     <div class="row between"><h2 id="dg-t">${esc(g.title)}</h2><button type="button" class="x" data-a="closeDialog" aria-label="Close">×</button></div>
     ${g.text ? `<p class="dlg-text">${g.text}</p>` : ''}<div class="form">${fields}</div>
     ${S.error ? `<p class="err" role="alert">${esc(S.error)}</p>` : ''}
-    ${g.kind === 'add' ? fundSteps(g.d) : ''}
+    ${g.kind === 'add' ? gasNote() + fundSteps(g.d) : ''}
     <div class="row end gap"><button type="button" class="btn quiet" data-a="closeDialog">Cancel</button><button type="submit" class="btn ${g.danger ? 'danger' : 'primary'}" ${S.busy ? 'disabled' : ''}>${S.busy ? esc(S.busy) + '…' : esc(g.ok)}</button></div>
   </form></div>`;
 }
@@ -898,7 +907,7 @@ function render() {
   const focus = document.activeElement?.id;
   const page = { home: pageHome, demo: pageDemo, try: pageTry, create: pageCreate, vaults: pageVaults, chip: pageChip, activity: pageActivity, agents: pageAgents, safety: pageSafety }[S.page] || pageHome;
   app.innerHTML = header() + `<main id="main">${mobileHelp()}${S.note ? `<p class="wrap note" role="status">${esc(S.note)}</p>` : ''}${page()}</main>
-    <footer class="wrap foot"><span>${C.onchain ? 'You are on the on-chain copy of Latch, served from X Layer (DeWEB). ' : ''}Latch runs on X Layer. Every trade is decided by TapeOut circuit #${CID2}${C.circuitId ? ` (classic vaults: #${C.circuitId})` : ''}.${!C.onchain && C.deweb ? ` Also on chain: <a href="${esc(C.deweb.url)}" target="_blank" rel="noopener">${esc(C.deweb.name)}</a>.` : ''}</span><span>${HAS2 ? link(C.factory2, 'address', 'Vault factory') + ' · ' : ''}<a href="${C.repo}" target="_blank" rel="noopener">GitHub</a></span></footer>` + dialogView() + pickerView();
+    <footer class="wrap foot"><span>${C.onchain ? 'You are on the on-chain copy of Latch, served from X Layer (DeWEB). ' : ''}Latch runs on X Layer. Every trade is decided by TapeOut circuit #${CID2}${C.circuitId ? ` (classic vaults: #${C.circuitId})` : ''}.${!C.onchain && C.deweb ? ` Also on chain: <a href="${esc(C.deweb.url)}" target="_blank" rel="noopener">${esc(C.deweb.name)}</a>.` : ''}</span><span>${HAS2 ? link(C.factory2, 'address', 'Vault factory') + ' · ' : ''}<a href="${C.repo}" target="_blank" rel="noopener">GitHub</a></span><span class="indep">Independent project on X Layer. Not affiliated with OKX.</span></footer>` + dialogView() + pickerView();
   if (focus) document.getElementById(focus)?.focus();
   if (S.dialog && !focus) document.querySelector('.sheet input, .sheet select')?.focus();
 }
@@ -968,6 +977,10 @@ async function runDialog() {
   try {
     if (g.kind === 'add') {
       g.fields[0].value = dlg('amt') || '0'; // keep what was typed through re-renders
+      const wokb = d.version === 2 && d.dir === 1; const want = parseUnits(g.fields[0].value, wokb ? 18 : 6);
+      const held = wokb ? S.wallet?.wokb : S.wallet?.usdt;
+      if (want <= 0n) { S.error = 'Enter an amount above 0.'; return render(); }
+      if (held != null && want > held) { S.error = `Your wallet holds ${wokb ? okb(held, 4) + ' WOKB' : usd(held) + ' USDT0'}, less than the ${g.fields[0].value} you entered. Lower the amount${wokb ? ' or wrap more OKB first' : ''}.`; return render(); }
       r = await addFunds(d.address, d.version === 2 ? d.tokenIn : C.usdt, parseUnits(g.fields[0].value, d.version === 2 && d.dir === 1 ? 18 : 6), { normalFee: !!g.retry });
       if (!r && S.sendErr && !declined(S.sendErr)) { // e.g. the wallet's free-gas service answered "network error"
         if (!g.retry) { g.retry = true; g.ok = 'Try again with a normal fee'; S.error = 'Your wallet could not send it. Try again with a normal network fee (a fraction of a cent in OKB), or send from your wallet app with the vault address below.'; }
@@ -1098,6 +1111,8 @@ async function act(a, el) {
       const dec = c.dir === 0 ? 6 : 18;
       let amount; try { amount = parseUnits(c.deposit || '0', dec); } catch { amount = 0n; }
       if (amount <= 0n) { S.error = 'Enter an amount above 0.'; return render(); }
+      const held = c.dir === 0 ? S.wallet?.usdt : S.wallet?.wokb;
+      if (held != null && amount > held) { S.error = `Your wallet holds ${c.dir === 0 ? usd(held) + ' USDT0' : okb(held, 4) + ' WOKB'}, less than the ${c.deposit} you entered. Lower the amount${c.dir === 1 ? ' or wrap more OKB first' : ''}.`; return render(); }
       const r = await addFunds(c.created, c.dir === 0 ? C.usdt : C.wokb, amount);
       if (r) { S.c = null; location.hash = '#/vaults'; await refresh(); }
       return;
@@ -1108,7 +1123,7 @@ async function act(a, el) {
       const tok = two ? (d.dir === 0 ? 'USDT0' : 'WOKB') : 'USDT0';
       const bal = two && d.dir === 1 ? S.wallet?.wokb : S.wallet?.usdt;
       return openDialog({ kind: 'add', d, title: 'Add ' + tok, ok: 'Add ' + tok,
-        fields: [{ id: 'amt', label: `Amount (${tok})`, value: two && d.dir === 1 ? '0.05' : '5', hint: bal != null ? `Your wallet holds ${two && d.dir === 1 ? okb(bal, 4) : usd(bal)} ${tok}.` : '' }] });
+        fields: [{ id: 'amt', label: `Amount (${tok})`, value: (() => { const dflt = two && d.dir === 1 ? 0.05 : 5; if (bal == null || bal <= 0n) return String(dflt); const h = two && d.dir === 1 ? Math.floor(Number(formatUnits(bal, 18)) * 1e4) / 1e4 : Math.floor(Number(formatUnits(bal, 6)) * 100) / 100; return String(Math.min(dflt, h)); })(), hint: bal != null ? `Your wallet holds ${two && d.dir === 1 ? okb(bal, 4) : usd(bal)} ${tok}.` : '' }] });
     }
     case 'vpause': case 'vresume': {
       const r = await send(a === 'vpause' ? 'Pausing' : 'Resuming', { address: v, abi: d.version === 2 ? VAULT2 : VAULT1, functionName: 'setPaused', args: [a === 'vpause'] });
@@ -1154,6 +1169,7 @@ document.addEventListener('input', (e) => {
   if (el.dataset?.c && S.c) {
     S.c[el.dataset.c] = el.type === 'checkbox' ? el.checked : el.value.trim();
     if (el.dataset.c === 'perTx' || el.dataset.c === 'daily') S.c.limitsTouched = true;
+    if (el.dataset.c === 'deposit') S.c.depositTouched = true;
     saveDraft();
   }
 });

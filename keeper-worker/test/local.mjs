@@ -194,13 +194,74 @@ try {
   const real = (await pub.getLogs({ address: all, events: (await import('../src/trades.js')).EVENTS, fromBlock: 0n, toBlock: 'latest' })).length;
   await fetch(RPC, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'anvil_mine', params: ['0x5'] }) });
   let rec, steps = 0;
-  do { rec = await recordTrades({ kv, rpc: RPC, factories: [fac, fac2], vaults1: v1s, vaults2: v2s, windowSize: 3, perBatch: 4, batches: 2, now: 1e12 + steps }); steps++; } while (rec.cursor <= rec.head && steps < 500);
+  do { rec = await recordTrades({ kv, rpc: RPC, factories: [fac, fac2], vaults1: v1s, vaults2: v2s, windowSize: 3, minWindow: 3, perBatch: 4, requests: 2, since: '2000-01-01T00:00:00Z', now: 1e12 + steps }); steps++; } while (rec.cursor <= rec.head && steps < 500);
   const got = await readTrades(kv);
   check('recorder: walks from the first factory to the tip in many small windows', steps > 2 && got.complete, { steps, rec });
   check('recorder: finds every trade on chain (classic + v2), each once', real > 3 && got.trades.length === real, { real, got: got.trades.length });
   check('recorder: v2 rows carry direction and chip size; classic rows are version 1', got.trades.some((t) => t.version === 2 && t.k >= 1 && t.dir === 1) && got.trades.some((t) => t.version === 1), got.trades.slice(0, 3));
-  const before = puts; rec = await recordTrades({ kv, rpc: RPC, factories: [fac, fac2], vaults1: v1s, vaults2: v2s, windowSize: 3, now: 1e12 + steps + 1000 });
+  const before = puts; rec = await recordTrades({ kv, rpc: RPC, factories: [fac, fac2], vaults1: v1s, vaults2: v2s, windowSize: 3, minWindow: 3, since: '2000-01-01T00:00:00Z', now: 1e12 + steps + 1000 });
   check('recorder: re-running finds no duplicates and does not write when nothing changed', rec.found === 0 && puts === before && (await readTrades(kv)).trades.length === real, { rec, puts, before });
+  { // start from a date: finds a block at or just before it, from block timestamps only
+    const mid = await pub.getBlock({ blockNumber: 30n });
+    const kv2 = { m: new Map(), get: async (k) => (kv2.m.has(k) ? JSON.parse(kv2.m.get(k)) : null), put: async (k, v) => { kv2.m.set(k, v); } };
+    const r1 = await recordTrades({ kv: kv2, rpc: RPC, factories: [fac, fac2], vaults1: v1s, vaults2: v2s, windowSize: 3, minWindow: 3, perBatch: 2, requests: 1, since: new Date(Number(mid.timestamp) * 1000).toISOString(), now: 5e12 });
+    check('recorder: a start date maps to a block at or before it', r1.start <= 30 && !r1.error, r1);
+    // an RPC that refuses batches: falls back to one window per request and still catches up
+    const noBatch = async (url, init) => { const body = JSON.parse(init.body); if (Array.isArray(body) && body.length > 1) return new Response(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'batch not supported' } }), { status: 200 }); return fetch(url, init); };
+    const kv3 = { m: new Map(), get: async (k) => (kv3.m.has(k) ? JSON.parse(kv3.m.get(k)) : null), put: async (k, v) => { kv3.m.set(k, v); } };
+    let r3, n = 0; do { r3 = await recordTrades({ kv: kv3, rpc: RPC, factories: [fac, fac2], vaults1: v1s, vaults2: v2s, windowSize: 5, minWindow: 5, perBatch: 4, requests: 3, since: '2000-01-01T00:00:00Z', fetchFn: noBatch, now: 6e12 + n }); n++; } while (r3.cursor <= r3.head && n < 200);
+    check('recorder: RPC without batch support → one window per request, still finds every trade', (await readTrades(kv3)).trades.length === real, { n, r3 });
+  }
+  { // an RPC that refuses big block ranges (like the public X Layer RPC): the window halves until it is accepted
+    const LIMIT = 10;
+    const ranged = async (url, init) => {
+      const body = JSON.parse(init.body); const items = Array.isArray(body) ? body : [body];
+      const tooBig = items.some((x) => x.method === 'eth_getLogs' && Number(x.params[0].toBlock) - Number(x.params[0].fromBlock) + 1 > LIMIT);
+      if (tooBig) return new Response(JSON.stringify(Array.isArray(body) ? items.map((x) => ({ jsonrpc: '2.0', id: x.id, error: { code: -32000, message: 'block range exceeds limit' } })) : { jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'block range exceeds limit' } }), { status: 200 });
+      return fetch(url, init);
+    };
+    const kv4 = { m: new Map(), get: async (k) => (kv4.m.has(k) ? JSON.parse(kv4.m.get(k)) : null), put: async (k, v) => { kv4.m.set(k, v); } };
+    let r4, n = 0; do { r4 = await recordTrades({ kv: kv4, rpc: RPC, factories: [fac, fac2], windowSize: 80, minWindow: 5, perBatch: 3, requests: 4, since: '2000-01-01T00:00:00Z', fetchFn: ranged, now: 7e12 + n }); n++; } while (r4.cursor <= r4.head && n < 300);
+    const got4 = await readTrades(kv4);
+    check('recorder: RPC with a block-range limit → window shrinks (80 → ' + got4.blocksPerRequest + '), still finds every trade', got4.blocksPerRequest <= LIMIT && got4.trades.length === real, { n, got4: { ...got4, trades: got4.trades.length } });
+    check('recorder: with no vault list given, reads both factories itself', got4.trades.length === real);
+  }
+  { // like the public X Layer RPC on mainnet: "over rate limit" when hit with too many requests at once
+    let inFlight = 0, refused = 0;
+    const limited = async (url, init) => {
+      if (url.includes('dead.invalid')) throw new Error('fetch failed (dns)');
+      inFlight++;
+      try {
+        if (inFlight > 2) { refused++; return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -32016, message: 'over rate limit' } }), { status: 200 }); }
+        await new Promise((r) => setTimeout(r, 5));
+        return await fetch(url, init);
+      } finally { inFlight--; }
+    };
+    const kv5 = { m: new Map(), get: async (k) => (kv5.m.has(k) ? JSON.parse(kv5.m.get(k)) : null), put: async (k, v) => { kv5.m.set(k, v); } };
+    let r5, n = 0;
+    do { r5 = await recordTrades({ kv: kv5, rpc: RPC, rpcs: ['http://dead.invalid:1', RPC], factories: [fac, fac2], windowSize: 6, minWindow: 6, perBatch: 2, requests: 12, parallel: 8, pauseMs: 0, since: '2000-01-01T00:00:00Z', fetchFn: limited, now: 8e12 + n }); n++; }
+    while (r5.cursor <= r5.head && n < 300);
+    const got5 = await readTrades(kv5);
+    check('recorder: "over rate limit" → slows down (8 → ' + got5.parallel + ' at a time) and still finds every trade', refused > 0 && got5.parallel <= 4 && got5.trades.length === real, { n, refused, got5: { ...got5, trades: got5.trades.length } });
+    check('recorder: a rate limit is not mistaken for a block-range limit (window stays 6)', got5.blocksPerRequest === 6, got5.blocksPerRequest);
+    check('recorder: a dead endpoint in the list is dropped, the others carry on', /dead\.invalid/.test(got5.lastSkippedEndpoint || '') && !got5.error, got5.lastSkippedEndpoint);
+  }
+  { // like mainnet on 28 Nov: the RPC counts every lookup inside a bundle, so a bundle of more than 3 is always "over rate limit",
+    // even sent one at a time. The recorder must make the bundle smaller, not only send fewer at once (it was stuck for a week).
+    let refusedB = 0;
+    const heavy = async (url, init) => {
+      const body = JSON.parse(init.body);
+      if (Array.isArray(body) && body.length > 3) { refusedB++; return new Response(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32016, message: 'over rate limit' } }), { status: 200 }); }
+      return fetch(url, init);
+    };
+    const kv6 = { m: new Map(), get: async (k) => (kv6.m.has(k) ? JSON.parse(kv6.m.get(k)) : null), put: async (k, v) => { kv6.m.set(k, v); } };
+    let r6, n = 0;
+    do { r6 = await recordTrades({ kv: kv6, rpc: RPC, factories: [fac, fac2], windowSize: 6, minWindow: 6, perBatch: 6, requests: 6, parallel: 1, pauseMs: 0, since: '2000-01-01T00:00:00Z', fetchFn: heavy, now: 9e12 + n }); n++; }
+    while (r6.cursor <= r6.head && n < 300);
+    const got6 = await readTrades(kv6);
+    check('recorder: a bundle the RPC always calls "over rate limit" → bundle shrinks (6 → ' + got6.windowsPerRequest + '), still finds every trade', refusedB > 0 && got6.windowsPerRequest <= 3 && got6.complete && got6.trades.length === real, { n, refusedB, got6: { ...got6, trades: got6.trades.length } });
+    check('recorder: /trades says which endpoint last refused and why', /over rate limit/.test(got6.lastRateLimit || ''), got6.lastRateLimit);
+  }
   check('recorder: no KV binding → skipped, never throws', (await recordTrades({ kv: null, rpc: RPC, factories: [fac] })).skipped);
 } catch (err) {
   console.error('TEST CRASHED:', err); failures++;

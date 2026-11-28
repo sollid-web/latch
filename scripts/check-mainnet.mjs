@@ -5,11 +5,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { createPublicClient, http, parseAbi, getAddress } from 'viem';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const C = JSON.parse(fs.readFileSync(process.env.CONFIG || path.join(root, 'deployments/web-config.json'), 'utf8')); // CONFIG=… for a local test chain
-const SITE = 'https://latch.tapeguard.workers.dev';
+const SITE = 'https://okblatch.xyz';
 const chain = { id: 196, name: 'X Layer', nativeCurrency: { name: 'OKB', symbol: 'OKB', decimals: 18 }, rpcUrls: { default: { http: C.rpc } } };
 const pub = createPublicClient({ chain, transport: http(C.rpc[0], { retryCount: 3, timeout: 20_000 }) });
 
@@ -95,16 +97,21 @@ await step('Trade history', async () => {
 });
 
 await step('DeWEB', async () => {
-  const html = await get(C.deweb.url);
-  ok('on-chain copy loads at ' + C.deweb.url, html.length > 10_000, `${Math.round(html.length / 1024)} KiB`);
-  ok('on-chain copy is the latest (has Demo mode)', /Try the whole journey/.test(html), 're-upload with ONCHAIN=1 ... publish-deweb.mjs if this fails');
+  const shell = await get(C.deweb.url); // TapeKit's gateway page, which then loads the site from chain in the browser
+  ok('DeWEB gateway answers at ' + C.deweb.url, shell.length > 500, `${Math.round(shell.length / 1024)} KiB loader`);
+  const SITES = '0xd6EFb7adCc9c83dC4924Ad56f6a8E4e969b9ADB6';
+  const info = await pub.readContract({ address: SITES, abi: parseAbi(['function fileInfo(address container, string path) view returns (uint32 size, string contentType, bytes32 sha256Hash, uint40 updatedAt, uint256 chunkCount)']), functionName: 'fileInfo', args: [C.deweb.container, 'index.html'] });
+  execFileSync(process.execPath, [path.join(root, 'scripts/build-web.mjs')], { env: { ...process.env, ONCHAIN: '1' }, stdio: 'ignore' });
+  const local = '0x' + crypto.createHash('sha256').update(fs.readFileSync(path.join(root, 'public-onchain/index.html'))).digest('hex');
+  ok('on-chain copy is stored on X Layer', Number(info[0]) > 100_000, `${Math.round(Number(info[0]) / 1024)} KiB, updated ${new Date(Number(info[3]) * 1000).toISOString().slice(0, 16)}`);
+  ok('on-chain copy matches the current build', info[2].toLowerCase() === local, info[2].toLowerCase() === local ? '' : 're-upload: ONCHAIN=1 node scripts/build-web.mjs && SEND=1 node scripts/publish-deweb.mjs');
 });
 
 await step('Verified source', async () => {
   for (const [n, a] of [['factory2', C.factory2], ['classic factory', C.factory], ['deposit helper', C.depositor]]) {
-    const r = await fetch(`https://sourcify.dev/server/check-all-by-addresses?addresses=${a}&chainIds=196`).then((x) => x.json()).catch(() => null);
-    const st = r?.[0]?.chainIds?.[0]?.status;
-    ok(`${n} verified on Sourcify`, st === 'perfect' || st === 'partial', st || 'not found');
+    const r = await fetch(`https://sourcify.dev/server/v2/contract/196/${a}`).then((x) => x.json()).catch(() => null);
+    const st = r?.match || r?.runtimeMatch || r?.creationMatch;
+    ok(`${n} verified on Sourcify`, !!st, st ? st.replace('exact_match', 'exact match') : 'not found: run ./scripts/verify-contracts.sh');
   }
 });
 

@@ -92,7 +92,7 @@ const pick = await page.locator('.picker').innerText().catch(() => '');
 ok('Connect opens the wallet picker: browser wallet + scan with a phone wallet', /Connect a wallet/.test(pick) && /OKX Wallet/.test(pick) && /Scan with a phone wallet/.test(pick) && /X Layer/.test(pick), pick);
 await page.screenshot({ path: shots + '/1c-wallet-picker.png' });
 await page.keyboard.press('Escape'); await page.waitForTimeout(300);
-ok('Escape closes the picker without connecting', !(await page.locator('.picker').count()) && (await page.locator('header [data-a=connect]').count()) === 1);
+ok('Escape closes the picker without connecting (only a non-clickable fading copy may linger outside the app)', !(await page.locator('#app .picker').count()) && (await page.locator('.picker').evaluateAll((els) => els.every((e) => e.closest('.lg-ghost') && e.closest('[inert]')))) && (await page.locator('header [data-a=connect]').count()) === 1);
 await page.click('header [data-a=connect]'); await page.waitForTimeout(400);
 await page.click('.picker [data-a=pick][data-id^="inj:"]'); await page.waitForTimeout(1500);
 ok('picking the browser wallet connects and closes the picker', !(await page.locator('.picker').count()) && /0x/i.test(await page.locator('header').innerText()), await page.locator('header').innerText());
@@ -109,6 +109,8 @@ ok('review sentence in plain English', /Latch buys 2 USDT0 of OKB at most once a
 await page.screenshot({ path: shots + '/4-create-review.png', fullPage: true });
 await page.click('[data-a=ccreate]'); await page.waitForTimeout(2500);
 ok('vault created → Add funds step', /Your vault is live/.test(await txt()), (await txt()).slice(0, 300));
+await page.fill('#c-deposit', '99999999'); await page.click('[data-a=cdeposit]'); await page.waitForTimeout(800);
+ok('Add funds: more than the wallet holds is refused plainly, before the wallet opens', /Your wallet holds [\d.,]+ USDT0, less than the 99999999 you entered/.test(await txt()) && (await page.evaluate(() => location.hash)) !== '#/vaults' && /Your vault is live/.test(await txt()), (await txt()).slice(0, 400));
 await page.fill('#c-deposit', '20'); await page.click('[data-a=cdeposit]'); await page.waitForFunction(() => location.hash === '#/vaults', null, { timeout: 20000 }).catch(() => {}); await page.waitForTimeout(2500);
 ok('after funding: on My vaults with the Buy vault', /My vaults/.test(await txt()) && /Buy OKB · Smart/.test(await txt()), (await txt()).slice(0, 300));
 ok('My vaults: chip decision shows buy 3×', /buy 3×/.test(await txt()), (await txt()).match(/Decision[^\n]*\n[^\n]*/)?.[0]);
@@ -126,6 +128,15 @@ await page.reload(); await page.waitForTimeout(2500); // phone browsers often re
 ok('create: typed values survive a page reload', (await page.inputValue('#c-ref')) === '70' && (await page.inputValue('#c-limit')) === '72', await page.inputValue('#c-ref'));
 await page.click('[data-a=cnext]'); await page.waitForTimeout(300);
 ok('take profit review: ladder sentence', /Latch sells at most once a day, only on a move: 0\.02 OKB when OKB is 5% or more above 70\.00/.test(await txt()), (await txt()).split('\n').find((l) => /Latch sells/.test(l)));
+{ // a wallet with no OKB is told before it tries to sign (found in a fresh-wallet phone test)
+  const node = async (method, params) => (await (await fetch(cfg.rpc[0], { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) })).json()).result;
+  const okbBal = await node('eth_getBalance', [cfg.user, 'latest']);
+  ok('review: no "no OKB" warning while the wallet has OKB', !/Your wallet has no OKB on X Layer/.test(await txt()));
+  await node('anvil_setBalance', [cfg.user, '0x0']); await page.reload(); await page.waitForTimeout(3000);
+  ok('review: a wallet with 0 OKB is warned it needs a tiny OKB network fee first', /Your wallet has no OKB on X Layer\. Every transaction needs a tiny network fee in OKB/.test(await txt()), (await txt()).slice(0, 400));
+  await node('anvil_setBalance', [cfg.user, okbBal]); await page.reload(); await page.waitForTimeout(3000);
+  ok('review: warning gone once the wallet has OKB again', !/Your wallet has no OKB/.test(await txt()) && /Create my vault/.test(await txt()));
+}
 await page.click('[data-a=ccreate]'); await page.waitForTimeout(2500);
 await page.evaluate(() => { // pretend the page reloaded before it saw the approval: back on Review, vault count from before
   const d = JSON.parse(localStorage.getItem('latch.create.v2')); d.c.step = 3; d.c.before = 1; d.c.by = d.c.by || null; d.c.created = undefined;

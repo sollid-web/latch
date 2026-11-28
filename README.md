@@ -13,7 +13,7 @@ withdraw, raise a limit, or send money anywhere but the owner's wallet.
 
 | | |
 |---|---|
-| **Live app** | https://latch.tapeguard.workers.dev · **no wallet needed:** [Demo mode](https://latch.tapeguard.workers.dev/#/demo) runs the whole journey (create, market moves, the agent trades, pause, withdraw) with play money, the live OKB price and the real circuit #2 netlist · [Try it](https://latch.tapeguard.workers.dev/#/try) previews one decision |
+| **Live app** | https://okblatch.xyz · **no wallet needed:** [Demo mode](https://okblatch.xyz/#/demo) runs the whole journey (create, market moves, the agent trades, pause, withdraw) with play money, the live OKB price and the real circuit #2 netlist · [Try it](https://okblatch.xyz/#/try) previews one decision |
 | **On DeWEB** | https://2-2-435.tapekit.org/ (`2.2.435.tape`, stored in circuit #2's own container, served by TapeKit) |
 | **Demo video (≤ 3 min)** | `[YouTube link]` |
 | **TapeOut processor** | `0x3728a5dfE596F6bF7309cA911e61ecaC9b0b6813` (Latch's own processor, X Layer mainnet, chain 196) |
@@ -21,7 +21,7 @@ withdraw, raise a limit, or send money anywhere but the owner's wallet.
 | **Contracts** | LatchFactory2 [`0x9C64…6428`](https://www.oklink.com/xlayer/address/0x9C647a631fe59813c430D03330C3A4Da21df6428) (Buy and Take Profit vaults) · LatchFactory [`0xc700…BD11`](https://www.oklink.com/xlayer/address/0xc700C9865f237612b0bA86408BB4C182D41ABD11) (classic) · Uniswap V3 USDT0/WOKB 0.05% pool [`0xe3BE…5082`](https://www.oklink.com/xlayer/address/0xe3BE6A0137f1b0602Fc1a4841686f43B340a5082) |
 | **TapeOut features used** | **Circuits:** every v2 trade calls `processor.eval(2, inputs)` in the same transaction and is sized by the answer. **DeWEB + TapeKit:** the full app is stored in circuit #2's ERC-6551 container and passes TapeKit's "100% on-chain" rule. **Circuit explorer:** the site runs the same netlist in the browser and can ask the live processor about any input. |
 | **Business** | [Revenue and users](#revenue-model) below and in [SUBMISSION.md](SUBMISSION.md) |
-| **Usage, live** | [Activity](https://latch.tapeguard.workers.dev/#/activity): vaults, trades checked by a chip, OKB bought and profit taken, all read from chain. Full trade list, each with its tx hash: [latch-keeper.tapeguard.workers.dev/trades](https://latch-keeper.tapeguard.workers.dev/trades) |
+| **Usage, live** | [Activity](https://okblatch.xyz/#/activity): vaults, trades checked by a chip, OKB bought and profit taken, all read from chain. Full trade list, each with its tx hash: [latch-keeper.tapeguard.workers.dev/trades](https://latch-keeper.tapeguard.workers.dev/trades) |
 | **Deposit helper** | [`LatchDeposit` `0x948e…E3D4`](https://www.oklink.com/xlayer/address/0x948ea5060786167f1d9f7fdfbF3301c59893E3D4): behind the site's Add funds button (OKX Wallet refuses plain token transfers from websites on X Layer). Only moves the caller's own tokens, only into Latch vaults, only the vault's own token; holds nothing, no owner. Tests: `audit/deposit.test.mjs` (11 checks). |
 | **Verified source** | All three live contracts verified on [Sourcify](https://repo.sourcify.dev/196/0x9C647a631fe59813c430D03330C3A4Da21df6428) with an **exact match** (byte-for-byte, including metadata): LatchFactory2, the LatchVault template every vault clones, and the classic LatchFactory. All three are also verified on OKLink, X Layer's explorer. (v2 was rebuilt without via-IR on 24 November so OKLink could verify it; the earlier via-IR factory `0x4Af2…81b8` is retired.) |
 | **Assurance** | Circuit #2 checked on all 65,536 inputs, against the live processor too · 47 contract tests on Uniswap's real V3 code · Slither · three independent reviews with every finding answered ([audit/](audit/)) · mainnet-fork rehearsal before every mainnet step |
@@ -79,8 +79,10 @@ The OKX Plugin Store currently adds plugins only by its own curation, not by out
 npx skills add sollid-web/latch
 ```
 
+The skill then installs the `latch` tool once from npm ([`latch-xlayer`](https://www.npmjs.com/package/latch-xlayer): `npm install -g latch-xlayer`, or `npx latch-xlayer <command>`) and signs with the OKX Agentic Wallet (`onchainos`).
+
 **How it works:**
-- The [`latch`](agent/latch.mjs) command-line tool reads Latch on X Layer and **prepares** transactions.
+- The [`latch`](agent/latch.mjs) command-line tool ([`latch-xlayer` on npm](https://www.npmjs.com/package/latch-xlayer)) reads Latch on X Layer and **prepares** transactions.
 - The agent's Agentic Wallet signs each one with `onchainos wallet contract-call` inside OKX's TEE, after the user confirms it.
 - The tool never sees a key.
 
@@ -98,7 +100,7 @@ npx skills add sollid-web/latch
 1. **"Buy OKB on dips for me":** a user's assistant sets up and manages a vault from their Agentic Wallet.
 2. **The Agentic Wallet as a vault's own agent:** gas-free on X Layer. Because the vault and the chip enforce every limit, a tricked or confused agent still can't trade more, more often or at a worse price than the owner allowed, and can't send funds anywhere else.
 
-**Live on mainnet:** an OKX Agentic Wallet created a Latch vault this way: [`0x367F…10b7`](https://www.oklink.com/x-layer/address/0x367F3EB73E6C5e7883Aa7D1db76Cb29C11E710b7). Also tested end to end on a local chain with Uniswap's real contract code (`agent/test.mjs`, 22 checks). Any other agent or script can do the same with `vault.preview(agent)` and `vault.tick()`.
+**Live on mainnet:** an OKX Agentic Wallet created a Latch vault this way: [`0x367F…10b7`](https://www.oklink.com/x-layer/address/0x367F3EB73E6C5e7883Aa7D1db76Cb29C11E710b7). Also tested end to end on a local chain with Uniswap's real contract code (`agent/test.mjs`, 25 checks). Any other agent or script can do the same with `vault.preview(agent)` and `vault.tick()`.
 
 ## Revenue model
 
@@ -175,4 +177,4 @@ ONCHAIN=1 node scripts/build-web.mjs && node scripts/check-onchain.mjs   # DeWEB
 - **安全：** 机器人只能触发交易，不能提款、不能提高限额、不能把资金转到别处。限额只能下调。所有者可随时暂停或全部提取。
 - **生态集成：** 自有 TapeOut 处理器 `0x3728…6813`，电路 #1 和 #2；整个网站以单个 HTML 文件存放在电路 #2 的 ERC-6551 容器中（DeWEB），域名 `2.2.435.tape`，通过 TapeKit 网关访问：https://2-2-435.tapekit.org/ ，并通过 TapeKit 的"100% 链上"静态规则检查。
 - **商业模式：** 每笔交易收取 1% 手续费，随交易量降至 0.25%。机器人支付 Gas。
-- **免钱包体验：** https://latch.tapeguard.workers.dev/#/try ：输入策略，立即看到金库此刻会怎么做（使用实时 Uniswap 价格和链上真实芯片）。
+- **免钱包体验：** https://okblatch.xyz/#/try ：输入策略，立即看到金库此刻会怎么做（使用实时 Uniswap 价格和链上真实芯片）。
