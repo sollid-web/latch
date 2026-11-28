@@ -302,7 +302,7 @@ html.glass .nav a::after{content:"";position:absolute;left:0;right:0;bottom:-4px
 html.glass .nav a:hover:not(.on)::after{transform:scaleX(1)}
 html.glass .nav a.on{box-shadow:none}
 html.glass .nav a.on::after{transform:none;opacity:1;bottom:0;box-shadow:0 0 10px rgba(227,176,75,.6)}
-html.glass .nav a.on.lg-slide::after{animation:lg-slide-x var(--dur-slow) var(--ease-spring) both;transform-origin:left}
+html.glass .nav a.on.lg-slide::after{animation:lg-slide-x var(--dur-slow) var(--ease-spring) backwards;transform-origin:left}
 
 /* ── buttons: liquid gold, glass quiet, light sweep on hover, springy press ── */
 html.glass .btn{position:relative;overflow:hidden;isolation:isolate;
@@ -327,7 +327,7 @@ html.glass .seg button.on{background:none;box-shadow:none}
 html.glass .seg button.on::before{content:"";position:absolute;inset:0;z-index:-1;border-radius:4px;transform-origin:left;
   background:linear-gradient(180deg,rgba(47,82,73,.55),var(--mask-2) 70%);
   box-shadow:inset 0 0 0 1px var(--gold),inset 0 1px 0 rgba(242,200,109,.28),0 6px 16px -8px rgba(227,176,75,.5)}
-html.glass .seg button.on.lg-slide::before{animation:lg-slide var(--dur-slow) var(--ease-spring) both}
+html.glass .seg button.on.lg-slide::before{animation:lg-slide var(--dur-slow) var(--ease-spring) backwards}
 @keyframes lg-slide{from{transform:translateX(var(--fx,0)) scaleX(var(--fw,1))}to{transform:none}}
 @keyframes lg-slide-x{from{transform:translateX(var(--fx,0)) scaleX(var(--fw,1))}to{transform:none}}
 html.glass .seg button:active{transform:scale(.96);transition:transform var(--dur-fast)}
@@ -337,11 +337,11 @@ html.glass .die{background:radial-gradient(120% 90% at 50% 0%,rgba(227,176,75,.0
   box-shadow:inset 0 0 0 4px #0a1411,inset 0 0 0 5px rgba(227,176,75,.3),0 0 0 1px rgba(227,176,75,.06),0 20px 44px -26px rgba(227,176,75,.4)}
 html.glass .gates span{box-shadow:inset 0 1px 0 rgba(233,241,236,.05);transition:none}
 html.glass .gates span.hi{background:linear-gradient(180deg,var(--gold-hi),var(--gold));box-shadow:0 0 6px rgba(227,176,75,.55),inset 0 1px 0 rgba(233,241,236,.45)}
-html.glass .gates span.lg-flip{animation:lg-ignite var(--dur-slow) var(--ease-spring) both;animation-delay:calc(var(--i,0) * 7ms)}
+html.glass .gates span.lg-flip{animation:lg-ignite var(--dur-slow) var(--ease-spring) backwards;animation-delay:calc(var(--i,0) * 7ms)}
 html.glass .gates span.lg-flip:not(.hi){animation-name:lg-douse}
 @keyframes lg-ignite{0%{transform:scale(.35);box-shadow:0 0 0 rgba(227,176,75,0)}55%{transform:scale(1.25);box-shadow:0 0 14px rgba(242,200,109,.9)}100%{transform:none}}
 @keyframes lg-douse{0%{transform:scale(1.15);opacity:.4}100%{transform:none;opacity:1}}
-html.glass .lg-tick{animation:lg-tick var(--dur-base) var(--ease-out) both}
+html.glass .lg-tick{animation:lg-tick var(--dur-base) var(--ease-out) backwards}
 @keyframes lg-tick{from{opacity:.15;transform:translateY(7px);filter:blur(3px)}}
 html.glass .allow .verdict-word{text-shadow:0 0 24px rgba(121,224,190,.35)}html.glass .deny .verdict-word{text-shadow:0 0 24px rgba(255,138,112,.3)}
 html.glass input[type=range]{transition:filter var(--dur-base)}html.glass input[type=range]:hover{filter:drop-shadow(0 0 6px rgba(227,176,75,.45))}
@@ -395,8 +395,8 @@ html.glass .chat .ai{background:rgba(23,44,38,.6);-webkit-backdrop-filter:blur(1
 html.glass .modal{background:rgba(4,10,8,.58);-webkit-backdrop-filter:blur(var(--blur-scrim));backdrop-filter:blur(var(--blur-scrim))}
 html.glass .sheet{-webkit-backdrop-filter:blur(var(--blur-sheet));backdrop-filter:blur(var(--blur-sheet));
   background:linear-gradient(180deg,rgba(23,44,38,.82),rgba(17,33,29,.78));box-shadow:var(--glass-rest),0 40px 100px -40px #000}
-html.glass .modal.lg-sheet-in{animation:lg-fade var(--dur-base) var(--ease-out) both}
-html.glass .modal.lg-sheet-in .sheet{animation:lg-sheet var(--dur-slow) var(--ease-spring) both}
+html.glass .modal.lg-sheet-in{animation:lg-fade var(--dur-base) var(--ease-out) backwards}
+html.glass .modal.lg-sheet-in .sheet{animation:lg-sheet var(--dur-slow) var(--ease-spring) backwards}
 html.glass .lg-ghost{pointer-events:none!important;animation:lg-fade var(--dur-base) var(--ease-out) reverse both}
 html.glass .lg-ghost .sheet{animation:lg-sheet var(--dur-base) var(--ease-out) reverse both}
 @keyframes lg-fade{from{opacity:0}}
@@ -404,14 +404,14 @@ html.glass .lg-ghost .sheet{animation:lg-sheet var(--dur-base) var(--ease-out) r
 html.glass .x{transition:transform var(--dur-base) var(--ease-spring),color var(--dur-fast)}html.glass .x:hover{transform:rotate(90deg)}
 
 /* ── entrances: only on first load and route change (class added by the conductor), never on re-render ── */
-html.glass .lg-in{animation:lg-rise var(--dur-enter) var(--ease-out) both;animation-delay:calc(var(--i,0) * 70ms)}
+html.glass .lg-in{animation:lg-rise var(--dur-enter) var(--ease-out) backwards;animation-delay:calc(var(--i,0) * 70ms)}
 @keyframes lg-rise{from{opacity:0;transform:translateY(16px);filter:blur(6px)}}
-html.glass .lg-item{animation:lg-rise-s var(--dur-enter) var(--ease-out) both;animation-delay:calc(120ms + var(--j,0) * 55ms)}
+html.glass .lg-item{animation:lg-rise-s var(--dur-enter) var(--ease-out) backwards;animation-delay:calc(120ms + var(--j,0) * 55ms)}
 @keyframes lg-rise-s{from{opacity:0;transform:translateY(10px)}}
-html.glass :is(.lg-in,.lg-item) .meter span{animation:lg-grow var(--dur-enter) var(--ease-out) both;animation-delay:calc(var(--i,0) * 70ms + 200ms)}
+html.glass :is(.lg-in,.lg-item) .meter span{animation:lg-grow var(--dur-enter) var(--ease-out) backwards;animation-delay:calc(var(--i,0) * 70ms + 200ms)}
 @keyframes lg-grow{from{transform:scaleX(0)}}
-html.glass .lg-in .gates span.hi{animation:lg-ignite var(--dur-slow) var(--ease-spring) both;animation-delay:calc(200ms + var(--g,0) * 5ms)}
-html.glass .lg-in .curve i{animation:lg-rise-bar var(--dur-enter) var(--ease-spring) both;transform-origin:bottom}
+html.glass .lg-in .gates span.hi{animation:lg-ignite var(--dur-slow) var(--ease-spring) backwards;animation-delay:calc(200ms + var(--g,0) * 5ms)}
+html.glass .lg-in .curve i{animation:lg-rise-bar var(--dur-enter) var(--ease-spring) backwards;transform-origin:bottom}
 @keyframes lg-rise-bar{from{transform:scaleY(0)}}
 
 /* ── budgets: phones get less frost; reduced motion gets none of the motion ── */
@@ -562,6 +562,13 @@ html.glass :is(.muted,dt,.ctl-l,.sees-t,.sees-l span,.fine,small,.die-sub,.meter
 
 /* the background light, faded so it sits behind the UI instead of competing with it */
 html.glass body::before{opacity:.7}
+/* ── Part 2d · Crisp: nothing soft on text or edges ─────────────────────────────────────────────
+   No text halos or glows, no grain, tighter gate glow, sharp edges; the glass, light and colours are unchanged. */
+html.glass :is(.chipw,.vault,.sheet,.feed,.flow,.job,.sees,.howto,.empty,.demo-dec){text-shadow:none}
+html.glass :is(.muted,dt,.ctl-l,.sees-t,.sees-l span,.fine,small,.die-sub,.meter-label,.curve-x,.wgrp,.lead-s,figcaption,.facts dt){text-shadow:none}
+html.glass :is(.allow,.deny) .verdict-word{text-shadow:none}
+html.glass :is(.chipw,.vault,.sheet,.feed,.flow,.job)::after{display:none}
+html.glass .gates span.hi{box-shadow:0 0 7px rgba(227,176,75,.5),inset 0 1px 0 rgba(233,241,236,.55)}
 </style>
 </head>
 <body>
