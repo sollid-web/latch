@@ -817,6 +817,15 @@ function pageAgents() {
       <p class="ai">Done: vault 0x…, funded with 5 USDT0. Latch's agent checks it every minute.</p>
     </div>
     <p class="fine">Illustrative conversation. The assistant uses the <code>latch</code> tool: check the market, preview the chip, create, fund, pause, change strategy, withdraw. The tool only prepares transactions; the Agentic Wallet signs them after you confirm.</p>
+    <h2 class="sub">Or use the tool yourself</h2>
+    <p>No AI needed. Anyone with Node.js can ask Latch about the market, the chip and any vault from a terminal, with no wallet and no sign-up:</p>
+    ${cmd('npx -y latch-xlayer market')}
+    <p class="fine">Live OKB price as the vaults see it: Uniswap now, its 30-minute average, and whether the market is calm or jumpy.</p>
+    ${cmd('npx -y latch-xlayer try --dir buy --mode smart --ref 85 --limit 95 --base 1')}
+    <p class="fine">What a vault with these settings would do right now. The answer comes from the real chip on X Layer.</p>
+    ${cmd('npx -y latch-xlayer status --vault ' + AGENT_VAULT)}
+    <p class="fine">Any vault's settings, balance, what the chip sees and its next move.</p>
+    <p class="mt">The same tool also creates, funds, pauses and withdraws (<code>latch --help</code> lists everything). For those it only prepares the transaction: your OKX Agentic Wallet signs it, so the tool never touches a key.</p>
     <h2 class="sub">What an AI agent can't do</h2>
     <ul class="plain"><li>Spend more than your per-trade and daily limits, or pay above your ceiling</li><li>Send the output anywhere but the wallet fixed when the vault was made</li><li>Take money out of a vault it doesn't own</li></ul>
     <p class="mt"><a href="${esc(C.repo)}/tree/main/plugin/latch-plugin" target="_blank" rel="noopener">The Latch skill and tool, with its source</a></p>

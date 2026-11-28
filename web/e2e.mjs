@@ -205,6 +205,7 @@ await page.click('[data-a=dm][data-k=mood][data-v="4"]'); await page.click('[dat
 ok('demo: very jumpy market → Smart waits, and says why', /very jumpy, so this strategy waits/.test(await txt()), (await txt()).slice(0, 900));
 await go('#/agents', 500);
 ok('agents page: Latch agent + AI agents with the Agentic Wallet, install command, live vault', /Latch's agent runs your vault/.test(await txt()) && /npx skills add sollid-web\/latch/.test(await txt()) && /OKX Agentic Wallet/.test(await txt()));
+ok('agents page: shows people the tool directly, with read-only commands that need no wallet', /Or use the tool yourself/.test(await txt()) && /npx -y latch-xlayer market/.test(await txt()) && /npx -y latch-xlayer try --dir buy --mode smart --ref 85 --limit 95 --base 1/.test(await txt()) && /npx -y latch-xlayer status --vault 0x/.test(await txt()));
 await page.screenshot({ path: shots + '/7b-agents.png', fullPage: true });
 await go('#/safety', 500);
 ok('safety page', /What a stolen agent key could do/.test(await txt()) && /Questions/.test(await txt()));

@@ -138,7 +138,7 @@ summary::marker{color:var(--gold)}
 .addrbox .hex{flex:1;font-size:.82rem}
 .empty-note{margin:14px 0 0;padding:10px 14px;border-radius:var(--r-m);border:1px dashed var(--gold);color:var(--gold-hi);font-size:.92rem}
 .cmd{margin:8px 0 4px;padding:10px 14px;border-radius:8px;background:var(--substrate);border:1px solid var(--line-2);overflow-x:auto}
-.cmd code{font-family:var(--mono);font-size:.88rem;color:var(--gold-hi)}
+.cmd code{font-family:var(--mono);font-size:.88rem;color:var(--gold-hi);white-space:pre-wrap;overflow-wrap:anywhere} /* long commands wrap on phones; copying keeps one line */
 .steps-l{margin:8px 0 14px 22px;display:grid;gap:10px}
 .chat{display:grid;gap:10px;max-width:640px;margin:8px 0 10px}
 .chat p{padding:10px 14px;border-radius:12px;font-size:.95rem;max-width:88%}
